@@ -1,4 +1,4 @@
-from compute import compute_datamg
+from compute import datamg_cr
 from import_data import download_dataframes
 from config import DATA_DIR
 from structure import DataMG
@@ -9,7 +9,7 @@ def main() -> None:
     M = dataframes['M.csv']
     G = dataframes['G.csv']
     data = DataMG(M, G)
-    res = compute_datamg(data)
+    res = datamg_cr(data)
     res.visualize()
 
 
