@@ -10,7 +10,7 @@ def main() -> None:
     G = dataframes['G.csv']
     data = DataMG(M, G)
     res = datamg_cr(data)
-    res.visualize()
+    res.visualize_image()
 
 
 if __name__ == '__main__':

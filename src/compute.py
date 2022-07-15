@@ -10,6 +10,16 @@ def df_dict(
     G: pandas.DataFrame,
     calculate_func: Callable[[Any, Any], Any] = pearson_corr_tensor,
 ) -> Dict[Tuple[str, str], Any]:
+    '''
+    Takes in two pandas.DataFrame in M and G. Returns a dictionary
+    mapping a tuple of the gene id and methylation site id to the value
+    returned by calculate_func.
+
+    Iterates over each gene and methylation site in the input. Two lists of
+    gene expression values and methylation values for each person are
+    inputted into calculate_func, which returns a value that is stored in
+    the output.
+    '''
     M = M.reindex(sorted(M.columns), axis=1)
     G = G.reindex(sorted(G.columns), axis=1)
 
@@ -26,6 +36,16 @@ def datamg_dict(
     data: DataMG,
     calculate_func: Callable[[Any, Any], Any] = pearson_corr_tensor,
 ) -> Dict[Tuple[str, str], Any]:
+    '''
+    Takes in a DataMG instance of the input data. Returns a dictionary
+    mapping a tuple of the gene id and methylation site id to the value
+    returned by calculate_func.
+
+    Iterates over each gene and methylation site in the input. Two lists of
+    gene expression values and methylation values for each person are
+    inputted into calculate_func, which returns a value that is stored in
+    the output.
+    '''
     out = {}
     for label, values in data.iterate():
         out[label] = calculate_func(*values)
@@ -36,6 +56,16 @@ def datamg_cr(
     data: DataMG,
     calculate_func: Callable[[Any, Any], Any] = pearson_corr_tensor,
 ) -> ComputeResult:
+    '''
+    Takes in a DataMG instance of the input data. Returns ComputeResult
+    mapping gene id and methylation site id to the value returned by
+    calculate_func.
+
+    Iterates over each gene and methylation site in the input. Two lists of
+    gene expression values and methylation values for each person are
+    inputted into calculate_func, which returns a value that is stored in
+    the output.
+    '''
     out = ComputeResult()
     for label, values in data.iterate():
         out[label] = calculate_func(*values)

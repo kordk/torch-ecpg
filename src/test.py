@@ -22,10 +22,34 @@ def test(
     ],
     std_cutoff: float = float('1e-10'),
     time_cutoff: float = 5,
-    show_time: bool = True,
     show_results: bool = False,
+    show_time: bool = True,
     input_range: Tuple[float, float] = (-1, 1),
 ) -> None:
+    '''
+    Tests the speed and accuracy of the input functions over different
+    inputs. Each function in functions is given two input lists, with
+    random float values in input_range.
+
+    Base, samples, and max_size are used to compute the input list
+    sizes. The functions are tested using samples input lists. Their
+    sizes grow exponentially with the provided base. Two of these three
+    variables must be provided to have enough information to generate
+    the input lists.
+
+    The test passes if the maximum standard deviation of the runs is
+    below std_cutoff. This indicates that the difference between the
+    functions is low enough to pass all of the functions as accurate
+    relative to the other functions in functions.
+
+    The show_results boolean determines whether to show the results of
+    each function for every pass. Defaults to False
+
+    The show_time boolean determines whether to show the time plot.
+    Defaults to true. The time plot is a matplotlib standard plot of the
+    time it took each function to compute each input, given the input
+    size. Both the x- and y-axes are log scale.
+    '''
     error = ValueError(
         'Not enough arguments provided to determine the test sizes. Include at'
         ' least two of base, samples, or max_size.'
