@@ -1,4 +1,4 @@
-from compute import compute_cpu_datamg
+from compute import compute_datamg
 from samle_data import download_dataframes
 from config import DATA_DIR
 from structure import DataMG
@@ -9,8 +9,8 @@ def main() -> None:
     M = dataframes['M.csv']
     G = dataframes['G.csv']
     data = DataMG(M, G)
-    res = compute_cpu_datamg(data)
-    print(res)
+    res = compute_datamg(data)
+    res.visualize()
 
 
 if __name__ == '__main__':
