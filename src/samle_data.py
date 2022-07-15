@@ -108,7 +108,7 @@ def save_dataframes(
     os.mkdir(output_dir)
 
     for df, file_name in zip(dataframes, file_names):
-        save_func(df, output_dir + '\\' + str(file_name))
+        save_func(df, output_dir + str(file_name))
 
 
 def download_dataframes(
@@ -129,7 +129,7 @@ def download_dataframes(
 
     out = {}
     for file_name in os.listdir(input_dir):
-        out[file_name] = get_func(input_dir + '\\' + file_name)
+        out[file_name] = get_func(input_dir + file_name)
     return out
 
 
