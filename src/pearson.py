@@ -6,6 +6,13 @@ from config import device
 
 
 def scipy_pearsonr_corr(x: List[float], y: List[float]) -> float:
+    '''
+    Alias to scipy.stats.pearsonr. Only returns correlation coefficient,
+    not p-value.
+
+    Takes in two lists of floats (x and y), and returns their Pearson
+    correlation coefficient as a float.
+    '''
     return pearsonr(x, y)[0]
 
 
