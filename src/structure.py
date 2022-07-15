@@ -57,7 +57,7 @@ FlatData = Dict[Tuple[str, str], T]
 CompressedData = Dict[str, Dict[str, T]]
 
 
-class Result:
+class ComputeResult:
     def __init__(
         self,
         flatdata: Optional[FlatData] = None,
@@ -88,12 +88,12 @@ class Result:
     def __repr__(self) -> str:
         return repr(self.flatdata)
 
-    def where(self, condition: Callable[[T], bool]) -> 'Result':
+    def where(self, condition: Callable[[T], bool]) -> 'ComputeResult':
         data = {}
         for key, value in self.flatdata.items():
             if condition(value):
                 data[key] = value
-        return Result(flatdata=data)
+        return ComputeResult(flatdata=data)
 
     def data(self, flipped: bool = False) -> CompressedData:
         out: CompressedData = {}

@@ -1,11 +1,11 @@
 from typing import Any, Callable, Dict, Tuple
 import pandas
-from structure import Result
+from structure import ComputeResult
 from pearson import pearson_corr_tensor
 from structure import DataMG
 
 
-def compute_df_dict(
+def df_dict(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
     calculate_func: Callable[[Any, Any], Any] = pearson_corr_tensor,
@@ -22,7 +22,7 @@ def compute_df_dict(
     return out
 
 
-def compute_datamg_dict(
+def datamg_dict(
     data: DataMG,
     calculate_func: Callable[[Any, Any], Any] = pearson_corr_tensor,
 ) -> Dict[Tuple[str, str], Any]:
@@ -32,11 +32,11 @@ def compute_datamg_dict(
     return out
 
 
-def compute_datamg(
+def datamg_cr(
     data: DataMG,
     calculate_func: Callable[[Any, Any], Any] = pearson_corr_tensor,
-) -> Result:
-    out = Result()
+) -> ComputeResult:
+    out = ComputeResult()
     for label, values in data.iterate():
         out[label] = calculate_func(*values)
     return out
