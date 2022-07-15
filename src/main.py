@@ -1,5 +1,5 @@
 from compute import compute_datamg
-from data import download_dataframes
+from import_data import download_dataframes
 from config import DATA_DIR
 from structure import DataMG
 
