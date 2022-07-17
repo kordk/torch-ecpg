@@ -89,7 +89,7 @@ def generate_data(
 
 
 def save_test_data() -> None:
-    save_dataframes(generate_data(300, 1000, 1000))
+    save_dataframes(generate_data(300, 10000, 20000))
 
 
 if __name__ == '__main__':

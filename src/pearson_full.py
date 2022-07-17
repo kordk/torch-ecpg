@@ -32,6 +32,14 @@ def pearson_full_tensor(
 
     M_t = torch.tensor(M.to_numpy()).to(device)
     G_t = torch.tensor(G.to_numpy()).to(device)
+
+    '''
+    # The code below is the expanded version of the function. While the
+    # code is more readable in this form, it runs into CUDA memory
+    # issues if the input is too large.
+
+    M_t = torch.tensor(M.to_numpy()).to(device)
+    G_t = torch.tensor(G.to_numpy()).to(device)
     M_means = M_t.mean(axis=1)
     G_means = G_t.mean(axis=1)
     dots = M_t @ G_t.T
@@ -42,5 +50,20 @@ def pearson_full_tensor(
     denom = M_std.outer(G_std)
     denom *= n - 1
     corr: torch.Tensor = (dots - sub) / denom
-    corr_pd = pandas.DataFrame(corr.tolist(), index=M.index, columns=G.index)
+    corr_pd = pandas.DataFrame(
+        corr.tolist(),
+        index=M.index,
+        columns=G.index,
+    )
+    '''
+
+    corr_pd = pandas.DataFrame(
+        (
+            (M_t @ G_t.T - M_t.mean(axis=1).outer(G_t.mean(axis=1)) * n)
+            / (M_t.std(axis=1).outer(G_t.std(axis=1)) * (n - 1))
+        ).tolist(),
+        index=M.index,
+        columns=G.index,
+    )
+
     return corr_pd
