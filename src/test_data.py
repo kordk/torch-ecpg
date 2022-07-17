@@ -42,19 +42,19 @@ def generate_dataframe(
     )
 
 
-def generate_phenotypes(
-    row_names: List[str], phenotype_template: Dict[str, Callable[[], Any]]
+def generate_covariates(
+    row_names: List[str], covariate_template: Dict[str, Callable[[], Any]]
 ) -> pandas.DataFrame:
     '''
-    Generates the phenotype dataframe given the row_names, a list of
-    person ids, and phenotype_template. The phenotype template is a
+    Generates the covariate dataframe given the row_names, a list of
+    person ids, and covariate_template. The covariate template is a
     dictionary that maps a characteristic to any value. The function
-    returns the phenotype dataframe.
+    returns the covariate dataframe.
     '''
     n = len(row_names)
     data = {
         column: [value_gen() for _ in range(n)]
-        for column, value_gen in phenotype_template.items()
+        for column, value_gen in covariate_template.items()
     }
     return pandas.DataFrame(
         data,
@@ -79,13 +79,13 @@ def generate_data(
     M = generate_dataframe(person_codes, m_row_codes, randrange(0, 1))
     G = generate_dataframe(person_codes, g_row_codes, randrange(-1, 100))
 
-    phenotype_template = {
+    covariate_template = {
         'age': randrange(18, 64),
         'sex': lambda: bool(round(random())),  # Male == True
     }
-    P = generate_phenotypes(person_codes, phenotype_template)
+    C = generate_covariates(person_codes, covariate_template)
 
-    return M, G, P
+    return M, G, C
 
 
 def save_test_data() -> None:

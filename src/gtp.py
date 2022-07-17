@@ -30,7 +30,6 @@ GTP_FILE_URLS = [
     ),
 ]
 GTP_DIR = RAW_DATA_DIR + 'GTP/'
-GTP_COVARIATES = [('age', '')]
 
 
 def download_gtp_raw(**kwargs) -> None:
@@ -102,14 +101,14 @@ def gtp_raw_clean() -> bool:
 def process_gtp(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
-    P: pandas.DataFrame,
+    C: pandas.DataFrame,
     geo_descs: List[str],
     geo_titles: List[str],
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     '''
-    Processes the gtp dataframes (Methylation Beta Values and Gene
-    Expression Values). Drops unneeded columns (of p-values), renames
-    columns, unionizes samples, and sorts indices.
+    Processes the gtp dataframes (Methylation Beta Values, Gene
+    Expression Values, and Covariate Matrix). Drops unneeded columns (of
+    p-values), renames columns, unionizes samples, and sorts indices.
     '''
     M.drop(M.iloc[:, 1::2], axis=1, inplace=True)
     G.drop(G.iloc[:, 1::2], axis=1, inplace=True)
@@ -125,17 +124,17 @@ def process_gtp(
     M.drop(M_drop, axis=1, inplace=True)
     G.drop(G_drop, axis=1, inplace=True)
 
-    P_drop = set(P.index) - set(M.columns)
-    P.drop(P_drop, axis=0, inplace=True)
+    P_drop = set(C.index) - set(M.columns)
+    C.drop(P_drop, axis=0, inplace=True)
 
     M = M.reindex(sorted(M.columns, key=int), axis=1)
     G = G.reindex(sorted(G.columns, key=int), axis=1)
-    P = P.reindex(sorted(P.index, key=int), axis=0)
+    C = C.reindex(sorted(C.index, key=int), axis=0)
 
-    return M, G, P
+    return M, G, C
 
 
-def get_phenotypes(
+def get_covariates(
     chars: Dict[str, List[str]], geo_titles: List[str]
 ) -> pandas.DataFrame:
     '''
@@ -147,8 +146,8 @@ def get_phenotypes(
     '''
     n = len(geo_titles)
     full_chars = {char: vals for char, vals in chars.items() if len(vals) == n}
-    P = pandas.DataFrame(full_chars, index=geo_titles)
-    return P
+    C = pandas.DataFrame(full_chars, index=geo_titles)
+    return C
 
 
 def generate_data() -> Tuple[
@@ -165,8 +164,8 @@ def generate_data() -> Tuple[
     G = pandas.concat([G_1, G_2], axis=1)
     data, chars = geo_dict(GTP_DIR + GTP_FILE_URLS[0][0])
     geo_descs, _, geo_titles = geo_samples(data)
-    P = get_phenotypes(chars, geo_titles)
-    return process_gtp(M, G, P, geo_descs, geo_titles)
+    C = get_covariates(chars, geo_titles)
+    return process_gtp(M, G, C, geo_descs, geo_titles)
 
 
 def save_gtp_data() -> None:

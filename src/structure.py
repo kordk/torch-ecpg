@@ -160,7 +160,9 @@ class FlatComputeResult:
         '''Returns self.data(flipped) as pandas.DataFrame'''
         return pandas.DataFrame(self.data(flipped))
 
-    def visualize_image(self, imshow_kwargs: Dict[str, Any] = {}) -> None:
+    def visualize_image(
+        self, imshow_kwargs: Optional[Dict[str, Any]] = None
+    ) -> None:
         '''
         Visualizes the values at gene id, methylation site id as a
         matplotlib image using matplotlib.pyplot.imshow. The x-axis is
@@ -171,7 +173,7 @@ class FlatComputeResult:
         '''
         fig, ax = plt.subplots()
 
-        ax.imshow(self.dataframe(), **imshow_kwargs)
+        ax.imshow(self.dataframe(), **(imshow_kwargs or {}))
         ax.set_title('Correlation between methylation and gene expression')
         ax.set_xlabel('Methylation')
         ax.set_ylabel('Gene expression')

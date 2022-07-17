@@ -21,9 +21,9 @@ def test(
     base: Optional[float] = None,
     samples: Optional[int] = 50,
     max_size: Optional[int] = 1000000,
-    functions: List[
-        Callable[[List[float], List[float]], float]
-    ] = DEFAULT_FUNCTIONS,
+    functions: Optional[
+        List[Callable[[List[float], List[float]], float]]
+    ] = None,
     std_cutoff: float = float('1e-10'),
     time_cutoff: float = 5,
     show_results: bool = False,
@@ -58,6 +58,9 @@ def test(
         'Not enough arguments provided to determine the test sizes. Include at'
         ' least two of base, samples, or max_size.'
     )
+
+    if functions is None:
+        functions = DEFAULT_FUNCTIONS
 
     missing = sum([base is None, samples is None, max_size is None])
     if missing > 1:
