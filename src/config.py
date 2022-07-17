@@ -2,7 +2,8 @@ from pathlib import Path
 import torch
 
 PATH = str(Path(__file__).parent.parent.resolve()) + '/'
-DATA_DIR = PATH + 'working_data/'
+WORKING_DATA_DIR = PATH + 'working_data/'
+RAW_DATA_DIR = PATH + 'raw_data/'
 
 USING_GPU = torch.cuda.is_available()
 device = torch.device('cuda' if USING_GPU else 'cpu')

@@ -1,7 +1,6 @@
 from random import random
 from typing import Any, Callable, Dict, List, Tuple
 import pandas
-from config import DATA_DIR
 from import_data import save_dataframes
 
 
@@ -90,11 +89,7 @@ def generate_data(
 
 
 def save_test_data() -> None:
-    save_dataframes(
-        generate_data(20, 20, 20),
-        DATA_DIR,
-        ('M.csv', 'G.csv', 'P.csv'),
-    )
+    save_dataframes(generate_data(20, 20, 20))
 
 
 if __name__ == '__main__':

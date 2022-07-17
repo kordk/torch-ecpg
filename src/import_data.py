@@ -1,14 +1,17 @@
 import itertools
 import os
-import shutil
 from typing import Callable, Dict, List
 import pandas
+from config import WORKING_DATA_DIR
+from helper import initialize_dir, read_csv
 
 
 def save_dataframes(
     dataframes: List[pandas.DataFrame],
-    output_dir: str,
-    file_names: List[str] = itertools.count(1),
+    output_dir: str = WORKING_DATA_DIR,
+    file_names: List[str] = itertools.chain(
+        ('M.csv', 'G.csv', 'P.csv'), itertools.count(1)
+    ),
     save_func: Callable = pandas.DataFrame.to_csv,
 ) -> None:
     '''
@@ -17,19 +20,14 @@ def save_dataframes(
     that are given. The save_func function is called with the panads
     dataframe and the output path, which defaults to saving as a csv.
     '''
-    if os.path.isdir(output_dir):
-        shutil.rmtree(output_dir)
-    os.mkdir(output_dir)
+    initialize_dir(output_dir)
 
     for df, file_name in zip(dataframes, file_names):
         save_func(df, output_dir + str(file_name))
 
 
 def download_dataframes(
-    input_dir: str,
-    get_func: Callable = lambda file_name: pandas.read_csv(
-        file_name, index_col=[0]
-    ),
+    input_dir: str, get_func: Callable = read_csv
 ) -> Dict[str, pandas.DataFrame]:
     '''
     Gets all available csv files from input_dir and gets them using

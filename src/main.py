@@ -1,11 +1,11 @@
 from compute import datamg_cr
 from import_data import download_dataframes
-from config import DATA_DIR
+from config import WORKING_DATA_DIR
 from structure import DataMG
 
 
 def main() -> None:
-    dataframes = download_dataframes(DATA_DIR)
+    dataframes = download_dataframes(WORKING_DATA_DIR)
     M = dataframes['M.csv']
     G = dataframes['G.csv']
     data = DataMG(M, G)
