@@ -13,6 +13,7 @@ def save_dataframes(
         ('M.csv', 'G.csv', 'P.csv'), itertools.count(1)
     ),
     save_func: Callable = pandas.DataFrame.to_csv,
+    verbose: bool = False,
 ) -> None:
     '''
     Saves any number of dataframes to an output_dir, with file_names for
@@ -22,7 +23,9 @@ def save_dataframes(
     '''
     initialize_dir(output_dir)
 
-    for df, file_name in zip(dataframes, file_names):
+    for index, (df, file_name) in enumerate(zip(dataframes, file_names), 1):
+        if verbose:
+            print(f'Saving {index}/{len(dataframes)}: {file_name}')
         save_func(df, output_dir + str(file_name))
 
 

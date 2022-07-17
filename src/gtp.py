@@ -84,6 +84,9 @@ def gtp_raw_clean() -> bool:
     return boolean is useful for determining whether it is necessary to
     download the raw data before proceeding.
     '''
+    if not os.path.exists(GTP_DIR):
+        initialize_dir(RAW_DATA_DIR)
+        return False
     files = os.listdir(GTP_DIR)
     target_files = [file for file, _ in GTP_FILE_URLS]
     for file in files:
@@ -102,7 +105,7 @@ def process_gtp(
     P: pandas.DataFrame,
     geo_descs: List[str],
     geo_titles: List[str],
-) -> None:
+) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     '''
     Processes the gtp dataframes (Methylation Beta Values and Gene
     Expression Values). Drops unneeded columns (of p-values), renames
@@ -122,12 +125,14 @@ def process_gtp(
     M.drop(M_drop, axis=1, inplace=True)
     G.drop(G_drop, axis=1, inplace=True)
 
-    P_drop = set(P.columns) - set(M.columns)
-    P.drop(P_drop, axis=1, inplace=True)
+    P_drop = set(P.index) - set(M.columns)
+    P.drop(P_drop, axis=0, inplace=True)
 
-    M.reindex(sorted(M.columns, key=int), axis=1)
-    G.reindex(sorted(G.columns, key=int), axis=1)
-    P.reindex(sorted(P.index, key=int), axis=0)
+    M = M.reindex(sorted(M.columns, key=int), axis=1)
+    G = G.reindex(sorted(G.columns, key=int), axis=1)
+    P = P.reindex(sorted(P.index, key=int), axis=0)
+
+    return M, G, P
 
 
 def get_phenotypes(
@@ -161,8 +166,7 @@ def generate_data() -> Tuple[
     data, chars = geo_dict(GTP_DIR + GTP_FILE_URLS[0][0])
     geo_descs, _, geo_titles = geo_samples(data)
     P = get_phenotypes(chars, geo_titles)
-    process_gtp(M, G, P, geo_descs, geo_titles)
-    return M, G, P
+    return process_gtp(M, G, P, geo_descs, geo_titles)
 
 
 def save_gtp_data() -> None:
@@ -170,9 +174,9 @@ def save_gtp_data() -> None:
     Downloads data from www.ncbi.nlm.nih.gov. Saves GTP data in
     dataframes in the working data directory.
     '''
-    M, G, P = generate_data()
+    data = generate_data()
     print('Saving...')
-    save_dataframes([M, G, P])
+    save_dataframes(data, verbose=True)
 
 
 if __name__ == '__main__':
