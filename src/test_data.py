@@ -72,9 +72,9 @@ def generate_data(
     expression loci. Returns a tuple of the methylation and gene
     expression dataframes.
     '''
-    person_codes = generate_codes(sample_size, 'LB')
-    m_row_codes = generate_codes(m_rows, 'rs')
-    g_row_codes = generate_codes(g_rows, 'ILMN')
+    person_codes = generate_codes(sample_size)
+    m_row_codes = generate_codes(m_rows, 'cg')
+    g_row_codes = generate_codes(g_rows, 'ILMN_')
 
     M = generate_dataframe(person_codes, m_row_codes, randrange(0, 1))
     G = generate_dataframe(person_codes, g_row_codes, randrange(-1, 100))
@@ -89,7 +89,7 @@ def generate_data(
 
 
 def save_test_data() -> None:
-    save_dataframes(generate_data(20, 20, 20))
+    save_dataframes(generate_data(300, 1000, 1000))
 
 
 if __name__ == '__main__':

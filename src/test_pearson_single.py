@@ -3,23 +3,27 @@ from time import perf_counter
 from typing import Callable, List, Optional, Tuple
 import numpy as np
 from matplotlib import pyplot as plt
-from pearson import (
+from pearson_single import (
     pearson_corr_basic,
     pearson_corr_tensor,
     scipy_pearsonr_corr,
 )
 from helper import random_list
 
+DEFAULT_FUNCTIONS = [
+    pearson_corr_basic,
+    pearson_corr_tensor,
+    scipy_pearsonr_corr,
+]
+
 
 def test(
     base: Optional[float] = None,
     samples: Optional[int] = 50,
-    max_size: Optional[int] = 100000,
-    functions: List[Callable[[List[float], List[float]], float]] = [
-        pearson_corr_basic,
-        pearson_corr_tensor,
-        scipy_pearsonr_corr,
-    ],
+    max_size: Optional[int] = 1000000,
+    functions: List[
+        Callable[[List[float], List[float]], float]
+    ] = DEFAULT_FUNCTIONS,
     std_cutoff: float = float('1e-10'),
     time_cutoff: float = 5,
     show_results: bool = False,
@@ -58,7 +62,7 @@ def test(
     missing = sum([base is None, samples is None, max_size is None])
     if missing > 1:
         raise error
-    elif missing == 0 or base is None:
+    if missing == 0 or base is None:
         base = max_size ** (1 / samples)
     elif samples is None:
         samples = math.ceil(math.log(max_size, base))

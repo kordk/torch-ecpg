@@ -56,11 +56,13 @@ FlatData = Dict[Tuple[str, str], T]
 CompressedData = Dict[str, Dict[str, T]]
 
 
-class ComputeResult:
+class FlatComputeResult:
     '''
     Data structure to store and process data that maps gene ids and
     methylation ids to values. Has visualization built in to view the
-    data.
+    data. Stores the data in a flat dictionary, which allows for
+    methods like .which() and constant time value access, but is much
+    more storage-costly. Do not use for large datasets.
     '''
 
     def __init__(
@@ -108,7 +110,7 @@ class ComputeResult:
         '''Returns repr of self.flatdata'''
         return repr(self.flatdata)
 
-    def where(self, condition: Callable[[T], bool]) -> 'ComputeResult':
+    def where(self, condition: Callable[[T], bool]) -> 'FlatComputeResult':
         '''
         Returns a ComputeResult instance of self where flatdata is
         filtered by the provided condition. Condition is a callable that
@@ -119,7 +121,7 @@ class ComputeResult:
         for key, value in self.flatdata.items():
             if condition(value):
                 data[key] = value
-        return ComputeResult(flatdata=data)
+        return FlatComputeResult(flatdata=data)
 
     def data(self, flipped: bool = False) -> CompressedData:
         '''
