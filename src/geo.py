@@ -1,5 +1,6 @@
 import gzip
 from typing import Dict, List, Optional, Tuple
+from logger import Logger
 
 GEO_SAMPLE_KEYS = [
     'Sample_description',
@@ -12,6 +13,8 @@ def geo_dict(
     file_path: str,
     char_id: str = 'Sample_characteristics_ch1',
     decompress: Optional[bool] = None,
+    *,
+    logger: Logger = Logger(),
 ) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     '''
     Reads file_path as a geo data text file. Returns a dictionary that
@@ -40,7 +43,7 @@ def geo_dict(
                     if not part:
                         continue
                     if ':' not in part:
-                        print(
+                        logger.warning(
                             f'Skipping characteristic {part} because it does'
                             ' not include \':\''
                         )

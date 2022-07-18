@@ -2,10 +2,15 @@ from typing import Optional
 import pandas
 import torch
 from config import device
+from logger import Logger
 
 
 def pearson_full_tensor(
-    M: pandas.DataFrame, G: pandas.DataFrame, n: Optional[int] = None
+    M: pandas.DataFrame,
+    G: pandas.DataFrame,
+    n: Optional[int] = None,
+    *,
+    logger: Logger = Logger(),
 ) -> pandas.DataFrame:
     '''
     Calculates the pearson correlation coefficient matrix for two full
@@ -49,11 +54,14 @@ def pearson_full_tensor(
         columns=G.index,
     )
     '''
+    logger.start_timer('info', 'Calculating pearson_full_tensor...')
     if n is None:
         n = len(M.columns)
 
     M_t = torch.tensor(M.to_numpy()).to(device)
+    logger.time('Converted M to tensor in {l} seconds')
     G_t = torch.tensor(G.to_numpy()).to(device)
+    logger.time('Converted G to tensor in {l} seconds')
 
     corr_pd = pandas.DataFrame(
         (
@@ -63,7 +71,11 @@ def pearson_full_tensor(
         index=M.index,
         columns=G.index,
     )
+    logger.time('Calculated corr_pd dataframe in {l} seconds.')
 
+    logger.time(
+        'Finished calculating pearson_full_tensor in {t} seconds.', ignore=True
+    )
     return corr_pd
 
 
@@ -72,7 +84,8 @@ def pearson_chunk_tensor(
     G: pandas.DataFrame,
     chunks: int,
     n: Optional[int] = None,
-    verbose: bool = False,
+    *,
+    logger: Logger = Logger(),
 ) -> pandas.DataFrame:
     '''
     Utilizes chunks of values to avoid running into GPU memory limits.
@@ -135,29 +148,43 @@ def pearson_chunk_tensor(
     if n is None:
         n = len(M.columns)
     chunk_rows = len(M) // chunks
-    if verbose:
-        print(
-            'Running pearson chunk tensor with'
-            f' {chunk_rows * len(G) * n} values per chunk ({chunk_rows} rows'
-            ' per chunk).'
-        )
+    logger.start_timer(
+        'info',
+        'Running pearson chunk tensor with'
+        f' {chunk_rows * len(G) * n} values per chunk ({chunk_rows} rows'
+        ' per chunk).',
+    )
 
     M_t = torch.tensor(M.to_numpy()).to(device)
+    logger.time('Converted M to tensor in {l} seconds')
     G_t = torch.tensor(G.to_numpy()).to(device)
+    logger.time('Converted G to tensor in {l} seconds')
     G_means = G_t.mean(axis=1)
+    logger.time('Calculated G means in {l} seconds')
     G_std = G_t.std(axis=1)
+    logger.time('Calculated G standard deviations in {l} seconds')
 
+    inner_logger = logger.alias()
+    inner_logger.start_timer('info', 'Calculating chunks...')
     corr_pd = pandas.DataFrame()
-    for index, i in enumerate(range(0, len(M_t), chunk_rows), 1):
-        if verbose:
-            print(f'Chunk {index}/{len(M.index) // chunk_rows}')
-        M_chunk = M_t[i : i + chunk_rows]
+    for i in range(0, len(M_t), chunk_rows):
+        j = i + chunk_rows
+        inner_logger.time(
+            'Completed chunk {i}/{0} in {l} seconds. Average chunk time: {a}'
+            ' seconds',
+            chunks,
+        )
+        inner_logger.info(
+            'Estimated time remaining: {0}',
+            inner_logger.average_time * (chunks - i),
+        )
+        M_chunk = M_t[i:j]
         corr_t_chunk = (
             M_chunk @ G_t.T - M_chunk.mean(axis=1).outer(G_means) * n
         ) / (M_chunk.std(axis=1).outer(G_std) * (n - 1))
         corr_pd_chunk = pandas.DataFrame(
             corr_t_chunk.tolist(),
-            index=M.index[i : i + chunk_rows],
+            index=M.index[i:j],
             columns=G.index,
         )
         corr_pd = corr_pd.append(corr_pd_chunk)

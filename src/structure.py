@@ -10,6 +10,7 @@ from typing import (
 )
 from matplotlib import pyplot as plt
 import pandas
+from logger import Logger
 
 
 IterateResult = Generator[
@@ -23,13 +24,19 @@ IterateResult = Generator[
 
 
 class DataMG:
-    def __init__(self, M: pandas.DataFrame, G: pandas.DataFrame) -> None:
+    def __init__(
+        self,
+        M: pandas.DataFrame,
+        G: pandas.DataFrame,
+        *,
+        logger: Logger = Logger(),
+    ) -> None:
         _M: pandas.DataFrame = M.reindex(sorted(M.columns), axis=1)
         _G: pandas.DataFrame = G.reindex(sorted(G.columns), axis=1)
 
         if not _M.columns.equals(_G.columns):
-            print(f'{_M.columns = }')
-            print(f'{_G.columns = }')
+            logger.error(f'{_M.columns = }')
+            logger.error(f'{_G.columns = }')
             raise ValueError('Columns do not match')
 
         self.M: Dict[str, List[Any]] = _M.T.to_dict('list')
@@ -46,6 +53,10 @@ class DataMG:
         )
 
     def iterate(self) -> IterateResult:
+        '''
+        Iterates through M and G. Yields Tuple[Tuple[str, str], Tuple[
+        List[Any], List[Any]]]: (m_label, g_label), (m_row, g_row).
+        '''
         for m_label, m_row in self.M.items():
             for g_label, g_row in self.G.items():
                 yield (m_label, g_label), (m_row, g_row)

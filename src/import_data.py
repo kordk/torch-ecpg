@@ -4,6 +4,7 @@ from typing import Callable, Dict, List
 import pandas
 from config import WORKING_DATA_DIR
 from helper import initialize_dir, read_csv
+from logger import Logger
 
 
 def save_dataframes(
@@ -13,7 +14,8 @@ def save_dataframes(
         ('M.csv', 'G.csv', 'P.csv'), itertools.count(1)
     ),
     save_func: Callable = pandas.DataFrame.to_csv,
-    verbose: bool = False,
+    *,
+    logger: Logger = Logger(),
 ) -> None:
     '''
     Saves any number of dataframes to an output_dir, with file_names for
@@ -21,16 +23,25 @@ def save_dataframes(
     that are given. The save_func function is called with the panads
     dataframe and the output path, which defaults to saving as a csv.
     '''
-    initialize_dir(output_dir)
+    initialize_dir(output_dir, **logger)
 
-    for index, (df, file_name) in enumerate(zip(dataframes, file_names), 1):
-        if verbose:
-            print(f'Saving {index}/{len(dataframes)}: {file_name}')
-        save_func(df, output_dir + str(file_name))
+    logger.start_timer('info', 'Saving {0} dataframes...', len(dataframes))
+    for df, file_name in zip(dataframes, file_names):
+        logger.time('Saving {i}/{0}: {1}', len(dataframes), file_name)
+        save_func(df, output_dir + str(file_name), **logger)
+        logger.time_check(
+            'Saved {i}/{0} in {l} seconds',
+            len(dataframes),
+        )
+
+    logger.time_check(
+        'Finished saving {0} dataframes in {t} seconds.',
+        len(dataframes),
+    )
 
 
-def download_dataframes(
-    input_dir: str, get_func: Callable = read_csv
+def read_dataframes(
+    input_dir: str, get_func: Callable = read_csv, *, logger: Logger = Logger()
 ) -> Dict[str, pandas.DataFrame]:
     '''
     Gets all available csv files from input_dir and gets them using
@@ -42,7 +53,15 @@ def download_dataframes(
     if not os.path.isdir(input_dir):
         raise ValueError(f'{input_dir=} is not a valid directory')
 
+    file_names = os.listdir(input_dir)
+    n = len(file_names)
+
+    logger.start_timer('info', 'Reading {0} dataframes...', n)
     out = {}
-    for file_name in os.listdir(input_dir):
-        out[file_name] = get_func(input_dir + file_name)
+    for file_name in file_names:
+        logger.time('Reading {i}/{0}: {1}', n, file_name)
+        out[file_name] = get_func(input_dir + file_name, **logger)
+        logger.time_check('Read {i}/{0} in {l} seconds', n)
+
+    logger.time_check('Finished reading {0} dataframes in {t} seconds.', n)
     return out

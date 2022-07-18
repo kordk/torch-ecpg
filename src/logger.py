@@ -38,30 +38,55 @@ class PassAsKwarg(Mapping):
 class Logger(PassAsKwarg):
     def __init__(
         self,
-        verbosity: int = 2,
-        debug: bool = False,
+        verbosity: Optional[int] = None,
+        debug: Optional[bool] = None,
         log_dir: Optional[str] = None,
+        *,
+        parent: Optional['Logger'] = None,
     ) -> None:
         super().__init__('logger')
 
-        self.verbosity = verbosity
-        self.is_debug = debug
-        self.log_dir = log_dir
+        if parent is not None:
+            self.verbosity = (
+                parent.verbosity if verbosity is None else verbosity
+            )
+            self.is_debug = parent.is_debug if debug is None else debug
+            self.log_dir = parent.log_dir if log_dir is None else log_dir
 
-        self.date_format: str = '%Y%m%d_%H%M%S'
+            self.date_format: str = parent.date_format
+
+            self.debug_color: str = parent.debug_color
+            self.debug_template: str = parent.debug_template
+
+            self.info_color: str = parent.info_color
+            self.info_template: str = parent.info_template
+
+            self.warning_color: str = parent.warning_color
+            self.warning_template: str = parent.warning_template
+
+            self.error_color: str = parent.error_color
+            self.error_template: str = parent.error_template
+
+        else:
+            self.verbosity = 1 if verbosity is None else verbosity
+            self.is_debug = False if debug is None else debug
+            self.log_dir = log_dir
+
+            self.date_format: str = '%Y%m%d_%H%M%S'
+
+            self.debug_color: str = colors.BLACK
+            self.debug_template: str = '[DEBUG{modifier}] {message}'
+
+            self.info_color: str = colors.WHITE
+            self.info_template: str = '[INFO{modifier}] {message}'
+
+            self.warning_color: str = colors.YELLOW
+            self.warning_template: str = '[WARNING{modifier}] {message}'
+
+            self.error_color: str = colors.RED + style.BRIGHT
+            self.error_template: str = '[ERROR{modifier}] {message}'
+
         self.logs: List[str] = []
-
-        self.debug_color: str = colors.BLACK
-        self.debug_template: str = '[DEBUG{modifier}] {message}'
-
-        self.info_color: str = colors.WHITE
-        self.info_template: str = '[INFO{modifier}] {message}'
-
-        self.warning_color: str = colors.YELLOW
-        self.warning_template: str = '[WARNING{modifier}] {message}'
-
-        self.error_color: str = colors.RED + style.BRIGHT
-        self.error_template: str = '[ERROR{modifier}] {message}'
 
         self.count_func = self.info
         self.current_count: int = 0
@@ -72,9 +97,21 @@ class Logger(PassAsKwarg):
         self.end_time = self.start_time
         self.times: List[float] = []
 
+        self.timer_count: int = 0
+        self.total_time: float = 0
+        self.time_since_last: float = 0
+        self.average_time: float = 0
+
+        self.parent = parent
+
+    def _add_to_logs(self, message: str) -> None:
+        self.logs.append(message)
+        if self.parent:
+            self.parent._add_to_logs(message)
+
     def _log(self, message: str) -> None:
         print(message + style.RESET_ALL)
-        self.logs.append(message + style.RESET_ALL)
+        self._add_to_logs(message + style.RESET_ALL)
 
     def _get_func(self, mode: str) -> Callable[..., None]:
         if mode == 'debug':
@@ -152,28 +189,34 @@ class Logger(PassAsKwarg):
         self.times = [self.start_time]
         self.time_func(message, *args, **kwargs)
 
-    def time(self, message: str, *args, **kwargs) -> None:
-        time = self.get_time_func()
-        self.times.append(time)
-        self.end_time = time
+    def time(
+        self, message: str, *args, ignore: bool = False, **kwargs
+    ) -> None:
+        if not ignore:
+            time = self.get_time_func()
+            self.times.append(time)
+            self.end_time = time
 
-        i = len(self.times) - 1
-        total_time = self.end_time - self.start_time
-        since_last = self.end_time - self.times[-2]
-        average = total_time / i
+        self.timer_count = len(self.times) - 1
+        self.total_time = self.end_time - self.start_time
+        self.time_since_last = self.end_time - self.times[-2]
+        self.average_time = self.total_time / self.timer_count
 
         formatted = message.format(
             *args,
             **kwargs,
-            i=i,
-            t=total_time,
-            l=since_last,
-            a=average,
+            i=self.timer_count,
+            t=self.total_time,
+            l=self.time_since_last,
+            a=self.average_time,
         )
         self.time_func(
             formatted,
             modifier='TIMER',
         )
+
+    def time_check(self, *args, **kwargs) -> None:
+        self.time(*args, ignore=True, **kwargs)
 
     def save(self, file_name: Optional[str] = None) -> None:
         if self.log_dir is None:
@@ -197,6 +240,9 @@ class Logger(PassAsKwarg):
             print(chunk)
             if i + chunk_size < len(self.logs):
                 input(f'Press enter to show up to {chunk_size} more...  ')
+
+    def alias(self, *args, **kwargs) -> 'Logger':
+        return Logger(*args, parent=self, **kwargs)
 
     @staticmethod
     def init(func: Callable[..., RT]) -> Callable[..., RT]:
