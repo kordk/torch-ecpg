@@ -41,6 +41,7 @@ class Logger(PassAsKwarg):
         verbosity: Optional[int] = None,
         debug: Optional[bool] = None,
         log_dir: Optional[str] = None,
+        timer_round: Optional[int] = None,
         *,
         parent: Optional['Logger'] = None,
     ) -> None:
@@ -52,6 +53,9 @@ class Logger(PassAsKwarg):
             )
             self.is_debug = parent.is_debug if debug is None else debug
             self.log_dir = parent.log_dir if log_dir is None else log_dir
+            self.timer_round = (
+                parent.timer_round if timer_round is None else timer_round
+            )
 
             self.date_format: str = parent.date_format
 
@@ -71,6 +75,7 @@ class Logger(PassAsKwarg):
             self.verbosity = 1 if verbosity is None else verbosity
             self.is_debug = False if debug is None else debug
             self.log_dir = log_dir
+            self.timer_round = 4 if timer_round is None else timer_round
 
             self.date_format: str = '%Y%m%d_%H%M%S'
 
@@ -197,18 +202,18 @@ class Logger(PassAsKwarg):
             self.times.append(time)
             self.end_time = time
 
-        self.timer_count = len(self.times) - 1
-        self.total_time = self.end_time - self.start_time
-        self.time_since_last = self.end_time - self.times[-2]
-        self.average_time = self.total_time / self.timer_count
+            self.timer_count = len(self.times) - 1
+            self.total_time = self.end_time - self.start_time
+            self.time_since_last = self.end_time - self.times[-2]
+            self.average_time = self.total_time / self.timer_count
 
         formatted = message.format(
             *args,
             **kwargs,
-            i=self.timer_count,
-            t=self.total_time,
-            l=self.time_since_last,
-            a=self.average_time,
+            i=round(self.timer_count, self.timer_round),
+            t=round(self.total_time, self.timer_round),
+            l=round(self.time_since_last, self.timer_round),
+            a=round(self.average_time, self.timer_round),
         )
         self.time_func(
             formatted,
@@ -217,6 +222,9 @@ class Logger(PassAsKwarg):
 
     def time_check(self, *args, **kwargs) -> None:
         self.time(*args, ignore=True, **kwargs)
+
+    def remaining_time(self, n: int) -> float:
+        return self.average_time * (n - self.timer_count)
 
     def save(self, file_name: Optional[str] = None) -> None:
         if self.log_dir is None:

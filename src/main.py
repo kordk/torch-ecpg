@@ -1,7 +1,7 @@
 import torch
 from import_data import read_dataframes
 from config import WORKING_DATA_DIR
-from methylation_gpu.gpu_methylation.src.logger import Logger
+from logger import Logger
 from pearson_full import pearson_chunk_tensor
 
 
@@ -13,7 +13,7 @@ def main() -> None:
     G = dataframes['G.csv']
 
     torch.cuda.empty_cache()
-    pearson_chunk_tensor(M, G, 10000, **logger)
+    pearson_chunk_tensor(M, G, 10, **logger)
 
 
 if __name__ == '__main__':

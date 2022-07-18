@@ -169,15 +169,6 @@ def pearson_chunk_tensor(
     corr_pd = pandas.DataFrame()
     for i in range(0, len(M_t), chunk_rows):
         j = i + chunk_rows
-        inner_logger.time(
-            'Completed chunk {i}/{0} in {l} seconds. Average chunk time: {a}'
-            ' seconds',
-            chunks,
-        )
-        inner_logger.info(
-            'Estimated time remaining: {0}',
-            inner_logger.average_time * (chunks - i),
-        )
         M_chunk = M_t[i:j]
         corr_t_chunk = (
             M_chunk @ G_t.T - M_chunk.mean(axis=1).outer(G_means) * n
@@ -190,5 +181,15 @@ def pearson_chunk_tensor(
         corr_pd = corr_pd.append(corr_pd_chunk)
         del M_chunk
         del corr_t_chunk
+        inner_logger.time(
+            'Completed chunk {i}/{0} in {l} seconds. Average chunk time: {a}'
+            ' seconds',
+            chunks,
+        )
+        inner_logger.info(
+            'Estimated time remaining: {0} seconds',
+            inner_logger.remaining_time(chunks),
+        )
 
+    logger.time('Calculated pearson_chunk_tensor in {t} seconds')
     return corr_pd

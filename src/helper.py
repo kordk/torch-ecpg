@@ -62,6 +62,7 @@ def read_csv(
     '''
     logger.info(
         'Reading csv file {0} with separator {1}',
+        file_name,
         '[tab]' if sep == '\t' else sep,
     )
     return pandas.read_csv(file_name, sep=sep, index_col=[0])

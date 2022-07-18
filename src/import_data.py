@@ -28,7 +28,7 @@ def save_dataframes(
     logger.start_timer('info', 'Saving {0} dataframes...', len(dataframes))
     for df, file_name in zip(dataframes, file_names):
         logger.time('Saving {i}/{0}: {1}', len(dataframes), file_name)
-        save_func(df, output_dir + str(file_name), **logger)
+        save_func(df, output_dir + str(file_name))
         logger.time_check(
             'Saved {i}/{0} in {l} seconds',
             len(dataframes),
