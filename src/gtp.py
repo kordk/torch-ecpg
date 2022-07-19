@@ -132,6 +132,14 @@ def process_gtp(
     G_drop = set(G.columns) - set(M.columns)
     M.drop(M_drop, axis=1, inplace=True)
     G.drop(G_drop, axis=1, inplace=True)
+    start = len(G)
+    G.dropna(index=0, inplace=True)
+    end = len(G)
+    logger.info(
+        'Dropped {0} rows ({1}%) of G with missing values',
+        start - end,
+        round(end / start * 100, 4),
+    )
 
     C_drop = set(C.index) - set(M.columns)
     C.drop(C_drop, axis=0, inplace=True)
@@ -178,7 +186,7 @@ def generate_data(
     logger.info('Concatenating gene expression parts')
     G = pandas.concat([G_1, G_2], axis=1)
     data, chars = geo_dict(GTP_DIR + GTP_FILE_URLS[0][0], **logger)
-    geo_descs, _, geo_titles = geo_samples(data, **logger)
+    geo_descs, _, geo_titles = geo_samples(data)
     C = get_covariates(chars, geo_titles, **logger)
     return process_gtp(M, G, C, geo_descs, geo_titles, **logger)
 
