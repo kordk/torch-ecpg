@@ -36,6 +36,30 @@ class PassAsKwarg(Mapping):
 
 
 class Logger(PassAsKwarg):
+    '''
+    Logging class that supports verbosity levels, debug, counting, log
+    files, history, and timing.
+
+    Logger.debug: prints a debug message if self.debug is True.
+    Logger.info: prints an info message if verbosity is at least 1.
+    Logger.warning: prints a warning message if verbosity is at least 2.
+    Logger.error: prints an error message if verbosity is at least 3.
+
+    Logger.start_counter: resets counter with a print style and message.
+    Logger.count: increments counter and prints message with formatting.
+    Logger.start_timer: resets the timer with a print style and message.
+    Logger.time: adjusts timer variables and prints message with format.
+    Logger.time_check: prints message with format without changing time.
+    Logger.remaining_time: gets estimated time given iteration count.
+
+    Logger.save: saves logs to a file.
+    Logger.history: prints log history in optional chunks.
+    Logger.alias: gets an alias to self with separate timer but same
+    history.
+
+    [DEPRECATED] Logger.init: decorates function by initializing logger.
+    '''
+
     def __init__(
         self,
         verbosity: Optional[int] = None,
@@ -110,15 +134,18 @@ class Logger(PassAsKwarg):
         self.parent = parent
 
     def _add_to_logs(self, message: str) -> None:
+        '''Adds message to log history of both self and parent'''
         self.logs.append(message)
         if self.parent:
             self.parent._add_to_logs(message)
 
     def _log(self, message: str) -> None:
+        '''Logs message to console and adds message to log history'''
         print(message + style.RESET_ALL)
         self._add_to_logs(message + style.RESET_ALL)
 
     def _get_func(self, mode: str) -> Callable[..., None]:
+        '''Gets the print function based on a provided mode string'''
         if mode == 'debug':
             return self.debug
         elif mode == 'info':
@@ -131,6 +158,7 @@ class Logger(PassAsKwarg):
             raise ValueError(f'The mode \'{mode}\' is not valid')
 
     def debug(self, message: str, *args, modifier: str = '', **kwargs) -> None:
+        '''Prints debug message'''
         if not self.is_debug:
             return
         formatted = self.debug_color + self.debug_template.format(
@@ -139,6 +167,7 @@ class Logger(PassAsKwarg):
         self._log(formatted)
 
     def info(self, message: str, *args, modifier: str = '', **kwargs) -> None:
+        '''Prints info message (verbosity 1)'''
         if self.verbosity > 1:
             return
         formatted = self.info_color + self.info_template.format(
@@ -149,6 +178,7 @@ class Logger(PassAsKwarg):
     def warning(
         self, message: str, *args, modifier: str = '', **kwargs
     ) -> None:
+        '''Prints warning message (verbosity 2)'''
         if self.verbosity > 2:
             return
         formatted = self.warning_color + self.warning_template.format(
@@ -157,6 +187,7 @@ class Logger(PassAsKwarg):
         self._log(formatted)
 
     def error(self, message: str, *args, modifier: str = '', **kwargs) -> None:
+        '''Prints error message (verbosity 3)'''
         if self.verbosity > 3:
             return
         formatted = self.error_color + self.error_template.format(
@@ -164,19 +195,31 @@ class Logger(PassAsKwarg):
         )
         self._log(formatted)
 
-    def start_count(
+    def start_counter(
         self,
         mode: Modes = 'info',
         message: str = 'Starting counter...',
         *args,
         **kwargs,
     ) -> None:
+        '''
+        Resets and initializes the counter given a print mode and
+        message.
+        '''
         self.count_func = self._get_func(mode)
 
         self.current_count = 0
         self.count_func(message, *args, **kwargs)
 
     def count(self, message: str, *args, increase: int = 1, **kwargs) -> None:
+        '''
+        Prints a specially formatted message and increments the counter.
+
+        Formats:
+        {i} = self.current_count
+
+        increase: int = 1: value by which to increase the counter.
+        '''
         self.current_count += increase
         formatted = message.format(*args, i=self.current_count, **kwargs)
         self.count_func(formatted, modifier='COUNT')
@@ -188,6 +231,9 @@ class Logger(PassAsKwarg):
         *args,
         **kwargs,
     ) -> None:
+        '''
+        Resets and initializes the timer given a print mode and message.
+        '''
         self.time_func = self._get_func(mode)
 
         self.start_time = self.get_time_func()
@@ -197,6 +243,18 @@ class Logger(PassAsKwarg):
     def time(
         self, message: str, *args, ignore: bool = False, **kwargs
     ) -> None:
+        '''
+        Prints a specially formatted message and updates timer.
+
+        Formats (rounded to self.timer_round):
+        {i} = self.timer_count
+        {t} = self.total_time
+        {l} = self.time_since_last
+        {a} = self.average_time
+
+        ignore: bool = False: Formats message without updating timer.
+            Logger.time_check() is preferred.
+        '''
         if not ignore:
             time = self.get_time_func()
             self.times.append(time)
@@ -210,7 +268,7 @@ class Logger(PassAsKwarg):
         formatted = message.format(
             *args,
             **kwargs,
-            i=round(self.timer_count, self.timer_round),
+            i=self.timer_count,
             t=round(self.total_time, self.timer_round),
             l=round(self.time_since_last, self.timer_round),
             a=round(self.average_time, self.timer_round),
@@ -221,12 +279,21 @@ class Logger(PassAsKwarg):
         )
 
     def time_check(self, *args, **kwargs) -> None:
+        '''
+        Alias to Logger.time, but with ignore set to True. Message will
+        be formatted but timer will not be updated.
+        '''
         self.time(*args, ignore=True, **kwargs)
 
     def remaining_time(self, n: int) -> float:
+        '''
+        Returns the estimated remaining time given the total number of
+        iterations (including previous iterations).
+        '''
         return self.average_time * (n - self.timer_count)
 
     def save(self, file_name: Optional[str] = None) -> None:
+        '''Saves self.logs to self.log_dir + file_name'''
         if self.log_dir is None:
             return
         if file_name is None:
@@ -237,6 +304,11 @@ class Logger(PassAsKwarg):
             file.write(log_str)
 
     def history(self, chunk_size: Optional[int] = None) -> None:
+        '''
+        Prints the log history. Optional chunk_size will return the log
+        messages in batches of no more than chunk_size messages. If not
+        provided, all messages will be printed.
+        '''
         if chunk_size is None:
             chunk_size = len(self.logs)
         print(
@@ -250,10 +322,26 @@ class Logger(PassAsKwarg):
                 input(f'Press enter to show up to {chunk_size} more...  ')
 
     def alias(self, *args, **kwargs) -> 'Logger':
+        '''
+        Returns a child logger with reset timer and counter but a log
+        history that transfers up the alias chain. For example:
+        logger = Logger(debug=True)
+        logger.alias().alias().alias().alias().debug('Debug works!')
+        # 'Debug works!'
+        logger.history()
+        # 'Debug works!'
+        '''
         return Logger(*args, parent=self, **kwargs)
 
     @staticmethod
     def init(func: Callable[..., RT]) -> Callable[..., RT]:
+        '''
+        Status: Deprecated
+
+        Initializes logger instance if not provided to the decorated
+        function.
+        '''
+
         def wrapper(*args, **kwargs) -> RT:
             if 'logger' not in kwargs:
                 kwargs['logger'] = None

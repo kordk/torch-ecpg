@@ -79,7 +79,7 @@ def test(
         for length in test_sizes
     )
 
-    logger.start_count('info', 'Testing with functions = {0}', functions)
+    logger.start_counter('info', 'Testing with functions = {0}', functions)
     stds = []
     times = []
     for x, y in test_data:
