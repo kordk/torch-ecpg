@@ -224,6 +224,13 @@ class Logger(PassAsKwarg):
         formatted = message.format(*args, i=self.current_count, **kwargs)
         self.count_func(formatted, modifier='COUNT')
 
+    def count_check(self, *args, **kwargs) -> None:
+        '''
+        Alias to Logger.count, but with increase set to 0. Message will
+        be formatted but count will not be increased.
+        '''
+        self.count(*args, increase=0, **kwargs)
+
     def start_timer(
         self,
         mode: Modes = 'info',
@@ -255,15 +262,18 @@ class Logger(PassAsKwarg):
         ignore: bool = False: Formats message without updating timer.
             Logger.time_check() is preferred.
         '''
+        time = self.get_time_func()
+
         if not ignore:
-            time = self.get_time_func()
             self.times.append(time)
             self.end_time = time
 
-            self.timer_count = len(self.times) - 1
-            self.total_time = self.end_time - self.start_time
-            self.time_since_last = self.end_time - self.times[-2]
-            self.average_time = self.total_time / self.timer_count
+        self.timer_count = len(self.times) - 1
+        self.total_time = time - self.start_time
+        self.time_since_last = time - (
+            self.end_time if ignore else self.times[-2]
+        )
+        self.average_time = self.total_time / self.timer_count
 
         formatted = message.format(
             *args,

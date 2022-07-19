@@ -1,6 +1,6 @@
 import itertools
 import os
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 import pandas
 from config import WORKING_DATA_DIR
 from helper import initialize_dir, read_csv
@@ -65,3 +65,24 @@ def read_dataframes(
 
     logger.time_check('Finished reading {0} dataframes in {t} seconds.', n)
     return out
+
+
+def save_dataframe_part(
+    dataframe: pandas.DataFrame,
+    file_path: str,
+    first: Optional[bool] = None,
+    *,
+    logger: Logger = Logger(),
+) -> None:
+    if not os.path.isfile(file_path):
+        with open(file_path, 'w') as _:
+            pass
+        first = True
+
+    if first is None:
+        first = os.stat(file_path).st_size == 0
+
+    mode = 'w' if first else 'a'
+    dataframe.to_csv(file_path, mode=mode, header=first)
+
+    logger.count_check('Done saving part {i}')

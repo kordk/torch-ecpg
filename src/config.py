@@ -3,8 +3,9 @@ import torch
 from logger import Logger
 
 PATH = str(Path(__file__).parent.parent.resolve()) + '/'
-WORKING_DATA_DIR = PATH + 'working_data/'
 RAW_DATA_DIR = PATH + 'raw_data/'
+WORKING_DATA_DIR = PATH + 'working_data/'
+OUTPUT_DATA_DIR = PATH + 'output_data/'
 
 USING_GPU = torch.cuda.is_available()
 device = torch.device('cuda' if USING_GPU else 'cpu')

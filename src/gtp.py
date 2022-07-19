@@ -133,7 +133,7 @@ def process_gtp(
     M.drop(M_drop, axis=1, inplace=True)
     G.drop(G_drop, axis=1, inplace=True)
     start = len(G)
-    G.dropna(index=0, inplace=True)
+    G.dropna(axis=0, inplace=True)
     end = len(G)
     logger.info(
         'Dropped {0} rows ({1}%) of G with missing values',

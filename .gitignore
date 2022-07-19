@@ -1,5 +1,6 @@
 # Custom
 working_data/*.*
+output_data/*.*
 raw_data/GTP/*.*
 .DS_Store
 
