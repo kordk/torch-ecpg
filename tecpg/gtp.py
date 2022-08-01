@@ -2,11 +2,11 @@ import os
 import shutil
 from typing import Dict, List, Tuple
 import pandas
-from config import RAW_DATA_DIR
-from geo import geo_dict, geo_samples
-from import_data import save_dataframes
-from helper import initialize_dir, download_files, read_csv
-from logger import Logger
+from .config import RAW_DATA_DIR
+from .geo import geo_dict, geo_samples
+from .import_data import save_dataframes
+from .helper import initialize_dir, download_files, read_csv
+from .logger import Logger
 
 GTP_FILE_URLS = [
     (

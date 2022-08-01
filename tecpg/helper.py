@@ -4,7 +4,7 @@ from typing import List, Tuple
 import numpy as np
 import pandas
 import requests
-from logger import Logger
+from .logger import Logger
 
 
 def random_list(length: int, minimum: float, maximum: float) -> List[float]:

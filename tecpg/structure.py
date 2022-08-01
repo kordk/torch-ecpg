@@ -10,7 +10,7 @@ from typing import (
 )
 from matplotlib import pyplot as plt
 import pandas
-from logger import Logger
+from .logger import Logger
 
 
 IterateResult = Generator[

@@ -2,9 +2,9 @@ import itertools
 import os
 from typing import Callable, Dict, List, Optional
 import pandas
-from config import WORKING_DATA_DIR
-from helper import initialize_dir, read_csv
-from logger import Logger
+from .config import WORKING_DATA_DIR
+from .helper import initialize_dir, read_csv
+from .logger import Logger
 
 
 def save_dataframes(

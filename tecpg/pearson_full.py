@@ -3,9 +3,9 @@ from multiprocessing import Pool
 from typing import Optional
 import pandas
 import torch
-from config import device
-from logger import Logger
-from import_data import save_dataframe_part
+from .config import device
+from .logger import Logger
+from .import_data import save_dataframe_part
 
 
 def pearson_full_tensor(

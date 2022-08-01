@@ -1,7 +1,7 @@
 from typing import Any, Callable
 import pandas
-from pearson_single import pearson_corr_tensor
-from structure import DataMG
+from .pearson_single import pearson_corr_tensor
+from .structure import DataMG
 
 
 def compute_dataframe(

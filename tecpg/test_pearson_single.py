@@ -3,13 +3,13 @@ from time import perf_counter
 from typing import Callable, List, Optional, Tuple
 import numpy as np
 from matplotlib import pyplot as plt
-from logger import Logger
-from pearson_single import (
+from .logger import Logger
+from .pearson_single import (
     pearson_corr_basic,
     pearson_corr_tensor,
     scipy_pearsonr_corr,
 )
-from helper import random_list
+from .helper import random_list
 
 DEFAULT_FUNCTIONS = [
     pearson_corr_basic,

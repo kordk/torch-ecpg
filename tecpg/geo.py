@@ -1,6 +1,6 @@
-import gzip
 from typing import Dict, List, Optional, Tuple
-from logger import Logger
+import gzip
+from .logger import Logger
 
 GEO_SAMPLE_KEYS = [
     'Sample_description',

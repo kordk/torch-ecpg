@@ -2,7 +2,7 @@ from typing import List, Optional
 import numpy as np
 from scipy.stats import pearsonr
 import torch
-from config import device
+from .config import device
 
 
 def scipy_pearsonr_corr(x: List[float], y: List[float]) -> float:

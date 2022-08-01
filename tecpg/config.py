@@ -1,6 +1,6 @@
 from pathlib import Path
 import torch
-from logger import Logger
+from .logger import Logger
 
 PATH = str(Path(__file__).parent.parent.resolve()) + '/'
 RAW_DATA_DIR = PATH + 'raw_data/'

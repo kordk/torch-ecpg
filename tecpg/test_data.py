@@ -1,7 +1,7 @@
 from random import random
 from typing import Any, Callable, Dict, List, Tuple
 import pandas
-from import_data import save_dataframes
+from .import_data import save_dataframes
 
 
 def randrange(start: float, end: float) -> Callable[[], Any]:
