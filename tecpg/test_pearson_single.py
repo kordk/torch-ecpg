@@ -138,7 +138,3 @@ def test(
     logger.info('Press enter to show time graph... ')
 
     plt.show()
-
-
-if __name__ == '__main__':
-    test()

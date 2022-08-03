@@ -1,5 +1,6 @@
 import math
 from multiprocessing import Pool
+import os
 from typing import Optional
 import pandas
 import torch
@@ -215,10 +216,11 @@ def pearson_chunk_save_tensor(
             chunks_elapsed += 1
             if chunks_elapsed > save_chunks:
                 chunks_elapsed = 1
-                file_name = output_dir + str(logger.current_count + 1) + '.csv'
+                file_name = str(logger.current_count + 1) + '.csv'
+                file_path = os.path.join(output_dir, file_name)
                 logger.count('Saving part {i}/{0}: ', save_chunk_count)
                 pool.apply_async(
-                    save_dataframe_part, (corr_pd, file_name), dict(logger)
+                    save_dataframe_part, (corr_pd, file_path), dict(logger)
                 )
                 del corr_pd
                 corr_pd = pandas.DataFrame()
@@ -249,10 +251,11 @@ def pearson_chunk_save_tensor(
                 inner_logger.remaining_time(chunks),
             )
 
-        file_name = output_dir + str(logger.current_count + 1) + '.csv'
+        file_name = str(logger.current_count + 1) + '.csv'
+        file_path = os.path.join(output_dir, file_name)
         logger.count('Saving part {i}/{0}: ', save_chunk_count)
         pool.apply_async(
-            save_dataframe_part, (corr_pd, file_name), dict(logger)
+            save_dataframe_part, (corr_pd, file_path), dict(logger)
         )
 
         pool.close()

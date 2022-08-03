@@ -2,14 +2,16 @@ import itertools
 import os
 from typing import Callable, Dict, List, Optional
 import pandas
-from .config import WORKING_DATA_DIR
+from .config import data
 from .helper import initialize_dir, read_csv
 from .logger import Logger
+
+data_path = os.path.join(data['root_path'], data['input_dir'])
 
 
 def save_dataframes(
     dataframes: List[pandas.DataFrame],
-    output_dir: str = WORKING_DATA_DIR,
+    output_dir: str = data_path,
     file_names: List[str] = itertools.chain(
         ('M.csv', 'G.csv', 'P.csv'), itertools.count(1)
     ),
@@ -28,7 +30,8 @@ def save_dataframes(
     logger.start_timer('info', 'Saving {0} dataframes...', len(dataframes))
     for df, file_name in zip(dataframes, file_names):
         logger.time('Saving {i}/{0}: {1}', len(dataframes), file_name)
-        save_func(df, output_dir + str(file_name))
+        file_path = os.path.join(output_dir, file_name)
+        save_func(df, file_path)
         logger.time_check(
             'Saved {i}/{0} in {l} seconds',
             len(dataframes),
@@ -55,12 +58,15 @@ def read_dataframes(
 
     file_names = os.listdir(input_dir)
     n = len(file_names)
+    if n < 1:
+        raise ValueError(f'Could not find any files in {input_dir}')
 
     logger.start_timer('info', 'Reading {0} dataframes...', n)
     out = {}
     for file_name in file_names:
         logger.time('Reading {i}/{0}: {1}', n, file_name)
-        out[file_name] = get_func(input_dir + file_name, **logger)
+        file_path = os.path.join(input_dir, file_name)
+        out[file_name] = get_func(file_path, **logger)
         logger.time_check('Read {i}/{0} in {l} seconds', n)
 
     logger.time_check('Finished reading {0} dataframes in {t} seconds.', n)

@@ -1,8 +1,11 @@
+import os
+from typing import List
 import click
+from .helper import initialize_dir
+from .config import data
 from .logger import Logger
-from .import_data import read_dataframes
-from .config import OUTPUT_DATA_DIR, WORKING_DATA_DIR
-from .import_data import save_dataframes
+from .gtp import save_gtp_data
+from .import_data import read_dataframes, save_dataframes
 from .test_data import generate_data
 from .pearson_full import (
     pearson_full_tensor,
@@ -13,68 +16,150 @@ from .pearson_full import (
 
 @click.group()
 @click.option(
+    '-r',
+    '--root-path',
+    show_default=True,
+    default=data['root_path'],
+    type=click.Path(file_okay=False, readable=True, resolve_path=True),
+)
+@click.option(
+    '-i',
+    '--input-dir',
+    show_default=True,
+    default=data['input_dir'],
+    type=click.Path(file_okay=False),
+)
+@click.option(
+    '-o',
+    '--output-dir',
+    show_default=True,
+    default=data['output_dir'],
+    type=click.Path(file_okay=False),
+)
+@click.option(
+    '-m',
+    '--meth_file',
+    show_default=True,
+    default=data['meth_file'],
+    type=click.Path(dir_okay=False),
+)
+@click.option(
+    '-g',
+    '--gene_file',
+    show_default=True,
+    default=data['gene_file'],
+    type=click.Path(dir_okay=False),
+)
+@click.option(
+    '-c',
+    '--covar_file',
+    show_default=True,
+    default=data['covar_file'],
+    type=click.Path(dir_okay=False),
+)
+@click.option(
+    '-f',
+    '--output_file',
+    show_default=True,
+    default=data['output'],
+    type=click.Path(dir_okay=False),
+)
+@click.option(
     '-v', '--verbosity', show_default=True, default=1, type=int, count=True
 )
 @click.option(
     '-d', '--debug', is_flag=True, show_default=True, default=False, type=bool
 )
-@click.option('-l', '--log-dir', show_default=True, default=None, type=str)
+@click.option(
+    '-l',
+    '--log-dir',
+    show_default=True,
+    default=data['log_dir'],
+    type=click.Path(file_okay=False),
+)
 @click.pass_context
-def cli(ctx: click.Context, verbosity: int, debug: bool, log_dir: str) -> None:
+def cli(
+    ctx: click.Context,
+    root_path: str,
+    input_dir: str,
+    output_dir: str,
+    meth_file: str,
+    gene_file: str,
+    covar_file: str,
+    output_file: str,
+    verbosity: int,
+    debug: bool,
+    log_dir: str,
+) -> None:
     '''The root cli group'''
     ctx.ensure_object(dict)
 
-    logger = Logger(verbosity, debug, log_dir)
+    data['root_path'] = click.format_filename(root_path)
+    data['input_dir'] = click.format_filename(input_dir)
+    data['output_dir'] = click.format_filename(output_dir)
+    data['meth_file'] = click.format_filename(meth_file)
+    data['gene_file'] = click.format_filename(gene_file)
+    data['covar_file'] = click.format_filename(covar_file)
+    data['output_file'] = click.format_filename(output_file)
+    data['log_dir'] = click.format_filename(log_dir)
+
+    log_path = os.path.join(root_path, log_dir)
+    logger = Logger(verbosity, debug, log_path)
     ctx.obj['logger'] = logger
 
 
 @cli.group()
-@click.option(
-    '-o', '--output-dir', show_default=True, default=OUTPUT_DATA_DIR, type=str
-)
-@click.option('-f', '--output', show_default=True, default='out.csv', type=str)
-@click.option(
-    '-i', '--input-dir', show_default=True, default=WORKING_DATA_DIR, type=str
-)
-@click.option('-m', '--meth', show_default=True, default='M.csv', type=str)
-@click.option('-g', '--gene', show_default=True, default='G.csv', type=str)
-@click.option('-c', '--covar', show_default=True, default='C.csv', type=str)
+def run() -> None:
+    '''Base group for running algorithms.'''
+
+
+@run.command()
+@click.option('-c', '--chunks', show_default=True, default=0, type=int)
+@click.option('-s', '--save-chunks', show_default=True, default=0, type=int)
 @click.pass_context
-def run(
-    ctx: click.Context,
-    output_dir: str,
-    output: str,
-    input_dir: str,
-    meth: str,
-    gene: str,
-    covar: str,
-) -> None:
+def corr(ctx: click.Context, chunks: int, save_chunks: int) -> None:
     '''
-    Base group for running algorithms.
+    Calculate the pearson correlation coefficient.
 
-    Sets up the running environment given the input and output
-    directories, methylation, gene expression, and covariate file names,
-    and output file name. Choose an algorithm and add arguments.
+    Calculate the pearson correlation coefficient with methylation and
+    gene expression matrices. Optional compute and save chunking to
+    avoid GPU and CPU memory limits.
     '''
-    ctx.obj['output_dir'] = output_dir
-    ctx.obj['output'] = output
-    ctx.obj['input_dir'] = input_dir
-    ctx.obj['meth'] = meth
-    ctx.obj['gene'] = gene
-    ctx.obj['covar'] = covar
+    logger: Logger = ctx.obj['logger']
+
+    data_path = os.path.join(data['root_path'], data['input_dir'])
+    dataframes = read_dataframes(data_path, **logger)
+    M = dataframes[data['meth_file']]
+    G = dataframes[data['gene_file']]
+
+    output_path = os.path.join(data['root_path'], data['output_dir'])
+    output = None
+    if chunks == 0:
+        output = pearson_full_tensor(M, G, **logger)
+    elif save_chunks == 0:
+        output = pearson_chunk_tensor(M, G, chunks, **logger)
+    else:
+        pearson_chunk_save_tensor(
+            M, G, chunks, save_chunks, output_path, **logger
+        )
+    if output is not None:
+        save_dataframes([output], output_path, [data['output_file']], **logger)
+
+    logger.save()
 
 
-@cli.command()
-@click.option(
-    '-o', '--output-dir', show_default=True, default=WORKING_DATA_DIR, type=str
-)
-@click.option('-s', '--samples', required=True, type=int)
-@click.option('-m', '--meth-rows', required=True, type=int)
-@click.option('-g', '--gene-rows', required=True, type=int)
+@cli.group(name='data')
+def _data() -> None:
+    '''Base group for data management.'''
+
+
+@_data.command()
+@click.option('-s', '--samples', type=int, prompt=True)
+@click.option('-m', '--meth-rows', type=int, prompt=True)
+@click.option('-g', '--gene-rows', type=int, prompt=True)
 @click.pass_context
 def dummy(
     ctx: click.Context,
-    output_dir: str,
     samples: int,
     meth_rows: int,
     gene_rows: int,
@@ -86,49 +171,98 @@ def dummy(
     file names M.csv, G.csv, and C.csv.
     '''
     logger: Logger = ctx.obj['logger']
+
     dataframes = generate_data(samples, meth_rows, gene_rows)
-    save_dataframes(dataframes, output_dir, **logger)
+    file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
+    data_path = os.path.join(data['root_path'], data['input_dir'])
+    save_dataframes(dataframes, data_path, file_names, **logger)
+
     logger.save()
 
 
-@run.command()
-@click.pass_context
-@click.option('-c', '--chunks', show_default=True, default=0, type=int)
-@click.option('-s', '--save-chunks', show_default=True, default=0, type=int)
-def corr(ctx: click.Context, chunks: int, save_chunks: int) -> None:
-    '''
-    Calculate the pearson correlation coefficient.
+def abort_if_false(ctx: click.Context, _, value):
+    if not value:
+        ctx.abort()
 
-    Calculate the pearson correlation coefficient with methylation and
-    gene expression matrices. Optional compute and save chunking to
-    avoid GPU and CPU memory limits.
+
+@_data.command()
+@click.option(
+    '-g',
+    '--gtp-dir',
+    show_default=True,
+    default='GTP',
+    type=click.Path(file_okay=False),
+)
+@click.option(
+    '-y',
+    '--yes',
+    is_flag=True,
+    callback=abort_if_false,
+    expose_value=False,
+    prompt='Are you sure you want to overwrite the data directory?',
+)
+@click.pass_context
+def gtp(ctx: click.Context, gtp_dir) -> None:
+    '''
+    Downloads and extracts GTP data.
+
+    Downloads the methylation, gene expression, and covariate data from
+    Grady Trauma Project study. Stores the raw data in gtp-dir. The raw
+    data is extracted and processes before being saved in the data
+    directory.
     '''
     logger: Logger = ctx.obj['logger']
 
-    dataframes = read_dataframes(ctx.obj['input_dir'], **logger)
-    M = dataframes[ctx.obj['meth']]
-    G = dataframes[ctx.obj['gene']]
-
-    output = None
-    if chunks == 0:
-        output = pearson_full_tensor(M, G, **logger)
-    elif save_chunks == 0:
-        output = pearson_chunk_tensor(M, G, chunks, **logger)
-    else:
-        pearson_chunk_save_tensor(
-            M, G, chunks, save_chunks, ctx.obj['output_dir'], **logger
-        )
-    if output is not None:
-        save_dataframes(
-            [output], ctx.obj['output_dir'], [ctx.obj['output']], **logger
-        )
+    gtp_path = os.path.join(data['root_path'], gtp_dir)
+    data_path = os.path.join(data['root_path'], data['input_dir'])
+    file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
+    save_gtp_data(gtp_path, data_path, file_names, **logger)
 
     logger.save()
+
+
+@cli.command()
+@click.argument(
+    'root-dirs',
+    nargs=-1,
+    type=click.Path(file_okay=False),
+)
+@click.option(
+    '-y',
+    '--yes',
+    is_flag=True,
+    callback=abort_if_false,
+    expose_value=False,
+    prompt=(
+        'Are you sure you want to reset and initialize'
+        f' {data["root_path"]}/[root_dir]?'
+    ),
+)
+@click.pass_context
+def init(ctx: click.Context, root_dirs: List[str]) -> None:
+    '''
+    Creates and initializes directory.
+
+    Creates root_dir in the root_path. Creates input_dir and output_dir
+    in this new directory. Changes directory too this new directory.
+    '''
+    logger: Logger = ctx.obj['logger']
+
+    if not root_dirs:
+        root_dir = 'tecpg_testing'
+    else:
+        root_dir = root_dirs[0]
+
+    path = os.path.join(data['root_path'], root_dir)
+    initialize_dir(path, **logger)
+    os.mkdir(os.path.join(path, data['input_dir']))
+    os.mkdir(os.path.join(path, data['output_dir']))
+    os.mkdir(os.path.join(path, data['log_dir']))
+    logger.info('Enter the {0} directory to start working.', path)
+
+    log_dir = os.path.join(path, data['log_dir'])
+    logger.save(log_dir=log_dir)
 
 
 def start() -> None:
     cli(obj={})
-
-
-if __name__ == '__main__':
-    start()

@@ -32,7 +32,8 @@ def download_files(
 
     for file_name, url in files:
         with requests.get(url, stream=True) as stream:
-            with open(output_dir + file_name, 'wb') as file:
+            file_path = os.path.join(output_dir, file_name)
+            with open(file_path, 'wb') as file:
                 logger.time('Downloading {i}/{0}: {1}...', n, file_name)
                 shutil.copyfileobj(stream.raw, file)
                 logger.time_check('Downloaded in {l} seconds', n)

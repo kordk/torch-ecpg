@@ -1,8 +1,7 @@
 import os
 import shutil
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import pandas
-from .config import RAW_DATA_DIR
 from .geo import geo_dict, geo_samples
 from .import_data import save_dataframes
 from .helper import initialize_dir, download_files, read_csv
@@ -30,10 +29,11 @@ GTP_FILE_URLS = [
         '137_Raw_279_samplesremoved.csv.gz',
     ),
 ]
-GTP_DIR = RAW_DATA_DIR + 'GTP/'
 
 
-def download_gtp_raw(logger: Logger = Logger(), **kwargs) -> None:
+def download_gtp_raw(
+    gtp_path: str, logger: Logger = Logger(), **kwargs
+) -> None:
     '''
     Downloads the raw data from the Grady Trauma Project study and
     stores it in RAW_DATA_DIR/GTP/....
@@ -48,13 +48,13 @@ def download_gtp_raw(logger: Logger = Logger(), **kwargs) -> None:
     Gene expression data are downloaded in two parts. They get stitched
     together in the dataframe conversion section.
     '''
-    initialize_dir(GTP_DIR, **logger)
-    logger.info('Downloading GTP raw data')
-    download_files(GTP_DIR, GTP_FILE_URLS, **kwargs, **logger)
+    initialize_dir(gtp_path, **logger)
+    logger.info('Downloading GTP raw data (this could take a very long time)')
+    download_files(gtp_path, GTP_FILE_URLS, **kwargs, **logger)
 
 
 def get_gtp_dataframes(
-    *, logger: Logger = Logger()
+    gtp_path: str, *, logger: Logger = Logger()
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     '''
     Reads the raw GTP files (.txt.gz) and returns a tuple of three
@@ -68,7 +68,9 @@ def get_gtp_dataframes(
     logger.start_timer('info', 'Reading 3 csv files...')
     for file_name, _ in GTP_FILE_URLS[1:]:
         logger.time('Reading {i}/3: {0}', file_name)
-        dfs.append(read_csv(GTP_DIR + file_name, '\t', **logger))
+        file_path = os.path.join(gtp_path, file_name)
+        df = read_csv(file_path, '\t', **logger)
+        dfs.append(df)
         logger.time_check('Read {i}/3 in {l} seconds')
 
     logger.time_check(
@@ -77,28 +79,29 @@ def get_gtp_dataframes(
     return tuple(dfs)
 
 
-def gtp_raw_clean(*, logger: Logger = Logger()) -> bool:
+def gtp_raw_clean(gtp_path: str, *, logger: Logger = Logger()) -> bool:
     '''
     Cleans GTP directory of files other than GTP raw files. If all four
-    GTW raw files remain, returns true. Otherwise, returns false. The
+    GTP raw files remain, returns true. Otherwise, returns false. The
     return boolean is useful for determining whether it is necessary to
     download the raw data before proceeding.
     '''
-    if not os.path.exists(GTP_DIR):
-        initialize_dir(RAW_DATA_DIR, **logger)
+    if not os.path.exists(gtp_path):
+        initialize_dir(gtp_path, **logger)
         return False
 
-    files = os.listdir(GTP_DIR)
+    files = os.listdir(gtp_path)
     target_files = [file for file, _ in GTP_FILE_URLS]
     for file in files:
         if file not in target_files:
-            logger.warning(f'{file} is being removed from {GTP_DIR}')
-            if os.path.isdir(GTP_DIR + file):
-                shutil.rmtree(GTP_DIR + file)
-            elif os.path.isfile(GTP_DIR + file):
-                os.remove(GTP_DIR + file)
+            logger.warning(f'{file} is being removed from {gtp_path}')
+            file_path = os.path.join(gtp_path, file)
+            if os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+            elif os.path.isfile(file_path):
+                os.remove(file_path)
 
-    remaining = len(os.listdir(GTP_DIR))
+    remaining = len(os.listdir(gtp_path))
     return remaining == 4
 
 
@@ -173,33 +176,39 @@ def get_covariates(
 
 
 def generate_data(
-    *, logger: Logger = Logger()
+    gtp_path: str, *, logger: Logger = Logger()
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     '''
     Generates methylation beta values, gene expression values, and
     covariates pandas.DataFrames. Returns a tuple of these three
     dataframes.
     '''
-    if not gtp_raw_clean(**logger):
-        download_gtp_raw(**logger)
-    M, G_1, G_2 = get_gtp_dataframes(**logger)
+    if not gtp_raw_clean(gtp_path, **logger):
+        download_gtp_raw(gtp_path, **logger)
+    M, G_1, G_2 = get_gtp_dataframes(gtp_path, **logger)
     logger.info('Concatenating gene expression parts')
     G = pandas.concat([G_1, G_2], axis=1)
-    data, chars = geo_dict(GTP_DIR + GTP_FILE_URLS[0][0], **logger)
+    covar_file = GTP_FILE_URLS[0][0]
+    data, chars = geo_dict(os.path.join(gtp_path, covar_file), **logger)
     geo_descs, _, geo_titles = geo_samples(data)
     C = get_covariates(chars, geo_titles, **logger)
     return process_gtp(M, G, C, geo_descs, geo_titles, **logger)
 
 
-def save_gtp_data(*, logger: Logger = Logger()) -> None:
+def save_gtp_data(
+    gtp_path: str,
+    data_path: str,
+    file_names: Optional[List[str]] = None,
+    *,
+    logger: Logger = Logger(),
+) -> None:
     '''
     Downloads data from www.ncbi.nlm.nih.gov. Saves GTP data in
     dataframes in the working data directory.
     '''
-    data = generate_data(**logger)
-    logger.info('Saving...')
-    save_dataframes(data, **logger)
-
-
-if __name__ == '__main__':
-    save_gtp_data()
+    data = generate_data(gtp_path, **logger)
+    logger.info('Saving into {0}', data_path)
+    if file_names is None:
+        save_dataframes(data, data_path, **logger)
+    else:
+        save_dataframes(data, data_path, file_names, **logger)

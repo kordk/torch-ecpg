@@ -1,5 +1,5 @@
 import os
-from setuptools import setup
+from setuptools import find_packages, setup
 
 dir_path = os.path.dirname(__file__)
 
@@ -19,7 +19,7 @@ setup(
     description='Python eCpG mapper with CLI using pytorch',
     long_description=long_description,  # See tecpg/README.md
     python_requires='>=3.10',
-    package_dir={'': 'tecpg'},
+    packages=find_packages(),
     entry_points={'console_scripts': ['tecpg = tecpg.__main__:main']},
     install_requires=requirements,  # See tecpg/requirements.txt
     classifiers=[

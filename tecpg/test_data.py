@@ -1,7 +1,6 @@
 from random import random
 from typing import Any, Callable, Dict, List, Tuple
 import pandas
-from .import_data import save_dataframes
 
 
 def randrange(start: float, end: float) -> Callable[[], Any]:
@@ -64,7 +63,7 @@ def generate_covariates(
 
 def generate_data(
     sample_size: int, m_rows: int, g_rows: int
-) -> Tuple[pandas.DataFrame, pandas.DataFrame]:
+) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     '''
     Generates two pandas dataframes for methylation and gene expression.
     Accepts a sample_size for the number of people, m_rows for the
@@ -86,11 +85,3 @@ def generate_data(
     C = generate_covariates(person_codes, covariate_template)
 
     return M, G, C
-
-
-def save_test_data() -> None:
-    save_dataframes(generate_data(100, 1000, 1000))
-
-
-if __name__ == '__main__':
-    save_test_data()

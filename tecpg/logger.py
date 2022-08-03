@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime
+import os
 from time import perf_counter
 from typing import Callable, Generator, List, Literal, Optional, TypeVar
 from colorama import Fore as colors
@@ -302,14 +303,22 @@ class Logger(PassAsKwarg):
         '''
         return self.average_time * (n - self.timer_count)
 
-    def save(self, file_name: Optional[str] = None) -> None:
-        '''Saves self.logs to self.log_dir + file_name'''
+    def save(
+        self, log_dir: Optional[str] = None, file_name: Optional[str] = None
+    ) -> None:
+        '''
+        Saves self.logs to log_dir (default: self.log_dir) + file_name
+        (default: current time code).
+        '''
         if self.log_dir is None:
             return
+        if log_dir is None:
+            log_dir = self.log_dir
         if file_name is None:
             date_code = datetime.now().strftime(self.date_format)
             file_name = date_code + '_logfile.txt'
-        with open(self.log_dir + file_name, 'w') as file:
+        file_path = os.path.join(log_dir, file_name)
+        with open(file_path, 'w') as file:
             log_str = '\n'.join(self.logs)
             file.write(log_str)
 
