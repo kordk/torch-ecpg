@@ -4,14 +4,10 @@ Python eCpG mapper with CLI using pytorch
 
 ## Installation
 
-Clone the repository, cd into the root directory, and install with pip.
+Pip install from github using `git+https://`.
 
 ```bash
-cd [path/to/code/directory]
-git clone https://github.com/liamgd/tecpg.git
-cd tecpg
-pip install .
-rm -rI .
+pip install git+https://github.com/liamgd/tecpg.git
 ```
 
 If you want to be able to edit the code for debugging and development, install in editable mode and do not remove the directory.
@@ -25,9 +21,11 @@ pip install --editable .
 
 `tecpg` is an entry point in the command line than calls the root CLI function. If the installation was successful, running `tecpg --help` should provide help with the command line interface.
 
+**If you have issues with using `pip` in the command line, try `python -m pip` or `python3 -m pip`**
+
 ## Dependencies
 
-Stored in tecpg/requirements.txt:
+Stored in `tecpg/requirements.txt`:
 
 ```
 click>=8.0.3
@@ -37,6 +35,7 @@ numpy>=1.22.4
 pandas>=1.3.5
 requests>=2.26.0
 scipy>=1.7.2
+setuptools>=63.3.0
 torch>=1.11.0+cu113
 ```
 
@@ -359,3 +358,11 @@ Options:
 ```
 
 </details>
+
+<br>
+
+# Notes
+
+[Pearson correlation coefficient](https://en.wikipedia.org/wiki/Pearson_correlation_coefficient)
+
+File `tecpg/requirements.txt` created with `pipreqs --mode gt --force`.
