@@ -230,7 +230,7 @@ tecpg : The root cli group
 ### CLI Commands
 
 ```
-tecpg [--root-path -r DIRECTORY] [--input-dir -i DIRECTORY] [--output-dir -o DIRECTORY] [--meth_file -m FILE] [--gene_file -g FILE] [--covar_file -c FILE] [--output_file -f FILE] [--verbosity -v] [--debug -d] [--log-dir -l DIRECTORY] [--help]
+tecpg [--root-path -r DIRECTORY] [--input-dir -i DIRECTORY] [--output-dir -o DIRECTORY] [--meth_file -m FILE] [--gene_file -g FILE] [--covar_file -c FILE] [--output_file -f FILE] [--cpu-threads -t INTEGER] [--verbosity -v] [--debug -d] [--log-dir -l DIRECTORY] [--no-log-file -n] [--help]
 ```
 
 ```
@@ -266,13 +266,15 @@ Options:
     -r, --root-path DIRECTORY   [default: .]
     -i, --input-dir DIRECTORY   [default: data]
     -o, --output-dir DIRECTORY  [default: output]
-    -m, --meth_file FILE        [default: M.csv]
-    -g, --gene_file FILE        [default: G.csv]
-    -c, --covar_file FILE       [default: C.csv]
-    -f, --output_file FILE      [default: out.csv]
+    -m, --meth-file FILE        [default: M.csv]
+    -g, --gene-file FILE        [default: G.csv]
+    -c, --covar-file FILE       [default: C.csv]
+    -f, --output-file FILE      [default: out.csv]
+    -t, --cpu-threads INTEGER   If 0, runs on the GPU if available  [default: 0]
     -v, --verbosity             [default: 1]
     -d, --debug                 [default: False]
     -l, --log-dir DIRECTORY     [default: logs]
+    -n, --no-log-file           [default: False]
     --help                      Show this message and exit.
 
 Commands:

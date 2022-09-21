@@ -2,7 +2,16 @@ from collections.abc import Mapping
 from datetime import datetime
 import os
 from time import perf_counter
-from typing import Callable, Generator, List, Literal, Optional, TypeVar
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Literal,
+    Optional,
+    TypeVar,
+)
 from colorama import Fore as colors
 from colorama import Style as style
 
@@ -66,6 +75,7 @@ class Logger(PassAsKwarg):
         verbosity: Optional[int] = None,
         debug: Optional[bool] = None,
         log_dir: Optional[str] = None,
+        carry_data: Optional[Dict[str, Any]] = None,
         timer_round: Optional[int] = None,
         *,
         parent: Optional['Logger'] = None,
@@ -81,6 +91,8 @@ class Logger(PassAsKwarg):
             self.timer_round = (
                 parent.timer_round if timer_round is None else timer_round
             )
+
+            self.carry_data = parent.carry_data
 
             self.date_format: str = parent.date_format
 
@@ -101,6 +113,7 @@ class Logger(PassAsKwarg):
             self.is_debug = False if debug is None else debug
             self.log_dir = log_dir
             self.timer_round = 4 if timer_round is None else timer_round
+            self.carry_data = {} if carry_data is None else carry_data
 
             self.date_format: str = '%Y%m%d_%H%M%S'
 
@@ -310,10 +323,12 @@ class Logger(PassAsKwarg):
         Saves self.logs to log_dir (default: self.log_dir) + file_name
         (default: current time code).
         '''
-        if self.log_dir is None:
+        if self.log_dir is None and log_dir is None:
             return
         if log_dir is None:
             log_dir = self.log_dir
+        if not os.path.isdir(log_dir):
+            os.mkdir(log_dir)
         if file_name is None:
             date_code = datetime.now().strftime(self.date_format)
             file_name = date_code + '_logfile.txt'

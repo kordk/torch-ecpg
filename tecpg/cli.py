@@ -1,6 +1,7 @@
 import os
 from typing import List
 import click
+import torch
 from .helper import initialize_dir
 from .config import data
 from .logger import Logger
@@ -38,31 +39,39 @@ from .pearson_full import (
 )
 @click.option(
     '-m',
-    '--meth_file',
+    '--meth-file',
     show_default=True,
     default=data['meth_file'],
     type=click.Path(dir_okay=False),
 )
 @click.option(
     '-g',
-    '--gene_file',
+    '--gene-file',
     show_default=True,
     default=data['gene_file'],
     type=click.Path(dir_okay=False),
 )
 @click.option(
     '-c',
-    '--covar_file',
+    '--covar-file',
     show_default=True,
     default=data['covar_file'],
     type=click.Path(dir_okay=False),
 )
 @click.option(
     '-f',
-    '--output_file',
+    '--output-file',
     show_default=True,
     default=data['output'],
     type=click.Path(dir_okay=False),
+)
+@click.option(
+    '-t',
+    '--cpu-threads',
+    show_default=True,
+    default=0,
+    type=int,
+    help='If 0, runs on the GPU if available',
 )
 @click.option(
     '-v', '--verbosity', show_default=True, default=1, type=int, count=True
@@ -77,6 +86,14 @@ from .pearson_full import (
     default=data['log_dir'],
     type=click.Path(file_okay=False),
 )
+@click.option(
+    '-n',
+    '--no-log-file',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -87,9 +104,11 @@ def cli(
     gene_file: str,
     covar_file: str,
     output_file: str,
+    cpu_threads: int,
     verbosity: int,
     debug: bool,
     log_dir: str,
+    no_log_file: bool,
 ) -> None:
     '''The root cli group'''
     ctx.ensure_object(dict)
@@ -103,8 +122,11 @@ def cli(
     data['output_file'] = click.format_filename(output_file)
     data['log_dir'] = click.format_filename(log_dir)
 
-    log_path = os.path.join(root_path, log_dir)
+    log_path = None if no_log_file else os.path.join(root_path, log_dir)
     logger = Logger(verbosity, debug, log_path)
+    if cpu_threads:
+        torch.set_num_threads(cpu_threads)
+        logger.carry_data['use_cpu'] = True
     ctx.obj['logger'] = logger
 
 

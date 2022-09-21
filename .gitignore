@@ -1,7 +1,6 @@
 # Custom
-working_data/*.*
-output_data/*.*
-raw_data/GTP/*.*
+data/
+output/
 .DS_Store
 
 # Created by https://www.toptal.com/developers/gitignore/api/python

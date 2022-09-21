@@ -87,7 +87,7 @@ def test(
         pass_times = []
         for f in functions:
             start = perf_counter()
-            result = f(x, y)
+            result = f(x, y, **logger)
             end = perf_counter()
             pass_times.append(end - start)
             results.append(result)

@@ -4,7 +4,7 @@ import os
 from typing import Optional
 import pandas
 import torch
-from .config import device
+from .config import get_device
 from .logger import Logger
 from .import_data import save_dataframe_part
 
@@ -59,7 +59,12 @@ def pearson_full_tensor(
         columns=G.index,
     )
     '''
-    logger.start_timer('info', 'Calculating pearson_full_tensor...')
+    device = get_device(**logger)
+    logger.start_timer(
+        'info',
+        'Calculating pearson_full_tensor (CUDA enabled, running with'
+        f' {device.type})...',
+    )
     if n is None:
         n = len(M.columns)
 
@@ -108,11 +113,12 @@ def pearson_chunk_tensor(
     if n is None:
         n = len(M.columns)
     chunk_rows = len(M) // chunks
+    device = get_device(**logger)
     logger.start_timer(
         'info',
         'Running pearson chunk tensor with'
         f' {chunk_rows * len(G) * n} values per chunk ({chunk_rows} rows'
-        ' per chunk).',
+        f' per chunk) (CUDA enabled, running with {device.type}).',
     )
 
     M_t = torch.tensor(M.to_numpy()).to(device)
@@ -189,12 +195,12 @@ def pearson_chunk_save_tensor(
         n = len(M.columns)
     chunk_rows = len(M) // chunks
     save_chunk_count = math.ceil(chunks / save_chunks)
-
+    device = get_device(**logger)
     logger.start_timer(
         'info',
         'Running pearson chunk tensor with'
         f' {chunk_rows * len(G) * n} values per chunk ({chunk_rows} rows'
-        ' per chunk).',
+        f' per chunk) (CUDA enabled, running with {device.type}).',
     )
 
     M_t = torch.tensor(M.to_numpy()).to(device)

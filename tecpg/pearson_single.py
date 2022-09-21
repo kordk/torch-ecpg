@@ -2,10 +2,14 @@ from typing import List, Optional
 import numpy as np
 from scipy.stats import pearsonr
 import torch
-from .config import device
+
+from tecpg.tecpg.logger import Logger
+from .config import get_device
 
 
-def scipy_pearsonr_corr(x: List[float], y: List[float]) -> float:
+def scipy_pearsonr_corr(
+    x: List[float], y: List[float], *, logger: Logger = Logger()
+) -> float:
     '''
     Alias to scipy.stats.pearsonr. Only returns correlation coefficient,
     not p-value.
@@ -13,11 +17,16 @@ def scipy_pearsonr_corr(x: List[float], y: List[float]) -> float:
     Takes in two lists of floats (x and y), and returns their Pearson
     correlation coefficient as a float.
     '''
+    logger.info('Running the scipy pearsonr single function (CPU only)')
     return pearsonr(x, y)[0]
 
 
 def pearson_corr_basic(
-    x: List[float], y: List[float], n: Optional[int] = None
+    x: List[float],
+    y: List[float],
+    n: Optional[int] = None,
+    *,
+    logger: Logger = Logger(),
 ) -> float:
     '''
     Calculates the pearson correlation coefficient on the cpu based on
@@ -28,6 +37,7 @@ def pearson_corr_basic(
         n = len(x)
     x_mean = np.mean(x)
     y_mean = np.mean(y)
+    logger.info('Running the basic pearson corr single (CPU only)')
 
     numer = denom_x = denom_y = 0
     for x_val, y_val in zip(x, y):
@@ -41,7 +51,11 @@ def pearson_corr_basic(
 
 
 def pearson_corr_tensor(
-    x: List[float], y: List[float], n: Optional[int] = None
+    x: List[float],
+    y: List[float],
+    n: Optional[int] = None,
+    *,
+    logger: Logger = Logger(),
 ) -> float:
     '''
     Calculates the pearson correlation coefficient using a tensor to
@@ -51,6 +65,12 @@ def pearson_corr_tensor(
     '''
     if n is None:
         n = len(x)
+    device = get_device(**logger)
+    logger.info(
+        'Calculating pearson_corr_tensor single (CUDA enabled, running with'
+        f' {device.type})...'
+    )
+
     x_t, y_t = torch.tensor(x).to(device), torch.tensor(y).to(device)
     dot = x_t.dot(y_t)
     sub = n * x_t.mean() * y_t.mean()
