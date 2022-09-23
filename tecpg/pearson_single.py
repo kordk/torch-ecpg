@@ -3,7 +3,7 @@ import numpy as np
 from scipy.stats import pearsonr
 import torch
 
-from tecpg.tecpg.logger import Logger
+from .logger import Logger
 from .config import get_device
 
 
