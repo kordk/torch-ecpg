@@ -45,6 +45,10 @@ Pytorch will run on the CPU or CUDA-supported GPU. A GPU is generally much faste
 
 Python 3.10 or higher is required.
 
+## Notes
+
+The files `pearson_single.py` and `test_pearson_single.py` are for testing purposes only. They also serve to illustrate the major implementations of the pearson correlation coefficient function. The file `pearson_full.py` contains the optimized versions of the pearson correlation coefficient function that operate on the entire input matrix. These should be used in most cases and are the only options available in the CLI.
+
 ## Input formats
 
 There are three main inputs for most functions: methylation beta values, gene expression values, and covariates. Some functions, like the pearson correlation coefficient functions, only take in methylation and gene expression data.
