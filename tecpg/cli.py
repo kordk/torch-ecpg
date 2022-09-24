@@ -138,8 +138,18 @@ def run() -> None:
 @run.command()
 @click.option('-c', '--chunks', show_default=True, default=0, type=int)
 @click.option('-s', '--save-chunks', show_default=True, default=0, type=int)
+@click.option(
+    '-f',
+    '--flatten',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+)
 @click.pass_context
-def corr(ctx: click.Context, chunks: int, save_chunks: int) -> None:
+def corr(
+    ctx: click.Context, chunks: int, save_chunks: int, flatten: bool
+) -> None:
     '''
     Calculate the pearson correlation coefficient.
 
@@ -156,13 +166,14 @@ def corr(ctx: click.Context, chunks: int, save_chunks: int) -> None:
 
     output_path = os.path.join(data['root_path'], data['output_dir'])
     output = None
+    print(chunks, save_chunks)
     if chunks == 0:
-        output = pearson_full_tensor(M, G, **logger)
+        output = pearson_full_tensor(M, G, flatten=flatten, **logger)
     elif save_chunks == 0:
-        output = pearson_chunk_tensor(M, G, chunks, **logger)
+        output = pearson_chunk_tensor(M, G, chunks, flatten=flatten, **logger)
     else:
         pearson_chunk_save_tensor(
-            M, G, chunks, save_chunks, output_path, **logger
+            M, G, chunks, save_chunks, output_path, flatten=flatten, **logger
         )
     if output is not None:
         save_dataframes([output], output_path, [data['output_file']], **logger)

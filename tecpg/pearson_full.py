@@ -13,6 +13,7 @@ def pearson_full_tensor(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
     n: Optional[int] = None,
+    flatten: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> pandas.DataFrame:
@@ -25,6 +26,8 @@ def pearson_full_tensor(
     Calculating the pearson correlation coefficient matrix given the
     entire two matrices is monumentally faster than single iteration
     pearson.
+
+    The flatten option flattens the result from n x m to n*m x 1.
 
     The algorithm works by removing much of the unneeded recomputation
     present in pearson_corr_tensor. The algorithm is roughly based on
@@ -63,7 +66,7 @@ def pearson_full_tensor(
     logger.start_timer(
         'info',
         'Calculating pearson_full_tensor (CUDA enabled, running with'
-        f' {device.type})...',
+        f' {device.type},  Flattening: {flatten})...',
     )
     if n is None:
         n = len(M.columns)
@@ -86,6 +89,8 @@ def pearson_full_tensor(
     logger.time(
         'Finished calculating pearson_full_tensor in {t} seconds.', ignore=True
     )
+    if flatten:
+        return corr_pd.stack()
     return corr_pd
 
 
@@ -94,6 +99,7 @@ def pearson_chunk_tensor(
     G: pandas.DataFrame,
     chunks: int,
     n: Optional[int] = None,
+    flatten: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> pandas.DataFrame:
@@ -116,9 +122,9 @@ def pearson_chunk_tensor(
     device = get_device(**logger)
     logger.start_timer(
         'info',
-        'Running pearson chunk tensor with'
-        f' {chunk_rows * len(G) * n} values per chunk ({chunk_rows} rows'
-        f' per chunk) (CUDA enabled, running with {device.type}).',
+        f'Running pearson chunk tensor with {chunk_rows * len(G) * n} values'
+        f' per chunk ({chunk_rows} rows per chunk) (CUDA enabled, running with'
+        f' {device.type}). Flattening: {flatten}',
     )
 
     M_t = torch.tensor(M.to_numpy()).to(device)
@@ -158,6 +164,9 @@ def pearson_chunk_tensor(
         )
 
     logger.time('Calculated pearson_chunk_tensor in {t} seconds')
+
+    if flatten:
+        return corr_pd.stack()
     return corr_pd
 
 
@@ -168,6 +177,7 @@ def pearson_chunk_save_tensor(
     save_chunks: int,
     output_dir: str,
     n: Optional[int] = None,
+    flatten: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> None:
@@ -198,9 +208,9 @@ def pearson_chunk_save_tensor(
     device = get_device(**logger)
     logger.start_timer(
         'info',
-        'Running pearson chunk tensor with'
-        f' {chunk_rows * len(G) * n} values per chunk ({chunk_rows} rows'
-        f' per chunk) (CUDA enabled, running with {device.type}).',
+        f'Running pearson chunk tensor with {chunk_rows * len(G) * n} values'
+        f' per chunk ({chunk_rows} rows per chunk) (CUDA enabled, running with'
+        f' {device.type}). Flattening: {flatten}',
     )
 
     M_t = torch.tensor(M.to_numpy()).to(device)
@@ -226,7 +236,9 @@ def pearson_chunk_save_tensor(
                 file_path = os.path.join(output_dir, file_name)
                 logger.count('Saving part {i}/{0}: ', save_chunk_count)
                 pool.apply_async(
-                    save_dataframe_part, (corr_pd, file_path), dict(logger)
+                    save_dataframe_part,
+                    (corr_pd.stack() if flatten else corr_pd, file_path),
+                    dict(logger),
                 )
                 del corr_pd
                 corr_pd = pandas.DataFrame()
@@ -261,11 +273,12 @@ def pearson_chunk_save_tensor(
         file_path = os.path.join(output_dir, file_name)
         logger.count('Saving part {i}/{0}: ', save_chunk_count)
         pool.apply_async(
-            save_dataframe_part, (corr_pd, file_path), dict(logger)
+            save_dataframe_part,
+            (corr_pd.stack() if flatten else corr_pd, file_path),
+            dict(logger),
         )
 
         pool.close()
         pool.join()
 
-    del corr_pd
     logger.time('Calculated pearson_chunk_tensor in {t} seconds')

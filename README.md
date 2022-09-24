@@ -254,7 +254,7 @@ tecpg run [--help]
 ```
 
 ```
-tecpg run corr [--chunks -c INTEGER] [--save-chunks -s INTEGER] [--help]
+tecpg run corr [--chunks -c INTEGER] [--save-chunks -s INTEGER] [--flatten -f] [--help]
 ```
 
 ### Documentation
@@ -359,6 +359,7 @@ memory limits.
 Options:
     -c, --chunks INTEGER       [default: 0]
     -s, --save-chunks INTEGER  [default: 0]
+    -f, --flatten              [default: False]
     --help                     Show this message and exit.
 
 ```
