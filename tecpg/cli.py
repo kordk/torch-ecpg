@@ -143,7 +143,7 @@ def run() -> None:
     '--flatten',
     is_flag=True,
     show_default=True,
-    default=False,
+    default=True,
     type=bool,
 )
 @click.pass_context
