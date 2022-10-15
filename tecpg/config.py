@@ -1,6 +1,6 @@
-from typing import Optional
 import torch
 from .logger import Logger
+
 
 data = {
     'root_path': '.',
@@ -31,9 +31,7 @@ def get_device(*, logger: Logger = Logger()) -> torch.device:
 
 
 def using_gpu(*, logger: Logger = Logger()) -> None:
-    if get_device(**logger):
-        logger.info('This device supports CUDA. Torch will run on the GPU.')
+    if torch.cuda.is_available():
+        logger.info('CUDA GPU detected. This device supports CUDA.')
     else:
-        logger.info(
-            'This device does not support CUDA. Torch will run on the CPU.'
-        )
+        logger.info('CUDA GPU detected. This device does not support CUDA.')

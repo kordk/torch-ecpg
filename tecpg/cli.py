@@ -3,7 +3,7 @@ from typing import List
 import click
 import torch
 from .helper import initialize_dir
-from .config import data
+from .config import data, using_gpu
 from .logger import Logger
 from .gtp import save_gtp_data
 from .import_data import read_dataframes, save_dataframes
@@ -124,6 +124,7 @@ def cli(
 
     log_path = None if no_log_file else os.path.join(root_path, log_dir)
     logger = Logger(verbosity, debug, log_path)
+    using_gpu(**logger)
     if cpu_threads:
         torch.set_num_threads(cpu_threads)
         logger.carry_data['use_cpu'] = True
