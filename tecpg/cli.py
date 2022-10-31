@@ -13,6 +13,7 @@ from .pearson_full import (
     pearson_chunk_tensor,
     pearson_chunk_save_tensor,
 )
+from .regression_full import regression_full
 
 
 @click.group()
@@ -180,6 +181,40 @@ def corr(
         save_dataframes([output], output_path, [data['output_file']], **logger)
 
     logger.save()
+
+
+@run.command()
+@click.option(
+    '--exclude-est', is_flag=True, show_default=True, default=False, type=bool
+)
+@click.option(
+    '--exclude-err', is_flag=True, show_default=True, default=False, type=bool
+)
+@click.option(
+    '--exclude-t', is_flag=True, show_default=True, default=False, type=bool
+)
+@click.pass_context
+def mlr(
+    ctx: click.Context, exclude_est: bool, exclude_err: bool, exclude_t: bool
+) -> None:
+    '''
+    Calculates the multiple linear regression.
+
+    Calculate the multiple linear regression with methylation and gene
+    expression matrices.
+    '''
+    logger: Logger = ctx.obj['logger']
+
+    data_path = os.path.join(data['root_path'], data['input_dir'])
+    output_path = os.path.join(data['root_path'], data['output_dir'])
+    dataframes = read_dataframes(data_path, **logger)
+    M = dataframes[data['meth_file']]
+    G = dataframes[data['gene_file']]
+    C = dataframes[data['covar_file']]
+    include = (not exclude_est, not exclude_err, not exclude_t)
+
+    output = regression_full(M, G, C, include, **logger)
+    save_dataframes([output], output_path, [data['output_file']], **logger)
 
 
 @cli.group(name='data')

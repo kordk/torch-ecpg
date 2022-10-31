@@ -2,9 +2,9 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 import torch
-from tecpg import test_data
-from tecpg.config import get_device
-from tecpg.logger import Logger
+from .test_data import generate_data
+from .config import get_device
+from .logger import Logger
 
 
 def regression_full(
@@ -95,21 +95,24 @@ def regression_full(
             )
             out_df = pd.concat((out_df, row))
 
-            inner_logger.time(
-                'Completed regression {i}/{0} in {l} seconds. Average'
-                ' regression time: {a} seconds',
-                regressions,
-            )
-            inner_logger.info(
-                'Estimated time remaining: {0} seconds',
-                inner_logger.remaining_time(regressions),
-            )
+            if inner_logger.timer_count % 500 == 0:
+                inner_logger.time(
+                    'Completed regression {i}/{0} in {l} seconds. Average'
+                    ' regression time: {a} seconds',
+                    regressions,
+                )
+                inner_logger.info(
+                    'Estimated time remaining: {0} seconds',
+                    inner_logger.remaining_time(regressions),
+                )
+            else:
+                inner_logger.time()
 
     return out_df
 
 
 def test() -> None:
-    M, G, C = test_data.generate_data(100, 100, 100)
+    M, G, C = generate_data(100, 100, 100)
     C['sex'] = C['sex'].astype(int)
     print(regression_full(M, G, C))
 

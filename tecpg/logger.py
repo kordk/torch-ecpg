@@ -262,7 +262,7 @@ class Logger(PassAsKwarg):
         self.time_func(message, *args, **kwargs)
 
     def time(
-        self, message: str, *args, ignore: bool = False, **kwargs
+        self, message: str = '', *args, ignore: bool = False, **kwargs
     ) -> None:
         '''
         Prints a specially formatted message and updates timer.
@@ -289,18 +289,19 @@ class Logger(PassAsKwarg):
         )
         self.average_time = self.total_time / self.timer_count
 
-        formatted = message.format(
-            *args,
-            **kwargs,
-            i=self.timer_count,
-            t=round(self.total_time, self.timer_round),
-            l=round(self.time_since_last, self.timer_round),
-            a=round(self.average_time, self.timer_round),
-        )
-        self.time_func(
-            formatted,
-            modifier='TIMER',
-        )
+        if message:
+            formatted = message.format(
+                *args,
+                **kwargs,
+                i=self.timer_count,
+                t=round(self.total_time, self.timer_round),
+                l=round(self.time_since_last, self.timer_round),
+                a=round(self.average_time, self.timer_round),
+            )
+            self.time_func(
+                formatted,
+                modifier='TIMER',
+            )
 
     def time_check(self, *args, **kwargs) -> None:
         '''
