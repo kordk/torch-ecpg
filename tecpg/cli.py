@@ -193,9 +193,16 @@ def corr(
 @click.option(
     '--exclude-t', is_flag=True, show_default=True, default=False, type=bool
 )
+@click.option(
+    '--exclude-p', is_flag=True, show_default=True, default=False, type=bool
+)
 @click.pass_context
 def mlr(
-    ctx: click.Context, exclude_est: bool, exclude_err: bool, exclude_t: bool
+    ctx: click.Context,
+    exclude_est: bool,
+    exclude_err: bool,
+    exclude_t: bool,
+    exclude_p: bool,
 ) -> None:
     '''
     Calculates the multiple linear regression.
@@ -211,7 +218,7 @@ def mlr(
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
-    include = (not exclude_est, not exclude_err, not exclude_t)
+    include = (not exclude_est, not exclude_err, not exclude_t, not exclude_p)
 
     output = regression_full(M, G, C, include, **logger)
     save_dataframes([output], output_path, [data['output_file']], **logger)

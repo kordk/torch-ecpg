@@ -11,7 +11,7 @@ def regression_full(
     M: pd.DataFrame,
     G: pd.DataFrame,
     C: pd.DataFrame,
-    include: Tuple[bool, bool, bool] = (True, True, True),
+    include: Tuple[bool, bool, bool, bool] = (True, True, True, True),
     *,
     logger: Logger = Logger()
 ) -> pd.DataFrame:
@@ -22,12 +22,12 @@ def regression_full(
     site and gene site.
 
     Returns a flattened multiindex dataframe mapping methylation site
-    and gene site to regression results: beta (est), std_err (err), and
-    t_stats (t).
+    and gene site to regression results: beta (est), std_err (err),
+    t_stats (t), and p-value (p).
 
     The parameter include specifies which regression results to include.
     The parameter is a tuple of three booleans for the estimate, the
-    error, and the t-statistic.
+    error, the t-statistic, and the p-value.
 
     Multiple Linear Regression modeled after https://python-bloggers.com
     /2022/03/multiple-linear-regression-using-tensorflow/ adapted for
@@ -54,7 +54,12 @@ def regression_full(
     categories = ['const', 'gene'] + C.columns.to_list()
     columns = []
     for category in categories:
-        names_group = (category + '_est', category + '_err', category + '_t')
+        names_group = (
+            category + '_est',
+            category + '_err',
+            category + '_t',
+            category + '_p',
+        )
         columns.extend(
             names for included, names in zip(include, names_group) if included
         )
@@ -63,6 +68,9 @@ def regression_full(
         columns=columns,
     )
     logger.time('Set up output dataframe')
+
+    df = ncols - 2
+    dist = torch.distributions.studentT.StudentT(df).log_prob
 
     inner_logger = logger.alias()
     inner_logger.start_timer('info', 'Calculating chunks...')
@@ -77,16 +85,20 @@ def regression_full(
             beta = XtX.inverse().matmul(Xty)
             if include[0]:
                 results.append(beta.cpu().numpy())
-            if include[1] or include[2]:
+            if include[1] or include[2] or include[3]:
                 err = y - oneX.matmul(beta)
                 s2 = err.T.matmul(err) / (nrows - ncols - 1)
                 cov_beta = s2 * XtX.inverse()
                 std_err = torch.diagonal(cov_beta).sqrt()
             if include[1]:
                 results.append(std_err.cpu().numpy())
-            if include[2]:
+            if include[2] or include[3]:
                 t_stats = beta / std_err
+            if include[2]:
                 results.append(t_stats.cpu().numpy())
+            if include[3]:
+                p_value = dist(t_stats)
+                results.append(p_value.cpu().numpy())
 
             row = pd.DataFrame(
                 np.array(list(zip(results))).reshape(1, -1),
