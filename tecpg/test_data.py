@@ -80,7 +80,7 @@ def generate_data(
 
     covariate_template = {
         'age': randrange(18, 64),
-        'sex': lambda: bool(round(random())),  # Male == True
+        'sex': lambda: round(random()),
     }
     C = generate_covariates(person_codes, covariate_template)
 
