@@ -69,7 +69,7 @@ def regression_full(
     )
     logger.time('Set up output dataframe')
 
-    df = ncols - 2
+    df = nrows - ncols
     dist = torch.distributions.studentT.StudentT(df).log_prob
 
     inner_logger = logger.alias()
