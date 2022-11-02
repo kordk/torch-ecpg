@@ -127,6 +127,16 @@ Examples:
 
 <br>
 
+## Running on the CPU
+
+By default, the selected algorithm will run with a CUDA enabled device, if available, and otherwise on the CPU. Information about the chosen device and CUDA availability is logged. If you would like to explicitly run on the CPU, use the --cpu-threads or -t option followed by the number of threads of the CPU to use. The default is 0 threads, meaning a CUDA enabled device is used if available.
+
+For example, to use a command with 4 threads, run:
+
+```
+tecpg -t 4 run [COMMAND]
+```
+
 # Usage
 
 ## Python Module
