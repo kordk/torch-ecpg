@@ -139,6 +139,7 @@ The python module provides the most flexibility, power, and automation, at the c
 - Pass the logger to functions using **logger: function(args, **logger)
 - The letters M, G, and C mean methylation beta values, gene expression values, and covariates
 - Correlation, or corr, refers to the pearson correlation coefficient
+- MLR or regression refer to the multiple linear regression algorithm
 
 ### Examples
 
@@ -171,9 +172,7 @@ corr.to_csv(file_path)
 
 The command line interface is the simplest and most convenient way of getting started with tecpg. The CLI is minimal and only includes the main functions.
 
-### Examples
-
-Running a simple correlation on dummy data:
+Setup:
 
 ```bash
 > cd Desktop
@@ -183,6 +182,14 @@ Running a simple correlation on dummy data:
 Samples: 100
 Meth rows: 300
 Gene rows: 300
+```
+
+<details>
+<summary> Correlation Examples </summary>
+
+Running a simple correlation on dummy data:
+
+```bash
 > tecpg run corr # Because no chunk counts were provided, defaults to pearson_full_tensor (better for small inputs)
 > ls output
 out.csv
@@ -219,7 +226,20 @@ Running correlation on Grady Trauma Project data:
 100.csv # Chunks 991 to 1000
 ```
 
-### CLI Structure
+</details>
+
+<details>
+<summary> Multiple Linear Regression Examples </summary>
+
+Running a multiple linear regression in the current directory:
+
+```bash
+> tecpg run mlr
+```
+
+</details>
+
+# CLI Structure
 
 ```
 tecpg : The root cli group
@@ -255,6 +275,10 @@ tecpg run [--help]
 
 ```
 tecpg run corr [--chunks -c INTEGER] [--save-chunks -s INTEGER] [--flatten -f] [--help]
+```
+
+```
+tecpg run mlr [--exclude-est] [--exclude-err] [--exclude-t] [--exclude-p] [--help]
 ```
 
 ### Documentation
@@ -340,6 +364,7 @@ Options:
 
 Commands:
     corr  Calculate the pearson correlation coefficient.
+    mlr   Calculates the multiple linear regression.
 
 ```
 
@@ -361,6 +386,27 @@ Options:
     -s, --save-chunks INTEGER  [default: 0]
     -f, --flatten              [default: False]
     --help                     Show this message and exit.
+
+```
+
+</details>
+
+<details>
+<summary>tecpg run <b>mlr</b></summary>
+
+```
+
+    Calculates the multiple linear regression.
+
+    Calculate the multiple linear regression with methylation and gene
+    expression matrices.
+
+Options:
+    --exclude-est  [default: False]
+    --exclude-err  [default: False]
+    --exclude-t    [default: False]
+    --exclude-p    [default: False]
+    --help         Show this message and exit.
 
 ```
 
