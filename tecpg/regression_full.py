@@ -49,9 +49,9 @@ def regression_full(
     index = pd.MultiIndex(
         levels=[[], []],
         codes=[[], []],
-        names=['meth_site', 'gt_site'],
+        names=['meth_site', 'gene_site'],
     )
-    categories = ['const', 'gene'] + C.columns.to_list()
+    categories = ['const', 'gt'] + C.columns.to_list()
     columns = []
     for category in categories:
         names_group = (
