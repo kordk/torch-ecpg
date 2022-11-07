@@ -227,7 +227,7 @@ def pearson_chunk_save_tensor(
     logger.start_counter('info', '')
     chunks_elapsed = 0
     corr_pd = pandas.DataFrame()
-    with Pool(processes=8) as pool:
+    with Pool() as pool:
         for i in range(0, len(M_t), chunk_rows):
             chunks_elapsed += 1
             if chunks_elapsed > save_chunks:
