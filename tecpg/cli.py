@@ -184,6 +184,7 @@ def corr(
 
 
 @run.command()
+@click.option('-c', '--chunk_size', show_default=True, default=0, type=int)
 @click.option(
     '--exclude-est', is_flag=True, show_default=True, default=False, type=bool
 )
@@ -199,6 +200,7 @@ def corr(
 @click.pass_context
 def mlr(
     ctx: click.Context,
+    chunk_size: int,
     exclude_est: bool,
     exclude_err: bool,
     exclude_t: bool,
@@ -220,8 +222,19 @@ def mlr(
     C = dataframes[data['covar_file']]
     include = (not exclude_est, not exclude_err, not exclude_t, not exclude_p)
 
-    output = regression_full(M, G, C, include, **logger)
-    save_dataframes([output], output_path, [data['output_file']], **logger)
+    if chunk_size:
+        regression_full(
+            M,
+            G,
+            C,
+            include,
+            chunk_size=chunk_size,
+            output_dir=output_path,
+            **logger,
+        )
+    else:
+        output = regression_full(M, G, C, include, **logger)
+        save_dataframes([output], output_path, [data['output_file']], **logger)
 
 
 @cli.group(name='data')
