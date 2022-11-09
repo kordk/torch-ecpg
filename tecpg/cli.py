@@ -209,8 +209,9 @@ def mlr(
     '''
     Calculates the multiple linear regression.
 
-    Calculate the multiple linear regression with methylation and gene
-    expression matrices.
+    Calculate the multiple linear regression with methylation, gene
+    expression, and covariate matrices. Optional chunking to avoid
+    memory limits.
     '''
     logger: Logger = ctx.obj['logger']
 

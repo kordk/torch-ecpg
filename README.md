@@ -114,13 +114,13 @@ Examples:
 <summary>data/C.csv</summary>
 
 <table>
-<tr><th>Sample ID</th><th>Sex</th><th>age</th><th>dna methylation-predicted age</th><th>cd8 t cells</th><th>cd4 t cells</th><th>natural killer cells</th><th>b cells</th><th>monocytes</th><th>granulocytes</th><th>tissue</th><th>race/ethnicity</th></tr>
-<tr><th>5881</th><td>Female</td><td>44</td><td>49.05389863</td><td>0.03922</td><td>0.21532</td><td>0.02287</td><td>0.07433</td><td>0.08114</td><td>0.58146</td><td>whole Blood</td><td>African American</td></tr>
-<tr><th>5896</th><td>Female</td><td>50</td><td>31.98340803</td><td>0.00779</td><td>0.22337</td><td>0.07083</td><td>0.03843</td><td>0.06435</td><td>0.60609</td><td>whole Blood</td><td>African American</td></tr>
-<tr><th>5915</th><td>Male</td><td>52</td><td>42.96901918</td><td>0</td><td>0.13076</td><td>0.10282</td><td>0.06882</td><td>0.07651</td><td>0.6344</td><td>whole Blood</td><td>African American</td></tr>
-<tr><th>5949</th><td>Female</td><td>56</td><td>38.36846554</td><td>0.05287</td><td>0.17147</td><td>0.08456</td><td>0.04391</td><td>0.06156</td><td>0.61011</td><td>whole Blood</td><td>African American</td></tr>
-<tr><th>5965</th><td>Female</td><td>74</td><td>39.49148329</td><td>0.0782</td><td>0.18076</td><td>0.24658</td><td>0.01991</td><td>0.0622</td><td>0.40619</td><td>whole Blood</td><td>African American</td></tr>
-<tr><th>5988</th><td>Male</td><td>47</td><td>50.5973987</td><td>0.08049</td><td>0.23979</td><td>0.0807</td><td>0.08356</td><td>0.06942</td><td>0.469</td><td>whole Blood</td><td>African American</td></tr>
+<tr><th>Sample ID</th><th>Sex</th><th>age</th><th>dna methylation-predicted age</th><th>cd8 t cells</th><th>cd4 t cells</th><th>natural killer cells</th><th>b cells</th><th>monocytes</th><th>granulocytes</th></tr>
+<tr><th>5881</th><td>0</td><td>44</td><td>49.05389863</td><td>0.03922</td><td>0.21532</td><td>0.02287</td><td>0.07433</td><td>0.08114</td><td>0.58146</td></tr>
+<tr><th>5896</th><td>0</td><td>50</td><td>31.98340803</td><td>0.00779</td><td>0.22337</td><td>0.07083</td><td>0.03843</td><td>0.06435</td><td>0.60609</td></tr>
+<tr><th>5915</th><td>1</td><td>52</td><td>42.96901918</td><td>0</td><td>0.13076</td><td>0.10282</td><td>0.06882</td><td>0.07651</td><td>0.6344</td></tr>
+<tr><th>5949</th><td>0</td><td>56</td><td>38.36846554</td><td>0.05287</td><td>0.17147</td><td>0.08456</td><td>0.04391</td><td>0.06156</td><td>0.61011</td></tr>
+<tr><th>5965</th><td>0</td><td>74</td><td>39.49148329</td><td>0.0782</td><td>0.18076</td><td>0.24658</td><td>0.01991</td><td>0.0622</td><td>0.40619</td></tr>
+<tr><th>5988</th><td>1</td><td>47</td><td>50.5973987</td><td>0.08049</td><td>0.23979</td><td>0.0807</td><td>0.08356</td><td>0.06942</td><td>0.469</td></tr>
 </table>
 
 </details>
@@ -136,6 +136,13 @@ For example, to use a command with 4 threads, run:
 ```
 tecpg -t 4 run [COMMAND]
 ```
+
+## Chunking
+
+To avoid memory limits, some algorithms calculate and save results in chunks.
+--chunks: total number of chunks to divide the input
+--save-chunks: the number of compute chunks per save
+--chunk-size: the number of computations to perform per chunk
 
 # Usage
 
@@ -408,10 +415,11 @@ Options:
 
     Calculates the multiple linear regression.
 
-    Calculate the multiple linear regression with methylation and gene
-    expression matrices.
+    Calculate the multiple linear regression with methylation, gene expression,
+    and covariate matrices. Optional chunking to avoid memory limits.
 
 Options:
+    -c, --chunk_size INTEGER  [default: 0]
     --exclude-est  [default: False]
     --exclude-err  [default: False]
     --exclude-t    [default: False]
