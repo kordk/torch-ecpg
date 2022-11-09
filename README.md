@@ -57,6 +57,10 @@ Methylation and gene expression matrices are provided as csv or tsv files. The *
 
 Covariates are stored in a csv or tsv file, with the **columns being the covariates** and the **rows being the sample ids**. The values represent the value of the covariate for each sample.
 
+### Covariate preprocessing
+
+Covariate preprocessing is expected of the user. It is expected that categorical values are preprocessed to be split into n - 1 binary columns. **All data must be numerical.** Binary categorical data should be converted to 0 and 1. Ordinal values should be preprocessed as desired but needs to be numerical.
+
 Examples:
 
 <details>
