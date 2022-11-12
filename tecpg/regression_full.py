@@ -19,6 +19,7 @@ def regression_full(
     include: Tuple[bool, bool, bool, bool] = (True, True, True, True),
     update_period: Optional[float] = 1,
     chunk_size: int = 0,
+    p_thresh: Optional[float] = None,
     output_dir: Optional[str] = None,
     *,
     logger: Logger = Logger()
@@ -40,6 +41,12 @@ def regression_full(
     chunk_size regressions per chunk. The chunks will be saved in
     output_dir.
 
+    The p_thresh argument omits regression results with a gene
+    expression p-value below p_thresh. This will force p-value
+    calculation and filter the results even if p-values are not included
+    in the output. If p_thresh is None (default), regression results
+    will not be filtered.
+
     The parameter include specifies which regression results to include.
     The parameter is a tuple of three booleans for the estimate, the
     error, the t-statistic, and the p-value.
@@ -48,10 +55,13 @@ def regression_full(
     /2022/03/multiple-linear-regression-using-tensorflow/ adapted for
     torch and optimized for pairwise iteration.
 
-    Note: Could be *heavily* optimized due to the pairwise iteration overlap.
+    Note: Could be *heavily* optimized due to the pairwise iteration
+    overlap and redundance of multiple matrix multiplications with
+    similar inputs.
     '''
     device = get_device(**logger)
     regressions = len(M.index) * len(G.index)
+    filter_p = p_thresh is not None
     logger.start_timer('info', 'Running full regression.')
 
     if output_dir is None and chunk_size:
@@ -99,9 +109,7 @@ def regression_full(
     with Pool() if chunk_size else nullcontext() as pool:
         for meth_site, M_row in M.iterrows():
             y = torch.tensor(M_row).to(device)
-
             for gene_site, G_row in G.iterrows():
-                i += 1
                 results = []
                 oneX[:, 1] = torch.tensor(G_row.to_numpy()).to(device)
                 XtX = oneX.mT.matmul(oneX)
@@ -109,34 +117,40 @@ def regression_full(
                 beta = XtX.inverse().matmul(Xty)
                 if include[0]:
                     results.append(beta.cpu().numpy())
-                if include[1] or include[2] or include[3]:
+                if include[1] or include[2] or include[3] or filter_p:
                     err = y - oneX.matmul(beta)
                     s2 = err.T.matmul(err) / (nrows - ncols - 1)
                     cov_beta = s2 * XtX.inverse()
                     std_err = torch.diagonal(cov_beta).sqrt()
                 if include[1]:
                     results.append(std_err.cpu().numpy())
-                if include[2] or include[3]:
+                if include[2] or include[3] or filter_p:
                     t_stats = beta / std_err
                 if include[2]:
                     results.append(t_stats.cpu().numpy())
-                if include[3]:
+                if include[3] or filter_p:
                     p_value = dist(t_stats)
-                    results.append(p_value.cpu().numpy())
+                    p_value_np = p_value.cpu().numpy()
+                    results.append(p_value_np)
 
-                row = pd.DataFrame(
-                    np.array(list(zip(results))).reshape(1, -1),
-                    index=[(meth_site, gene_site)],
-                    columns=columns,
-                )
-                out_df = pd.concat((out_df, row))
+                if not filter_p or p_value_np[1] >= p_thresh:
+                    i += 1
 
-                if chunk_size:
-                    if i % chunk_size == 0:
+                    row = pd.DataFrame(
+                        np.array(list(zip(*results))).reshape(1, -1),
+                        index=[(meth_site, gene_site)],
+                        columns=columns,
+                    )
+                    out_df = pd.concat((out_df, row))
+
+                    if chunk_size and i % chunk_size == 0:
                         file_name = str(logger.current_count + 1) + '.csv'
                         file_path = os.path.join(output_dir, file_name)
                         logger.count(
-                            'Saving part {i}/{0}: ', regressions // chunk_size
+                            'Saving part {i}'
+                            + ('' if filter_p else '/{0}')
+                            + ': ',
+                            regressions // chunk_size,
                         )
                         pool.apply_async(
                             save_dataframe_part,
@@ -149,6 +163,7 @@ def regression_full(
                             index=index,
                             columns=columns,
                         )
+
                 if update_period is not None:
                     if time() - last_time > update_period:
                         last_time = time()
@@ -164,15 +179,21 @@ def regression_full(
                     else:
                         inner_logger.time()
 
-        if len(out_df):
+        if chunk_size and len(out_df):
             file_name = str(logger.current_count + 1) + '.csv'
             file_path = os.path.join(output_dir, file_name)
-            logger.count('Saving part {i}/{0}: ', regressions // chunk_size)
+            logger.count(
+                'Saving part {i}' + ('' if filter_p else '/{0}') + ': ',
+                regressions // chunk_size,
+            )
             pool.apply_async(
                 save_dataframe_part,
                 (out_df, file_path),
                 dict(logger),
             )
+
+        pool.close()
+        pool.join()
 
     logger.time('Calculated regression_full in {t} seconds')
     if chunk_size == 0:

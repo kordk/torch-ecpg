@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 import click
 import torch
 from .helper import initialize_dir
@@ -184,27 +184,29 @@ def corr(
 
 
 @run.command()
-@click.option('-c', '--chunk_size', show_default=True, default=0, type=int)
+@click.option('-c', '--chunk-size', show_default=True, default=0, type=int)
+@click.option('-p', '--p-thresh', show_default=True, type=float)
 @click.option(
-    '--exclude-est', is_flag=True, show_default=True, default=False, type=bool
+    '--no-est', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.option(
-    '--exclude-err', is_flag=True, show_default=True, default=False, type=bool
+    '--no-err', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.option(
-    '--exclude-t', is_flag=True, show_default=True, default=False, type=bool
+    '--no-t', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.option(
-    '--exclude-p', is_flag=True, show_default=True, default=False, type=bool
+    '--no-p', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.pass_context
 def mlr(
     ctx: click.Context,
     chunk_size: int,
-    exclude_est: bool,
-    exclude_err: bool,
-    exclude_t: bool,
-    exclude_p: bool,
+    p_thresh: Optional[float],
+    no_est: bool,
+    no_err: bool,
+    no_t: bool,
+    no_p: bool,
 ) -> None:
     '''
     Calculates the multiple linear regression.
@@ -221,20 +223,23 @@ def mlr(
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
-    include = (not exclude_est, not exclude_err, not exclude_t, not exclude_p)
+    include = (not no_est, not no_err, not no_t, not no_p)
 
     if chunk_size:
         regression_full(
             M,
             G,
             C,
-            include,
+            include=include,
             chunk_size=chunk_size,
+            p_thresh=p_thresh,
             output_dir=output_path,
             **logger,
         )
     else:
-        output = regression_full(M, G, C, include, **logger)
+        output = regression_full(
+            M, G, C, include=include, p_thresh=p_thresh, **logger
+        )
         save_dataframes([output], output_path, [data['output_file']], **logger)
 
 

@@ -148,6 +148,10 @@ To avoid memory limits, some algorithms calculate and save results in chunks.
 --save-chunks: the number of compute chunks per save
 --chunk-size: the number of computations to perform per chunk
 
+## Output filtration
+
+P-value filtering is implemented for the multiple linear regression. Use the --p-thresh option to specify a minimum gene expression p-value to be included in the output. This will force p-value calculation, even if p-values are not included in the output.
+
 # Usage
 
 ## Python Module
@@ -299,7 +303,7 @@ tecpg run corr [--chunks -c INTEGER] [--save-chunks -s INTEGER] [--flatten -f] [
 ```
 
 ```
-tecpg run mlr [--exclude-est] [--exclude-err] [--exclude-t] [--exclude-p] [--help]
+tecpg run mlr [--chunks -c INTEGER] [--p-thresh -p FLOAT] [--no-est] [--no-err] [--no-t] [--no-p] [--help]
 ```
 
 ### Documentation
@@ -424,10 +428,11 @@ Options:
 
 Options:
     -c, --chunk_size INTEGER  [default: 0]
-    --exclude-est  [default: False]
-    --exclude-err  [default: False]
-    --exclude-t    [default: False]
-    --exclude-p    [default: False]
+    -p, --p-thresh FLOAT
+    --no-est                  [default: False]
+    --no-err                  [default: False]
+    --no-t                    [default: False]
+    --no-p                    [default: False]
     --help         Show this message and exit.
 
 ```
