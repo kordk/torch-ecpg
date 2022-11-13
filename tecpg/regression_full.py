@@ -20,6 +20,7 @@ def regression_full(
     update_period: Optional[float] = 1,
     chunk_size: int = 0,
     p_thresh: Optional[float] = None,
+    expression_only: bool = True,
     output_dir: Optional[str] = None,
     *,
     logger: Logger = Logger()
@@ -47,6 +48,12 @@ def regression_full(
     in the output. If p_thresh is None (default), regression results
     will not be filtered.
 
+    If expression_only is set to False, the intercept, gene expression,
+    and covariate regression results (everything) will be outputted.
+    Otherwise, if set to True which is the default, only the gene
+    expression results will be saved. Either way, the covariates and
+    constant intercept will be included in the regression calculation.
+
     The parameter include specifies which regression results to include.
     The parameter is a tuple of three booleans for the estimate, the
     error, the t-statistic, and the p-value.
@@ -62,7 +69,13 @@ def regression_full(
     device = get_device(**logger)
     regressions = len(M.index) * len(G.index)
     filter_p = p_thresh is not None
-    logger.start_timer('info', 'Running full regression.')
+
+    logger.start_timer(
+        'info',
+        'Running full regression in '
+        + ('expression only' if expression_only else 'full output')
+        + ' mode.',
+    )
 
     if output_dir is None and chunk_size:
         message = 'Output directory of None is not valid for chunk_size > 0'
@@ -81,7 +94,9 @@ def regression_full(
         codes=[[], []],
         names=['meth_site', 'gene_site'],
     )
-    categories = ['const', 'gt'] + C.columns.to_list()
+    categories = (
+        ['gt'] if expression_only else (['const', 'gt'] + C.columns.to_list())
+    )
     columns = []
     for category in categories:
         names_group = (
@@ -122,6 +137,9 @@ def regression_full(
                     s2 = err.T.matmul(err) / (nrows - ncols - 1)
                     cov_beta = s2 * XtX.inverse()
                     std_err = torch.diagonal(cov_beta).sqrt()
+                    if expression_only:
+                        beta = beta[1:2]
+                        std_err = std_err[1:2]
                 if include[1]:
                     results.append(std_err.cpu().numpy())
                 if include[2] or include[3] or filter_p:
@@ -192,8 +210,9 @@ def regression_full(
                 dict(logger),
             )
 
-        pool.close()
-        pool.join()
+        if chunk_size:
+            pool.close()
+            pool.join()
 
     logger.time('Calculated regression_full in {t} seconds')
     if chunk_size == 0:

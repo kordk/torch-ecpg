@@ -168,7 +168,6 @@ def corr(
 
     output_path = os.path.join(data['root_path'], data['output_dir'])
     output = None
-    print(chunks, save_chunks)
     if chunks == 0:
         output = pearson_full_tensor(M, G, flatten=flatten, **logger)
     elif save_chunks == 0:
@@ -187,6 +186,14 @@ def corr(
 @click.option('-c', '--chunk-size', show_default=True, default=0, type=int)
 @click.option('-p', '--p-thresh', show_default=True, type=float)
 @click.option(
+    '--full-output',
+    '-f',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+)
+@click.option(
     '--no-est', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.option(
@@ -203,6 +210,7 @@ def mlr(
     ctx: click.Context,
     chunk_size: int,
     p_thresh: Optional[float],
+    full_output: bool,
     no_est: bool,
     no_err: bool,
     no_t: bool,
@@ -224,6 +232,7 @@ def mlr(
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
     include = (not no_est, not no_err, not no_t, not no_p)
+    expression_only = not full_output
 
     if chunk_size:
         regression_full(
@@ -233,12 +242,19 @@ def mlr(
             include=include,
             chunk_size=chunk_size,
             p_thresh=p_thresh,
+            expression_only=expression_only,
             output_dir=output_path,
             **logger,
         )
     else:
         output = regression_full(
-            M, G, C, include=include, p_thresh=p_thresh, **logger
+            M,
+            G,
+            C,
+            include=include,
+            p_thresh=p_thresh,
+            expression_only=expression_only,
+            **logger,
         )
         save_dataframes([output], output_path, [data['output_file']], **logger)
 

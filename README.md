@@ -303,7 +303,7 @@ tecpg run corr [--chunks -c INTEGER] [--save-chunks -s INTEGER] [--flatten -f] [
 ```
 
 ```
-tecpg run mlr [--chunks -c INTEGER] [--p-thresh -p FLOAT] [--no-est] [--no-err] [--no-t] [--no-p] [--help]
+tecpg run mlr [--chunks -c INTEGER] [--p-thresh -p FLOAT] [--full-output -f] [--no-est] [--no-err] [--no-t] [--no-p] [--help]
 ```
 
 ### Documentation
@@ -429,6 +429,7 @@ Options:
 Options:
     -c, --chunk_size INTEGER  [default: 0]
     -p, --p-thresh FLOAT
+    --full-output             [default: False]
     --no-est                  [default: False]
     --no-err                  [default: False]
     --no-t                    [default: False]
