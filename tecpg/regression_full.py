@@ -2,7 +2,7 @@ from contextlib import nullcontext
 from multiprocessing import Pool
 import os
 from time import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Literal
 import numpy as np
 import pandas as pd
 from tecpg.import_data import save_dataframe_part
@@ -17,13 +17,17 @@ def regression_full(
     G: pd.DataFrame,
     C: pd.DataFrame,
     include: Tuple[bool, bool, bool, bool] = (True, True, True, True),
-    update_period: Optional[float] = 1,
     chunk_size: int = 0,
     p_thresh: Optional[float] = None,
+    region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
+    window: Optional[int] = None,
+    M_annot: Optional[pd.DataFrame] = None,
+    G_annot: Optional[pd.DataFrame] = None,
     expression_only: bool = True,
+    update_period: Optional[float] = 1,
     output_dir: Optional[str] = None,
     *,
-    logger: Logger = Logger()
+    logger: Logger = Logger(),
 ) -> pd.DataFrame:
     '''
     Calculates the multiple linear regression of the input dataframes M,
@@ -35,9 +39,6 @@ def regression_full(
     and gene site to regression results: beta (est), std_err (err),
     t_stats (t), and p-value (p).
 
-    Logs an update on the completion of the function every update_period
-    seconds. If update_period is None, these logs will be omitted.
-
     If chunk_size is greater than 0, the output will be chunked with
     chunk_size regressions per chunk. The chunks will be saved in
     output_dir.
@@ -48,11 +49,25 @@ def regression_full(
     in the output. If p_thresh is None (default), regression results
     will not be filtered.
 
+    The region can be set to either all, cis, distal, or trans. If set
+    to all, the regression will run an all-by-all comparison, comparing
+    every methylation site to gene expression site. Cis runs a
+    comparison between each methylation site with all gene expression
+    sites within the specified window, measured in bases, on the same
+    chromosome. Distal similarly compares sites on the same chromosome
+    but only if they are outside of the window. Trans compares all
+    methylation sites to gene expression sites only on different
+    chromosomes. M_annot and G_annot optional dataframes are used to
+    locate the methylation and gene expression sites.
+
     If expression_only is set to False, the intercept, gene expression,
     and covariate regression results (everything) will be outputted.
     Otherwise, if set to True which is the default, only the gene
     expression results will be saved. Either way, the covariates and
     constant intercept will be included in the regression calculation.
+
+    Logs an update on the completion of the function every update_period
+    seconds. If update_period is None, these logs will be omitted.
 
     The parameter include specifies which regression results to include.
     The parameter is a tuple of three booleans for the estimate, the
@@ -66,15 +81,32 @@ def regression_full(
     overlap and redundance of multiple matrix multiplications with
     similar inputs.
     '''
+    if region not in ['all', 'cis', 'distal', 'trans']:
+        error = f'Region {region} not valid. Use all, cis, distal, or trans.'
+        logger.error(error)
+        raise ValueError(error)
+    if region != 'all' and (M_annot is None or G_annot is None):
+        error = (
+            f'Missing M or G annotation files using region filtration {region}'
+        )
+        logger.error(error)
+        raise ValueError(error)
+    if region in ['cis', 'distal'] and window is None:
+        error = f'Window is None for region filtration {region}'
+        logger.error(error)
+        raise ValueError(error)
+
     device = get_device(**logger)
     regressions = len(M.index) * len(G.index)
     filter_p = p_thresh is not None
+    M_annot_sites = set(M_annot.index.values)
+    G_annot_sites = set(G_annot.index.values)
 
     logger.start_timer(
         'info',
-        'Running full regression in '
-        + ('expression only' if expression_only else 'full output')
-        + ' mode.',
+        'Running full regression in {0} mode with "{1}" region filtration.',
+        ('expression only' if expression_only else 'full output'),
+        region,
     )
 
     if output_dir is None and chunk_size:
@@ -122,9 +154,27 @@ def regression_full(
     i = 0
     last_time = time()
     with Pool() if chunk_size else nullcontext() as pool:
-        for meth_site, M_row in M.iterrows():
+        for (meth_site, M_row) in M.iterrows():
             y = torch.tensor(M_row).to(device)
-            for gene_site, G_row in G.iterrows():
+            for (gene_site, G_row) in G.iterrows():
+                if region != 'all' and (
+                    meth_site not in M_annot_sites
+                    or gene_site not in G_annot_sites
+                ):
+                    continue
+                M_chrom = M_annot.loc[meth_site, 'chrom']
+                G_chrom = G_annot.loc[gene_site, 'chrom']
+                if M_chrom == G_chrom:
+                    if region == 'trans':
+                        continue
+                    elif region in ['cis', 'distal']:
+                        M_pos = M_annot.loc[meth_site, 'chromStart']
+                        G_pos = G_annot.loc[gene_site, 'chromStart']
+                        chrom_dist = abs(M_pos - G_pos)
+                        if not ((chrom_dist > window) ^ (region == 'cis')):
+                            continue
+                        logger.info('Calculated')
+
                 results = []
                 oneX[:, 1] = torch.tensor(G_row.to_numpy()).to(device)
                 XtX = oneX.mT.matmul(oneX)

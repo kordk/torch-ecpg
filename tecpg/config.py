@@ -5,13 +5,19 @@ from .logger import Logger
 data = {
     'root_path': '.',
     'input_dir': 'data',
+    'annot_dir': 'annot',
     'output_dir': 'output',
     'meth_file': 'M.csv',
     'gene_file': 'G.csv',
     'covar_file': 'C.csv',
+    'meth_annot': 'M.bed6',
+    'gene_annot': 'G.bed6',
     'output': 'out.csv',
     'log_dir': 'logs',
 }
+
+CIS_WINDOW = 1_000_000  # 1 Mb
+DISTAL_WINDOW = 50_000  # 50 Kb
 
 
 def get_device(*, logger: Logger = Logger()) -> torch.device:

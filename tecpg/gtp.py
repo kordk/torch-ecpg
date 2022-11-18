@@ -146,9 +146,10 @@ def process_gtp(
 
     C_drop = set(C.index) - set(M.columns)
     C.drop(C_drop, axis=0, inplace=True)
-    C.drop('tissue', axis=1, inplace=True)
-    C.drop('race/ethnicity', axis=1, inplace=True)
+    C.drop('tissue', axis=1, inplace=True, errors='ignore')
+    C.drop('race/ethnicity', axis=1, inplace=True, errors='ignore')
 
+    print(C)
     C['Sex'].replace('Male', 0, inplace=True)
     C['Sex'].replace('Female', 1, inplace=True)
 
@@ -181,7 +182,7 @@ def get_covariates(
 
 
 def generate_data(
-    gtp_path: str, *, logger: Logger = Logger()
+    gtp_path: str, simplify_covar: bool = False, *, logger: Logger = Logger()
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     '''
     Generates methylation beta values, gene expression values, and
@@ -194,7 +195,11 @@ def generate_data(
     logger.info('Concatenating gene expression parts')
     G = pandas.concat([G_1, G_2], axis=1)
     covar_file = GTP_FILE_URLS[0][0]
-    data, chars = geo_dict(os.path.join(gtp_path, covar_file), **logger)
+    data, chars = geo_dict(
+        os.path.join(gtp_path, covar_file),
+        simplify_covar=simplify_covar,
+        **logger,
+    )
     geo_descs, _, geo_titles = geo_samples(data)
     C = get_covariates(chars, geo_titles, **logger)
     return process_gtp(M, G, C, geo_descs, geo_titles, **logger)
@@ -204,6 +209,7 @@ def save_gtp_data(
     gtp_path: str,
     data_path: str,
     file_names: Optional[List[str]] = None,
+    simplify_covar: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> None:
@@ -211,7 +217,7 @@ def save_gtp_data(
     Downloads data from www.ncbi.nlm.nih.gov. Saves GTP data in
     dataframes in the working data directory.
     '''
-    data = generate_data(gtp_path, **logger)
+    data = generate_data(gtp_path, simplify_covar, **logger)
     logger.info('Saving into {0}', data_path)
     if file_names is None:
         save_dataframes(data, data_path, **logger)

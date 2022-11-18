@@ -13,6 +13,7 @@ def geo_dict(
     file_path: str,
     char_id: str = 'Sample_characteristics_ch1',
     decompress: Optional[bool] = None,
+    simplify_covar: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
@@ -49,6 +50,8 @@ def geo_dict(
                         )
                         continue
                     char_key, char_val = part.split(':')
+                    if simplify_covar and char_key not in ['age', 'Sex']:
+                        continue
                     if char_key not in chars:
                         chars[char_key] = []
                     chars[char_key].append(char_val.strip())

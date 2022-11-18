@@ -1,14 +1,29 @@
-from random import random
-from typing import Any, Callable, Dict, List, Tuple
+import math
+import random
+from typing import Any, Callable, Dict, List, Tuple, Optional
 import pandas
 
 
-def randrange(start: float, end: float) -> Callable[[], Any]:
+def randrange(
+    start: float,
+    end: float,
+    integer: bool = False,
+    seeded: bool = False,
+) -> Callable[[int | None], int | float]:
     '''
     Returns a callable that generates a random float between start
-    and end.
+    and end or an int if integer is True (default False).
     '''
-    return lambda: random() * (end - start) + start
+
+    def func(seed: Optional[int] = None) -> int | float:
+        if seeded and seed is not None:
+            random.seed(seed)
+        if integer:
+            return math.floor(random.random() * (end + 1 - start) + start)
+        else:
+            return random.random() * (end - start) + start
+
+    return func
 
 
 def generate_codes(
@@ -41,28 +56,37 @@ def generate_dataframe(
     )
 
 
-def generate_covariates(
-    row_names: List[str], covariate_template: Dict[str, Callable[[], Any]]
+def generate_from_template(
+    row_names: List[str],
+    template: Dict[str, Callable[[], Any]],
+    annotation: bool = False,
 ) -> pandas.DataFrame:
     '''
-    Generates the covariate dataframe given the row_names, a list of
-    person ids, and covariate_template. The covariate template is a
-    dictionary that maps a characteristic to any value. The function
-    returns the covariate dataframe.
+    Generates the templated dataframe given the row_names, a list of
+    person ids, and covariate_template. The template is a dictionary
+    that maps a characteristic to any value. The function returns the
+    templated dataframe.
     '''
     n = len(row_names)
-    data = {
-        column: [value_gen() for _ in range(n)]
-        for column, value_gen in covariate_template.items()
-    }
-    return pandas.DataFrame(
-        data,
-        row_names,
-    )
+    if annotation:
+        data = {
+            column: [value_gen(i) for i in range(n)]
+            for column, value_gen in template.items()
+        }
+        return pandas.DataFrame(data)
+    else:
+        data = {
+            column: [value_gen() for _ in range(n)]
+            for column, value_gen in template.items()
+        }
+        return pandas.DataFrame(data, row_names)
 
 
 def generate_data(
-    sample_size: int, m_rows: int, g_rows: int
+    sample_size: int,
+    m_rows: int,
+    g_rows: int,
+    annotation: bool = False,
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     '''
     Generates two pandas dataframes for methylation and gene expression.
@@ -80,8 +104,29 @@ def generate_data(
 
     covariate_template = {
         'age': randrange(18, 64),
-        'sex': lambda: round(random()),
+        'sex': randrange(0, 1, True),
     }
-    C = generate_covariates(person_codes, covariate_template)
+    C = generate_from_template(person_codes, covariate_template)
 
-    return M, G, C
+    if not annotation:
+        return M, G, C
+
+    def annotation_template(codes: List[str]) -> Dict[str, Any]:
+        return {
+            'chrom': randrange(1, 23, True),
+            'chromStart': randrange(1, 150_000_000, True, True),
+            'chromEnd': lambda x: randrange(1, 150_000_000, True, True)(x)
+            + randrange(0, 80, True)(),
+            'name': lambda x: codes[x],
+            'score': lambda _: 0,
+            'strand': lambda _: '+' if round(random.random()) else '-',
+        }
+
+    M_annot = generate_from_template(
+        m_row_codes, annotation_template(m_row_codes), True
+    )
+    G_annot = generate_from_template(
+        g_row_codes, annotation_template(g_row_codes), True
+    )
+
+    return M, G, C, M_annot, G_annot

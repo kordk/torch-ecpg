@@ -1,9 +1,10 @@
 import os
-from typing import List, Optional
+from typing import List, Optional, Any
 import click
 import torch
+import pandas as pd
 from .helper import initialize_dir
-from .config import data, using_gpu
+from .config import data, using_gpu, CIS_WINDOW, DISTAL_WINDOW
 from .logger import Logger
 from .gtp import save_gtp_data
 from .import_data import read_dataframes, save_dataframes
@@ -32,6 +33,13 @@ from .regression_full import regression_full
     type=click.Path(file_okay=False),
 )
 @click.option(
+    '-a',
+    '--annot-dir',
+    show_default=True,
+    default=data['annot_dir'],
+    type=click.Path(file_okay=False),
+)
+@click.option(
     '-o',
     '--output-dir',
     show_default=True,
@@ -57,6 +65,20 @@ from .regression_full import regression_full
     '--covar-file',
     show_default=True,
     default=data['covar_file'],
+    type=click.Path(dir_okay=False),
+)
+@click.option(
+    '-M',
+    '--meth-annot',
+    show_default=True,
+    default=data['meth_annot'],
+    type=click.Path(dir_okay=False),
+)
+@click.option(
+    '-G',
+    '--gene-annot',
+    show_default=True,
+    default=data['gene_annot'],
     type=click.Path(dir_okay=False),
 )
 @click.option(
@@ -100,10 +122,13 @@ def cli(
     ctx: click.Context,
     root_path: str,
     input_dir: str,
+    annot_dir: str,
     output_dir: str,
     meth_file: str,
     gene_file: str,
     covar_file: str,
+    meth_annot: str,
+    gene_annot: str,
     output_file: str,
     cpu_threads: int,
     verbosity: int,
@@ -116,10 +141,13 @@ def cli(
 
     data['root_path'] = click.format_filename(root_path)
     data['input_dir'] = click.format_filename(input_dir)
+    data['annot_dir'] = click.format_filename(annot_dir)
     data['output_dir'] = click.format_filename(output_dir)
     data['meth_file'] = click.format_filename(meth_file)
     data['gene_file'] = click.format_filename(gene_file)
     data['covar_file'] = click.format_filename(covar_file)
+    data['meth_annot'] = click.format_filename(meth_annot)
+    data['gene_annot'] = click.format_filename(gene_annot)
     data['output_file'] = click.format_filename(output_file)
     data['log_dir'] = click.format_filename(log_dir)
 
@@ -186,6 +214,13 @@ def corr(
 @click.option('-c', '--chunk-size', show_default=True, default=0, type=int)
 @click.option('-p', '--p-thresh', show_default=True, type=float)
 @click.option(
+    '--all', 'region', show_default=True, flag_value='all', default=True
+)
+@click.option('--cis', 'region', show_default=True, flag_value='cis')
+@click.option('--distal', 'region', show_default=True, flag_value='distal')
+@click.option('--trans', 'region', show_default=True, flag_value='trans')
+@click.option('-w', '--window', show_default=True, type=int)
+@click.option(
     '--full-output',
     '-f',
     is_flag=True,
@@ -210,6 +245,8 @@ def mlr(
     ctx: click.Context,
     chunk_size: int,
     p_thresh: Optional[float],
+    region: str,
+    window: Optional[int],
     full_output: bool,
     no_est: bool,
     no_err: bool,
@@ -226,13 +263,35 @@ def mlr(
     logger: Logger = ctx.obj['logger']
 
     data_path = os.path.join(data['root_path'], data['input_dir'])
+    annot_path = os.path.join(data['root_path'], data['annot_dir'])
     output_path = os.path.join(data['root_path'], data['output_dir'])
+
     dataframes = read_dataframes(data_path, **logger)
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
     include = (not no_est, not no_err, not no_t, not no_p)
+
+    M_annot = pd.read_csv(
+        os.path.join(annot_path, data['meth_annot']), sep='\t'
+    ).set_index('name')
+    G_annot = pd.read_csv(
+        os.path.join(annot_path, data['gene_annot']), sep='\t'
+    ).set_index('name')
+
     expression_only = not full_output
+    if region in ['cis', 'distal'] and window is None:
+        logger.info('No region window provided. Resorting to default.')
+        if region == 'cis':
+            logger.info(
+                'Using default window for cis of {0} bases', CIS_WINDOW
+            )
+            window = CIS_WINDOW
+        if region == 'distal':
+            logger.info(
+                'Using default window for distal of {0} bases', DISTAL_WINDOW
+            )
+            window = DISTAL_WINDOW
 
     if chunk_size:
         regression_full(
@@ -242,6 +301,10 @@ def mlr(
             include=include,
             chunk_size=chunk_size,
             p_thresh=p_thresh,
+            region=region,
+            window=window,
+            M_annot=M_annot,
+            G_annot=G_annot,
             expression_only=expression_only,
             output_dir=output_path,
             **logger,
@@ -253,6 +316,10 @@ def mlr(
             C,
             include=include,
             p_thresh=p_thresh,
+            region=region,
+            window=window,
+            M_annot=M_annot,
+            G_annot=G_annot,
             expression_only=expression_only,
             **logger,
         )
@@ -268,12 +335,21 @@ def _data() -> None:
 @click.option('-s', '--samples', type=int, prompt=True)
 @click.option('-m', '--meth-rows', type=int, prompt=True)
 @click.option('-g', '--gene-rows', type=int, prompt=True)
+@click.option(
+    '-n',
+    '--no-annotation',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+)
 @click.pass_context
 def dummy(
     ctx: click.Context,
     samples: int,
     meth_rows: int,
     gene_rows: int,
+    no_annotation: bool,
 ) -> None:
     '''
     Generates dummy data.
@@ -282,11 +358,25 @@ def dummy(
     file names M.csv, G.csv, and C.csv.
     '''
     logger: Logger = ctx.obj['logger']
+    annotation = not no_annotation
 
-    dataframes = generate_data(samples, meth_rows, gene_rows)
+    dataframes = generate_data(
+        samples, meth_rows, gene_rows, annotation=annotation
+    )
     file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
     data_path = os.path.join(data['root_path'], data['input_dir'])
-    save_dataframes(dataframes, data_path, file_names, **logger)
+    save_dataframes(dataframes[:3], data_path, file_names, **logger)
+    if annotation:
+        file_names = [data['meth_annot'], data['gene_annot']]
+        data_path = os.path.join(data['root_path'], data['annot_dir'])
+        save_dataframes(
+            dataframes[3:],
+            data_path,
+            file_names,
+            sep='\t',
+            index=False,
+            **logger,
+        )
 
     logger.save()
 
@@ -312,8 +402,15 @@ def abort_if_false(ctx: click.Context, _, value):
     expose_value=False,
     prompt='Are you sure you want to overwrite the data directory?',
 )
+@click.option(
+    '--full-covar',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+)
 @click.pass_context
-def gtp(ctx: click.Context, gtp_dir) -> None:
+def gtp(ctx: click.Context, gtp_dir: Any, full_covar: bool) -> None:
     '''
     Downloads and extracts GTP data.
 
@@ -327,7 +424,14 @@ def gtp(ctx: click.Context, gtp_dir) -> None:
     gtp_path = os.path.join(data['root_path'], gtp_dir)
     data_path = os.path.join(data['root_path'], data['input_dir'])
     file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
-    save_gtp_data(gtp_path, data_path, file_names, **logger)
+    simplify_covar = not full_covar
+    save_gtp_data(
+        gtp_path,
+        data_path,
+        file_names,
+        simplify_covar=simplify_covar,
+        **logger,
+    )
 
     logger.save()
 
