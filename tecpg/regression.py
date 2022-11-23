@@ -147,6 +147,7 @@ def regression_full(
     logger.time('Set up output dataframe')
 
     df = nrows - ncols - 1
+    logger.info('Running with {0} degrees of freedom.', df)
     dist = torch.distributions.studentT.StudentT(df).log_prob
 
     inner_logger = logger.alias()

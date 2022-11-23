@@ -14,7 +14,7 @@ from .pearson_full import (
     pearson_chunk_tensor,
     pearson_chunk_save_tensor,
 )
-from .regression_full import regression_full
+from .regression import regression_full
 
 
 @click.group()
