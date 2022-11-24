@@ -7,14 +7,14 @@ Python eCpG mapper with CLI using pytorch
 Pip install from github using `git+https://`.
 
 ```bash
-pip install git+https://github.com/liamgd/tecpg.git
+pip install git+https://github.com/kordk/torch-ecpg.git
 ```
 
 If you want to be able to edit the code for debugging and development, install in editable mode and do not remove the directory.
 
 ```bash
 cd [path/to/code/directory]
-git clone https://github.com/liamgd/tecpg.git
+git clone https://github.com/kordk/torch-ecpg.git
 cd tecpg
 pip install --editable .
 ```
