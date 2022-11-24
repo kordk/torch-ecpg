@@ -148,7 +148,7 @@ def regression_full(
 
     df = nrows - ncols - 1
     logger.info('Running with {0} degrees of freedom.', df)
-    dist = torch.distributions.studentT.StudentT(df).log_prob
+    log_prob = torch.distributions.studentT.StudentT(df).log_prob
 
     inner_logger = logger.alias()
     inner_logger.start_timer('info', 'Calculating chunks...')
@@ -198,7 +198,7 @@ def regression_full(
                 if include[2]:
                     results.append(t_stats.cpu().numpy())
                 if include[3] or filter_p:
-                    p_value = dist(t_stats)
+                    p_value = torch.exp(log_prob(t_stats))
                     p_value_np = p_value.cpu().numpy()
                     results.append(p_value_np)
 
