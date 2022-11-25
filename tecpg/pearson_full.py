@@ -1,12 +1,14 @@
 import math
-from multiprocessing import Pool
 import os
+from multiprocessing import Pool
 from typing import Optional
+
 import pandas
 import torch
+
 from .config import get_device
-from .logger import Logger
 from .import_data import save_dataframe_part
+from .logger import Logger
 
 
 def pearson_full_tensor(
@@ -17,7 +19,7 @@ def pearson_full_tensor(
     *,
     logger: Logger = Logger(),
 ) -> pandas.DataFrame:
-    '''
+    """
     Calculates the pearson correlation coefficient matrix for two full
     dataframes. Returns a dataframe of the output with M.index indices
     and G.index columns. If n, the sample size, is not provided, it will
@@ -61,7 +63,7 @@ def pearson_full_tensor(
         index=M.index,
         columns=G.index,
     )
-    '''
+    """
     device = get_device(**logger)
     logger.start_timer(
         'info',
@@ -103,7 +105,7 @@ def pearson_chunk_tensor(
     *,
     logger: Logger = Logger(),
 ) -> pandas.DataFrame:
-    '''
+    """
     See pearson_full_tensor.
 
     Utilizes chunks of values to avoid running into GPU memory limits.
@@ -115,7 +117,7 @@ def pearson_chunk_tensor(
     Verbose prints messages to gauge time.
 
     Returns pandas.DataFrame.
-    '''
+    """
     if n is None:
         n = len(M.columns)
     chunk_rows = len(M) // chunks
@@ -181,7 +183,7 @@ def pearson_chunk_save_tensor(
     *,
     logger: Logger = Logger(),
 ) -> None:
-    '''
+    """
     See pearson_full_tensor.
 
     The pearson_chunk_save_tensor function is the fastest pearson
@@ -200,7 +202,7 @@ def pearson_chunk_save_tensor(
     Verbose prints messages to gauge time.
 
     Returns pandas.DataFrame.
-    '''
+    """
     if n is None:
         n = len(M.columns)
     chunk_rows = len(M) // chunks

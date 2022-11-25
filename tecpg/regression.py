@@ -1,15 +1,17 @@
+import os
 from contextlib import nullcontext
 from multiprocessing import Pool
-import os
 from time import time
-from typing import Optional, Tuple, Literal
+from typing import Literal, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from tecpg.import_data import save_dataframe_part
 import torch
-from .test_data import generate_data
+
 from .config import get_device
+from .import_data import save_dataframe_part
 from .logger import Logger
+from .test_data import generate_data
 
 
 def regression_full(
@@ -29,7 +31,7 @@ def regression_full(
     *,
     logger: Logger = Logger(),
 ) -> pd.DataFrame:
-    '''
+    """
     Calculates the multiple linear regression of the input dataframes M,
     G, and C, being methylation beta values, gene expression values, and
     covariates using torch. This is done for every pair of methylation
@@ -80,7 +82,7 @@ def regression_full(
     Note: Could be *heavily* optimized due to the pairwise iteration
     overlap and redundance of multiple matrix multiplications with
     similar inputs.
-    '''
+    """
     if region not in ['all', 'cis', 'distal', 'trans']:
         error = f'Region {region} not valid. Use all, cis, distal, or trans.'
         logger.error(error)

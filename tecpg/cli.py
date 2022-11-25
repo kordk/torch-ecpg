@@ -1,20 +1,19 @@
 import os
-from typing import List, Optional, Any
+from typing import Any, List, Optional
+
 import click
-import torch
 import pandas as pd
-from .helper import initialize_dir
-from .config import data, using_gpu, CIS_WINDOW, DISTAL_WINDOW
-from .logger import Logger
+import torch
+
+from .config import CIS_WINDOW, DISTAL_WINDOW, data, using_gpu
 from .gtp import save_gtp_data
+from .helper import initialize_dir
 from .import_data import read_dataframes, save_dataframes
-from .test_data import generate_data
-from .pearson_full import (
-    pearson_full_tensor,
-    pearson_chunk_tensor,
-    pearson_chunk_save_tensor,
-)
+from .logger import Logger
+from .pearson_full import (pearson_chunk_save_tensor, pearson_chunk_tensor,
+                           pearson_full_tensor)
 from .regression import regression_full
+from .test_data import generate_data
 
 
 @click.group()
@@ -119,24 +118,26 @@ from .regression import regression_full
 )
 @click.pass_context
 def cli(
-    ctx: click.Context,
-    root_path: str,
-    input_dir: str,
-    annot_dir: str,
-    output_dir: str,
-    meth_file: str,
-    gene_file: str,
-    covar_file: str,
-    meth_annot: str,
-    gene_annot: str,
-    output_file: str,
-    cpu_threads: int,
-    verbosity: int,
-    debug: bool,
-    log_dir: str,
-    no_log_file: bool,
+    ctx: Optional[click.Context] = None,
+    root_path: Optional[str] = None,
+    input_dir: Optional[str] = None,
+    annot_dir: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    meth_file: Optional[str] = None,
+    gene_file: Optional[str] = None,
+    covar_file: Optional[str] = None,
+    meth_annot: Optional[str] = None,
+    gene_annot: Optional[str] = None,
+    output_file: Optional[str] = None,
+    cpu_threads: Optional[int] = None,
+    verbosity: Optional[int] = None,
+    debug: Optional[bool] = None,
+    log_dir: Optional[str] = None,
+    no_log_file: Optional[bool] = None,
+    obj: Optional[dict] = None,
 ) -> None:
-    '''The root cli group'''
+    """The root cli group"""
+    assert obj is None
     ctx.ensure_object(dict)
 
     data['root_path'] = click.format_filename(root_path)
@@ -162,7 +163,7 @@ def cli(
 
 @cli.group()
 def run() -> None:
-    '''Base group for running algorithms.'''
+    """Base group for running algorithms."""
 
 
 @run.command()
@@ -180,13 +181,13 @@ def run() -> None:
 def corr(
     ctx: click.Context, chunks: int, save_chunks: int, flatten: bool
 ) -> None:
-    '''
+    """
     Calculate the pearson correlation coefficient.
 
     Calculate the pearson correlation coefficient with methylation and
     gene expression matrices. Optional compute and save chunking to
     avoid GPU and CPU memory limits.
-    '''
+    """
     logger: Logger = ctx.obj['logger']
 
     data_path = os.path.join(data['root_path'], data['input_dir'])
@@ -253,13 +254,13 @@ def mlr(
     no_t: bool,
     no_p: bool,
 ) -> None:
-    '''
+    """
     Calculates the multiple linear regression.
 
     Calculate the multiple linear regression with methylation, gene
     expression, and covariate matrices. Optional chunking to avoid
     memory limits.
-    '''
+    """
     logger: Logger = ctx.obj['logger']
 
     data_path = os.path.join(data['root_path'], data['input_dir'])
@@ -328,7 +329,7 @@ def mlr(
 
 @cli.group(name='data')
 def _data() -> None:
-    '''Base group for data management.'''
+    """Base group for data management."""
 
 
 @_data.command()
@@ -351,12 +352,12 @@ def dummy(
     gene_rows: int,
     no_annotation: bool,
 ) -> None:
-    '''
+    """
     Generates dummy data.
 
     Generates dummy data in the output directory with a given size with
     file names M.csv, G.csv, and C.csv.
-    '''
+    """
     logger: Logger = ctx.obj['logger']
     annotation = not no_annotation
 
@@ -411,14 +412,14 @@ def abort_if_false(ctx: click.Context, _, value):
 )
 @click.pass_context
 def gtp(ctx: click.Context, gtp_dir: Any, full_covar: bool) -> None:
-    '''
+    """
     Downloads and extracts GTP data.
 
     Downloads the methylation, gene expression, and covariate data from
     Grady Trauma Project study. Stores the raw data in gtp-dir. The raw
     data is extracted and processes before being saved in the data
     directory.
-    '''
+    """
     logger: Logger = ctx.obj['logger']
 
     gtp_path = os.path.join(data['root_path'], gtp_dir)
@@ -455,12 +456,12 @@ def gtp(ctx: click.Context, gtp_dir: Any, full_covar: bool) -> None:
 )
 @click.pass_context
 def init(ctx: click.Context, root_dirs: List[str]) -> None:
-    '''
+    """
     Creates and initializes directory.
 
     Creates root_dir in the root_path. Creates input_dir and output_dir
     in this new directory. Changes directory too this new directory.
-    '''
+    """
     logger: Logger = ctx.obj['logger']
 
     if not root_dirs:

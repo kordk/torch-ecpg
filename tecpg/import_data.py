@@ -1,7 +1,9 @@
 import itertools
 import os
 from typing import Callable, Dict, List, Optional
+
 import pandas
+
 from .config import data
 from .helper import initialize_dir, read_csv
 from .logger import Logger
@@ -20,13 +22,13 @@ def save_dataframes(
     logger: Logger = Logger(),
     **kwargs,
 ) -> None:
-    '''
+    """
     Saves any number of dataframes to an output_dir, with file_names for
     each file. Default file names count up from one for as many files
     that are given. The save_func function is called with the panads
     dataframe and the output path, which defaults to saving as a csv.
     Extra args and kwargs passed to save_func.
-    '''
+    """
     initialize_dir(output_dir, **logger)
 
     logger.start_timer('info', 'Saving {0} dataframes...', len(dataframes))
@@ -48,13 +50,13 @@ def save_dataframes(
 def read_dataframes(
     input_dir: str, get_func: Callable = read_csv, *, logger: Logger = Logger()
 ) -> Dict[str, pandas.DataFrame]:
-    '''
+    """
     Gets all available csv files from input_dir and gets them using
     get_func, which, by default, reads files as csvs. The get_func
     function is called with the path to the file and returns a pandas
     dataframe. The entire function returns a dictionary of file names
     and their corresponding dataframes.
-    '''
+    """
     if not os.path.isdir(input_dir):
         raise ValueError(f'{input_dir=} is not a valid directory')
 

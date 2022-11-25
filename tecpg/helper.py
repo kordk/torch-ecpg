@@ -1,17 +1,19 @@
 import os
 import shutil
 from typing import List, Tuple
+
 import numpy as np
 import pandas
 import requests
+
 from .logger import Logger
 
 
 def random_list(length: int, minimum: float, maximum: float) -> List[float]:
-    '''
+    """
     Returns a list of length, with random float values ranging from
     minimum to maximum. Returns a list of floats.
-    '''
+    """
     return list(np.random.rand(length) * (maximum - minimum) + minimum)
 
 
@@ -21,12 +23,12 @@ def download_files(
     *,
     logger: Logger = Logger(),
 ) -> None:
-    '''
+    """
     Downloads files from files, a list of tuples with file names and
     their corresponding urls. Saves files in output_dir. The function is
     very fast for large files. If verbose is true, it will print out the
     currently downloading file as the function runs.
-    '''
+    """
     n = len(files)
     logger.start_timer('info', 'Downloading {0} files...', n)
 
@@ -45,7 +47,7 @@ def download_files(
 
 
 def initialize_dir(directory: str, *, logger: Logger = Logger()) -> None:
-    '''Clears and creates provided directory'''
+    """Clears and creates provided directory"""
     if os.path.isdir(directory):
         logger.info('Removing directory {0}...', directory)
         shutil.rmtree(directory)
@@ -56,11 +58,11 @@ def initialize_dir(directory: str, *, logger: Logger = Logger()) -> None:
 def read_csv(
     file_name: str, sep: str = ',', logger: Logger = Logger()
 ) -> pandas.DataFrame:
-    '''
+    """
     Reads file_name as a csv with separator sep and returns
     pandas.DataFrame. Reads pandas-style csv, where indices and columns
     are automatically generated.
-    '''
+    """
     logger.info(
         'Reading csv file {0} with separator {1}',
         file_name,

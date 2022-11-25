@@ -1,10 +1,12 @@
 import os
 import shutil
 from typing import Dict, List, Optional, Tuple
+
 import pandas
+
 from .geo import geo_dict, geo_samples
+from .helper import download_files, initialize_dir, read_csv
 from .import_data import save_dataframes
-from .helper import initialize_dir, download_files, read_csv
 from .logger import Logger
 
 GTP_FILE_URLS = [
@@ -34,7 +36,7 @@ GTP_FILE_URLS = [
 def download_gtp_raw(
     gtp_path: str, logger: Logger = Logger(), **kwargs
 ) -> None:
-    '''
+    """
     Downloads the raw data from the Grady Trauma Project study and
     stores it in RAW_DATA_DIR/GTP/....
 
@@ -47,7 +49,7 @@ def download_gtp_raw(
 
     Gene expression data are downloaded in two parts. They get stitched
     together in the dataframe conversion section.
-    '''
+    """
     initialize_dir(gtp_path, **logger)
     logger.info('Downloading GTP raw data (this could take a very long time)')
     download_files(gtp_path, GTP_FILE_URLS, **kwargs, **logger)
@@ -56,13 +58,13 @@ def download_gtp_raw(
 def get_gtp_dataframes(
     gtp_path: str, *, logger: Logger = Logger()
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
-    '''
+    """
     Reads the raw GTP files (.txt.gz) and returns a tuple of three
     pandas.DataFrame for the methylation beta values, gene expression
     part one, and gene expression part two.
 
     Verbose prints the progress of reading each tsv file.
-    '''
+    """
     dfs = []
 
     logger.start_timer('info', 'Reading 3 csv files...')
@@ -80,12 +82,12 @@ def get_gtp_dataframes(
 
 
 def gtp_raw_clean(gtp_path: str, *, logger: Logger = Logger()) -> bool:
-    '''
+    """
     Cleans GTP directory of files other than GTP raw files. If all four
     GTP raw files remain, returns true. Otherwise, returns false. The
     return boolean is useful for determining whether it is necessary to
     download the raw data before proceeding.
-    '''
+    """
     if not os.path.exists(gtp_path):
         initialize_dir(gtp_path, **logger)
         return False
@@ -114,11 +116,11 @@ def process_gtp(
     *,
     logger: Logger = Logger(),
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
-    '''
+    """
     Processes the gtp dataframes (Methylation Beta Values, Gene
     Expression Values, and Covariate Matrix). Drops unneeded columns (of
     p-values), renames columns, unionizes samples, and sorts indices.
-    '''
+    """
     logger.info('Dropping unneeded columns (p-values)')
     M.drop(M.iloc[:, 1::2], axis=1, inplace=True)
     G.drop(G.iloc[:, 1::2], axis=1, inplace=True)
@@ -167,13 +169,13 @@ def get_covariates(
     *,
     logger: Logger = Logger(),
 ) -> pandas.DataFrame:
-    '''
+    """
     Gets a dataframe of covariates given the characteristics (chars),
     mapping characteristic names with values for each sample and a list
     of sample names given by geo_titles. Filters characteristics that
     do not have the same number of values as samples to avoid missing
     data.
-    '''
+    """
     n = len(geo_titles)
     logger.info('Removing covariates without enough data for all samples')
     full_chars = {char: vals for char, vals in chars.items() if len(vals) == n}
@@ -184,11 +186,11 @@ def get_covariates(
 def generate_data(
     gtp_path: str, simplify_covar: bool = False, *, logger: Logger = Logger()
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
-    '''
+    """
     Generates methylation beta values, gene expression values, and
     covariates pandas.DataFrames. Returns a tuple of these three
     dataframes.
-    '''
+    """
     if not gtp_raw_clean(gtp_path, **logger):
         download_gtp_raw(gtp_path, **logger)
     M, G_1, G_2 = get_gtp_dataframes(gtp_path, **logger)
@@ -213,10 +215,10 @@ def save_gtp_data(
     *,
     logger: Logger = Logger(),
 ) -> None:
-    '''
+    """
     Downloads data from www.ncbi.nlm.nih.gov. Saves GTP data in
     dataframes in the working data directory.
-    '''
+    """
     data = generate_data(gtp_path, simplify_covar, **logger)
     logger.info('Saving into {0}', data_path)
     if file_names is None:

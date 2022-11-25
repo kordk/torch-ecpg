@@ -1,6 +1,6 @@
 import torch
-from .logger import Logger
 
+from .logger import Logger
 
 data = {
     'root_path': '.',

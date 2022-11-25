@@ -1,5 +1,6 @@
-from typing import Dict, List, Optional, Tuple
 import gzip
+from typing import Dict, List, Optional, Tuple
+
 from .logger import Logger
 
 GEO_SAMPLE_KEYS = [
@@ -17,13 +18,13 @@ def geo_dict(
     *,
     logger: Logger = Logger(),
 ) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
-    '''
+    """
     Reads file_path as a geo data text file. Returns a dictionary that
     maps keys to data and a dictionary that maps characteristics with a
     list of values for each person, based on char_id. If decompress is
     None, it will infer whether to decompress with gzip if the file_path
     ends with .gz. If set to a boolean, it will decompress if True.
-    '''
+    """
     if decompress is None:
         decompress = file_path.endswith('.gz')
     with gzip.open(file_path, 'rt') if decompress else open(
@@ -63,7 +64,7 @@ def geo_dict(
 def geo_samples(
     geo_data: Dict[str, List[str]]
 ) -> Tuple[List[str], List[str], List[str]]:
-    '''
+    """
     Takes in a dictionary of geo_data returned by geo_dict. Returns a
     tuple of 3 lists of strings for Sample_description,
     Sample_geo_accession, and Sample_title respectively.
@@ -71,5 +72,5 @@ def geo_samples(
     Example Sample_title: "6088"
     Example Sample_geo_accession: "GSM1868036"
     Example Sample_description: "6164647041_R01C01"
-    '''
+    """
     return tuple(geo_data[key] for key in GEO_SAMPLE_KEYS)

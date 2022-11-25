@@ -1,15 +1,17 @@
 import math
 from time import perf_counter
 from typing import Callable, List, Optional, Tuple
+
 import numpy as np
 from matplotlib import pyplot as plt
+
+from .helper import random_list
 from .logger import Logger
 from .pearson_single import (
     pearson_corr_basic,
     pearson_corr_tensor,
     scipy_pearsonr_corr,
 )
-from .helper import random_list
 
 DEFAULT_FUNCTIONS = [
     pearson_corr_basic,
@@ -33,7 +35,7 @@ def test(
     *,
     logger: Logger = Logger(),
 ) -> None:
-    '''
+    """
     Tests the speed and accuracy of the input functions over different
     inputs. Each function in functions is given two input lists, with
     random float values in input_range.
@@ -56,7 +58,7 @@ def test(
     Defaults to true. The time plot is a matplotlib standard plot of the
     time it took each function to compute each input, given the input
     size. Both the x- and y-axes are log scale.
-    '''
+    """
     error = ValueError(
         'Not enough arguments provided to determine the test sizes. Include at'
         ' least two of base, samples, or max_size.'
