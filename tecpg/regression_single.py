@@ -14,12 +14,12 @@ from .logger import Logger
 from .test_data import generate_data
 
 
-def regression_full(
+def regression_single(
     M: pd.DataFrame,
     G: pd.DataFrame,
     C: pd.DataFrame,
     include: Tuple[bool, bool, bool, bool] = (True, True, True, True),
-    chunk_size: int = 0,
+    regressions_per_chunk: int = 0,
     p_thresh: Optional[float] = None,
     region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
     window: Optional[int] = None,
@@ -41,8 +41,8 @@ def regression_full(
     and gene site to regression results: beta (est), std_err (err),
     t_stats (t), and p-value (p).
 
-    If chunk_size is greater than 0, the output will be chunked with
-    chunk_size regressions per chunk. The chunks will be saved in
+    If regressions_per_chunk is greater than 0, the output will be chunked with
+    regressions_per_chunk regressions per chunk. The chunks will be saved in
     output_dir.
 
     The p_thresh argument omits regression results with a gene
@@ -101,8 +101,9 @@ def regression_full(
     device = get_device(**logger)
     regressions = len(M.index) * len(G.index)
     filter_p = p_thresh is not None
-    M_annot_sites = set(M_annot.index.values)
-    G_annot_sites = set(G_annot.index.values)
+    if region != 'all':
+        M_annot_sites = set(M_annot.index.values)
+        G_annot_sites = set(G_annot.index.values)
 
     logger.start_timer(
         'info',
@@ -111,8 +112,11 @@ def regression_full(
         region,
     )
 
-    if output_dir is None and chunk_size:
-        message = 'Output directory of None is not valid for chunk_size > 0'
+    if output_dir is None and regressions_per_chunk:
+        message = (
+            'Output directory of None is not valid for'
+            ' regressions_per_chunk > 0'
+        )
         logger.error(message)
         raise ValueError(message)
 
@@ -156,27 +160,28 @@ def regression_full(
     inner_logger.start_timer('info', 'Calculating chunks...')
     i = 0
     last_time = time()
-    with Pool() if chunk_size else nullcontext() as pool:
+    with Pool() if regressions_per_chunk else nullcontext() as pool:
         for (meth_site, M_row) in M.iterrows():
             y = torch.tensor(M_row).to(device)
             for (gene_site, G_row) in G.iterrows():
-                if region != 'all' and (
-                    meth_site not in M_annot_sites
-                    or gene_site not in G_annot_sites
-                ):
-                    continue
-                M_chrom = M_annot.loc[meth_site, 'chrom']
-                G_chrom = G_annot.loc[gene_site, 'chrom']
-                if M_chrom == G_chrom:
-                    if region == 'trans':
+                if region != 'all':
+                    if (
+                        meth_site not in M_annot_sites
+                        or gene_site not in G_annot_sites
+                    ):
                         continue
-                    elif region in ['cis', 'distal']:
-                        M_pos = M_annot.loc[meth_site, 'chromStart']
-                        G_pos = G_annot.loc[gene_site, 'chromStart']
-                        chrom_dist = abs(M_pos - G_pos)
-                        if not ((chrom_dist > window) ^ (region == 'cis')):
+                    M_chrom = M_annot.loc[meth_site, 'chrom']
+                    G_chrom = G_annot.loc[gene_site, 'chrom']
+                    if M_chrom == G_chrom:
+                        if region == 'trans':
                             continue
-                        logger.info('Calculated')
+                        elif region in ['cis', 'distal']:
+                            M_pos = M_annot.loc[meth_site, 'chromStart']
+                            G_pos = G_annot.loc[gene_site, 'chromStart']
+                            chrom_dist = abs(M_pos - G_pos)
+                            if not ((chrom_dist > window) ^ (region == 'cis')):
+                                continue
+                            logger.info('Calculated')
 
                 results = []
                 oneX[:, 1] = torch.tensor(G_row.to_numpy()).to(device)
@@ -187,7 +192,7 @@ def regression_full(
                     results.append(beta.cpu().numpy())
                 if include[1] or include[2] or include[3] or filter_p:
                     err = y - oneX.matmul(beta)
-                    s2 = err.T.matmul(err) / (nrows - ncols - 1)
+                    s2 = err.dot(err) / df
                     cov_beta = s2 * XtX.inverse()
                     std_err = torch.diagonal(cov_beta).sqrt()
                     if expression_only:
@@ -214,14 +219,17 @@ def regression_full(
                     )
                     out_df = pd.concat((out_df, row))
 
-                    if chunk_size and i % chunk_size == 0:
+                    if (
+                        regressions_per_chunk
+                        and i % regressions_per_chunk == 0
+                    ):
                         file_name = str(logger.current_count + 1) + '.csv'
                         file_path = os.path.join(output_dir, file_name)
                         logger.count(
                             'Saving part {i}'
                             + ('' if filter_p else '/{0}')
                             + ': ',
-                            regressions // chunk_size,
+                            regressions // regressions_per_chunk,
                         )
                         pool.apply_async(
                             save_dataframe_part,
@@ -250,12 +258,12 @@ def regression_full(
                     else:
                         inner_logger.time()
 
-        if chunk_size and len(out_df):
+        if regressions_per_chunk and len(out_df):
             file_name = str(logger.current_count + 1) + '.csv'
             file_path = os.path.join(output_dir, file_name)
             logger.count(
                 'Saving part {i}' + ('' if filter_p else '/{0}') + ': ',
-                regressions // chunk_size,
+                regressions // regressions_per_chunk,
             )
             pool.apply_async(
                 save_dataframe_part,
@@ -263,19 +271,18 @@ def regression_full(
                 dict(logger),
             )
 
-        if chunk_size:
+        if regressions_per_chunk:
             pool.close()
             pool.join()
 
-    logger.time('Calculated regression_full in {t} seconds')
-    if chunk_size == 0:
+    logger.time('Calculated regression_single in {t} seconds')
+    if regressions_per_chunk == 0:
         return out_df
 
 
 def test() -> None:
-    M, G, C = generate_data(100, 100, 100)
-    C['sex'] = C['sex'].astype(int)
-    print(regression_full(M, G, C))
+    M, G, C = generate_data(10, 100, 100)
+    regression_single(M, G, C)
 
 
 if __name__ == '__main__':

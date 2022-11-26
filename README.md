@@ -303,7 +303,7 @@ tecpg run corr [--chunks -c INTEGER] [--save-chunks -s INTEGER] [--flatten -f] [
 ```
 
 ```
-tecpg run mlr [--chunks -c INTEGER] [--p-thresh -p FLOAT] [--full-output -f] [--no-est] [--no-err] [--no-t] [--no-p] [--help]
+tecpg run mlr [--regressions-per-chunk -r INTEGER] [--p-thresh -p FLOAT] [--full-output -f] [--no-est] [--no-err] [--no-t] [--no-p] [--help]
 ```
 
 ### Documentation
@@ -427,7 +427,7 @@ Options:
     and covariate matrices. Optional chunking to avoid memory limits.
 
 Options:
-    -c, --chunk_size INTEGER  [default: 0]
+    -r, --regressions-per-chunk INTEGER  [default: 0]
     -p, --p-thresh FLOAT
     --full-output             [default: False]
     --no-est                  [default: False]

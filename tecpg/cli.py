@@ -10,9 +10,12 @@ from .gtp import save_gtp_data
 from .helper import initialize_dir
 from .import_data import read_dataframes, save_dataframes
 from .logger import Logger
-from .pearson_full import (pearson_chunk_save_tensor, pearson_chunk_tensor,
-                           pearson_full_tensor)
-from .regression import regression_full
+from .pearson_full import (
+    pearson_chunk_save_tensor,
+    pearson_chunk_tensor,
+    pearson_full_tensor,
+)
+from .regression_single import regression_single
 from .test_data import generate_data
 
 
@@ -212,7 +215,9 @@ def corr(
 
 
 @run.command()
-@click.option('-c', '--chunk-size', show_default=True, default=0, type=int)
+@click.option(
+    '-r', '--regressions-per-chunk', show_default=True, default=0, type=int
+)
 @click.option('-p', '--p-thresh', show_default=True, type=float)
 @click.option(
     '--all', 'region', show_default=True, flag_value='all', default=True
@@ -244,7 +249,7 @@ def corr(
 @click.pass_context
 def mlr(
     ctx: click.Context,
-    chunk_size: int,
+    regressions_per_chunk: int,
     p_thresh: Optional[float],
     region: str,
     window: Optional[int],
@@ -294,13 +299,13 @@ def mlr(
             )
             window = DISTAL_WINDOW
 
-    if chunk_size:
-        regression_full(
+    if regressions_per_chunk:
+        regression_single(
             M,
             G,
             C,
             include=include,
-            chunk_size=chunk_size,
+            regressions_per_chunk=regressions_per_chunk,
             p_thresh=p_thresh,
             region=region,
             window=window,
@@ -311,7 +316,7 @@ def mlr(
             **logger,
         )
     else:
-        output = regression_full(
+        output = regression_single(
             M,
             G,
             C,
