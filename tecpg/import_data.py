@@ -80,6 +80,7 @@ def read_dataframes(
 def save_dataframe_part(
     dataframe: pandas.DataFrame,
     file_path: str,
+    chunk_number: Optional[int] = None,
     first: Optional[bool] = None,
     *,
     logger: Logger = Logger(),
@@ -95,4 +96,7 @@ def save_dataframe_part(
     mode = 'w' if first else 'a'
     dataframe.to_csv(file_path, mode=mode, header=first)
 
-    logger.count_check('Done saving part {i}')
+    if chunk_number is None:
+        logger.count_check('Done saving part {i}')
+    else:
+        logger.count_check('Done saving part {0}', chunk_number)
