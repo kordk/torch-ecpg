@@ -33,33 +33,32 @@ def regression_full(
     dtype = torch.float32
     nrows, ncols = C.shape[0], C.shape[1] + 1
     mt_count, gt_count = len(M), len(G)
-    gt_site_names = list(G.index.values)
+    gt_site_names, mt_site_names = list(G.index.values), list(M.index.values)
     df = nrows - ncols - 1
     logger.info('Running with {0} degrees of freedom', df)
     dft = torch.tensor(df, device=device, dtype=dtype)
     log_prob = torch.distributions.studentT.StudentT(df).log_prob
-    M_np = M.to_numpy()
+    G_np = G.to_numpy()
     results = []
-    mt_site_names = list(M.index.values)
-    columns = ['const_p', 'gt_p'] + [val + '_p' for val in C.columns]
+    columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
     last_index = 0
     if loci_per_chunk:
-        chunk_count = math.ceil(len(M) / loci_per_chunk)
+        chunk_count = math.ceil(len(G) / loci_per_chunk)
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
 
     logger.start_timer('info', 'Running regression_full...')
     C: torch.Tensor = torch.tensor(
         C.to_numpy(), device=device, dtype=dtype
-    ).repeat(gt_count, 1, 1)
+    ).repeat(mt_count, 1, 1)
     logger.time('Converted C to tensor in {l} seconds')
-    G: torch.Tensor = torch.tensor(
-        G.to_numpy(), device=device, dtype=dtype
+    M: torch.Tensor = torch.tensor(
+        M.to_numpy(), device=device, dtype=dtype
     ).unsqueeze(2)
-    logger.time('Converted G to tensor in {l} seconds')
-    ones = torch.ones((gt_count, nrows, 1), device=device, dtype=dtype)
+    logger.time('Converted M to tensor in {l} seconds')
+    ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
     logger.time('Created ones in {l} seconds')
-    X: torch.Tensor = torch.cat((ones, G, C), 2)
+    X: torch.Tensor = torch.cat((ones, M, C), 2)
     logger.time('Created X in {l} seconds')
     Xt = X.mT
     logger.time('Transposed X in {l} seconds')
@@ -69,8 +68,8 @@ def regression_full(
     logger.time('Calculated XtXi_Xt in {l} seconds')
     logger.time('Calculated X constants in {t} seconds')
     with Pool() as pool:
-        for index, M_row in enumerate(M_np, 1):
-            Y = torch.tensor(M_row, device=device, dtype=dtype)
+        for index, G_row in enumerate(G_np, 1):
+            Y = torch.tensor(G_row, device=device, dtype=dtype)
             B = XtXi_Xt.matmul(Y)
             E = (Y.unsqueeze(1) - X.bmm(B.unsqueeze(2))).squeeze(2)
             scalars = (torch.sum(E * E, 1) / dft).view((-1, 1))
@@ -79,13 +78,13 @@ def regression_full(
             P = torch.exp(log_prob(T))
             results.append(P)
             if loci_per_chunk and (
-                index % loci_per_chunk == 0 or index == mt_count
+                index % loci_per_chunk == 0 or index == gt_count
             ):
-                mt_site_name_chunk = mt_site_names[last_index:index]
+                gt_site_name_chunk = gt_site_names[last_index:index]
                 last_index = index
                 index_chunk = pandas.MultiIndex.from_product(
-                    [mt_site_name_chunk, gt_site_names],
-                    names=['mt_site', 'gt_site'],
+                    [gt_site_name_chunk, mt_site_names],
+                    names=['gt_site', 'mt_site'],
                 )
                 file_name = str(logger.current_count + 1) + '.csv'
                 file_path = os.path.join(output_dir, file_name)
@@ -95,7 +94,7 @@ def regression_full(
                     columns=columns,
                 ).astype(float)
                 if p_thresh is not None:
-                    out = out[out.gt_p > p_thresh]
+                    out = out[out.mt_p > p_thresh]
                 logger.count(
                     'Saving part {i}/{0}:',
                     chunk_count,
@@ -118,8 +117,8 @@ def regression_full(
         else:
             logger.start_timer('info', 'Generating dataframe from results...')
             index_chunk = pandas.MultiIndex.from_product(
-                [mt_site_names, gt_site_names],
-                names=['mt_site', 'gt_site'],
+                [gt_site_names, mt_site_names],
+                names=['gt_site', 'mt_site'],
             )
             logger.time('Finished creating indices in {l} seconds')
             out = pandas.DataFrame(
@@ -131,7 +130,7 @@ def regression_full(
                 'Finished creating preliminary dataframe in {l} seconds'
             )
             if p_thresh is not None:
-                out = out[out.gt_p > p_thresh]
+                out = out[out.mt_p > p_thresh]
             logger.time('Finished filtering p-values in {l} seconds')
             logger.time('Created output dataframe in {t} total seconds')
             return out

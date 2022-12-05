@@ -35,15 +35,15 @@ def regression_single(
     Calculates the multiple linear regression of the input dataframes M,
     G, and C, being methylation beta values, gene expression values, and
     covariates using torch. This is done for every pair of methylation
-    site and gene site.
+    site and gene site. Regression: G ~ M + C1 + C2 (...)
 
     Returns a flattened multiindex dataframe mapping methylation site
     and gene site to regression results: beta (est), std_err (err),
     t_stats (t), and p-value (p).
 
-    If regressions_per_chunk is greater than 0, the output will be chunked with
-    regressions_per_chunk regressions per chunk. The chunks will be saved in
-    output_dir.
+    If regressions_per_chunk is greater than 0, the output will be
+    chunked with regressions_per_chunk regressions per chunk. The chunks
+    will be saved in output_dir.
 
     The p_thresh argument omits regression results with a gene
     expression p-value below p_thresh. This will force p-value
@@ -87,7 +87,7 @@ def regression_single(
         error = f'Region {region} not valid. Use all, cis, distal, or trans.'
         logger.error(error)
         raise ValueError(error)
-    if region != 'all' and (M_annot is None or G_annot is None):
+    if region != 'all' and (G_annot is None or M_annot is None):
         error = (
             f'Missing M or G annotation files using region filtration {region}'
         )
@@ -102,8 +102,8 @@ def regression_single(
     regressions = len(M.index) * len(G.index)
     filter_p = p_thresh is not None
     if region != 'all':
-        M_annot_sites = set(M_annot.index.values)
         G_annot_sites = set(G_annot.index.values)
+        M_annot_sites = set(M_annot.index.values)
 
     if output_dir is not None:
         logger.info('Clearing output directory')
@@ -134,10 +134,10 @@ def regression_single(
     index = pandas.MultiIndex(
         levels=[[], []],
         codes=[[], []],
-        names=['meth_site', 'gene_site'],
+        names=['gene_site', 'meth_site'],
     )
     categories = (
-        ['gt'] if expression_only else (['const', 'gt'] + C.columns.to_list())
+        ['mt'] if expression_only else (['const', 'mt'] + C.columns.to_list())
     )
     columns = []
     for category in categories:
@@ -165,30 +165,30 @@ def regression_single(
     i = 0
     last_time = time.time()
     with Pool() if regressions_per_chunk else nullcontext() as pool:
-        for (meth_site, M_row) in M.iterrows():
-            y = torch.tensor(M_row).to(device)
-            for (gene_site, G_row) in G.iterrows():
+        for (gene_site, G_row) in G.iterrows():
+            y = torch.tensor(G_row).to(device)
+            for (meth_site, M_row) in M.iterrows():
                 if region != 'all':
                     if (
                         meth_site not in M_annot_sites
                         or gene_site not in G_annot_sites
                     ):
                         continue
-                    M_chrom = M_annot.loc[meth_site, 'chrom']
                     G_chrom = G_annot.loc[gene_site, 'chrom']
-                    if M_chrom == G_chrom:
+                    M_chrom = M_annot.loc[meth_site, 'chrom']
+                    if G_chrom == M_chrom:
                         if region == 'trans':
                             continue
                         elif region in ['cis', 'distal']:
-                            M_pos = M_annot.loc[meth_site, 'chromStart']
                             G_pos = G_annot.loc[gene_site, 'chromStart']
-                            chrom_dist = abs(M_pos - G_pos)
+                            M_pos = M_annot.loc[meth_site, 'chromStart']
+                            chrom_dist = abs(G_pos - M_pos)
                             if not ((chrom_dist > window) ^ (region == 'cis')):
                                 continue
                             logger.info('Calculated')
 
                 results = []
-                oneX[:, 1] = torch.tensor(G_row.to_numpy()).to(device)
+                oneX[:, 1] = torch.tensor(M_row.to_numpy()).to(device)
                 XtX = oneX.mT.matmul(oneX)
                 Xty = oneX.mT.matmul(y)
                 beta = XtX.inverse().matmul(Xty)
@@ -218,7 +218,7 @@ def regression_single(
 
                     row = pandas.DataFrame(
                         numpy.array(list(zip(*results))).reshape(1, -1),
-                        index=[(meth_site, gene_site)],
+                        index=[(gene_site, meth_site)],
                         columns=columns,
                     )
                     out_df = pandas.concat((out_df, row))
