@@ -1,7 +1,7 @@
 import os
+import time
 from collections.abc import Mapping
 from datetime import datetime
-from time import perf_counter
 from typing import (
     Any,
     Callable,
@@ -136,7 +136,7 @@ class Logger(PassAsKwarg):
         self.current_count: int = 0
 
         self.time_func = self.info
-        self.get_time_func = perf_counter
+        self.get_time_func = time.perf_counter
         self.start_time = self.get_time_func()
         self.end_time = self.start_time
         self.times: List[float] = []

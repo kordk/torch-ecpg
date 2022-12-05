@@ -1,8 +1,8 @@
 from typing import List, Optional
 
-import numpy as np
+import numpy
+import scipy.stats
 import torch
-from scipy.stats import pearsonr
 
 from .config import get_device
 from .logger import Logger
@@ -19,7 +19,7 @@ def scipy_pearsonr_corr(
     correlation coefficient as a float.
     """
     logger.info('Running the scipy pearsonr single function (CPU only)')
-    return pearsonr(x, y)[0]
+    return scipy.stats.pearsonr(x, y)[0]
 
 
 def pearson_corr_basic(
@@ -36,8 +36,8 @@ def pearson_corr_basic(
     """
     if n is None:
         n = len(x)
-    x_mean = np.mean(x)
-    y_mean = np.mean(y)
+    x_mean = numpy.mean(x)
+    y_mean = numpy.mean(y)
     logger.info('Running the basic pearson corr single (CPU only)')
 
     numer = denom_x = denom_y = 0
@@ -47,7 +47,7 @@ def pearson_corr_basic(
         denom_x += x_diff ** 2
         denom_y += y_diff ** 2
 
-    corr = numer / np.sqrt(denom_x * denom_y)
+    corr = numer / numpy.sqrt(denom_x * denom_y)
     return corr
 
 

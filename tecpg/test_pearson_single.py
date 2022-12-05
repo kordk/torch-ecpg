@@ -1,5 +1,5 @@
 import math
-from time import perf_counter
+import time
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
@@ -88,9 +88,9 @@ def test(
         results = []
         pass_times = []
         for f in functions:
-            start = perf_counter()
+            start = time.perf_counter()
             result = f(x, y, **logger)
-            end = perf_counter()
+            end = time.perf_counter()
             pass_times.append(end - start)
             results.append(result)
 

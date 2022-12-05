@@ -427,14 +427,20 @@ Options:
     and covariate matrices. Optional chunking to avoid memory limits.
 
 Options:
-    -r, --regressions-per-chunk INTEGER  [default: 0]
+    -r, --regressions-per-chunk INTEGER
+                                    [default: 0]
     -p, --p-thresh FLOAT
-    --full-output             [default: False]
-    --no-est                  [default: False]
-    --no-err                  [default: False]
-    --no-t                    [default: False]
-    --no-p                    [default: False]
-    --help         Show this message and exit.
+    --all                           [default: all]
+    --cis                           [default: all]
+    --distal                        [default: all]
+    --trans                         [default: all]
+    -w, --window INTEGER
+    -f, --full-output               [default: False]
+    --no-est                        [default: False]
+    --no-err                        [default: False]
+    --no-t                          [default: False]
+    --no-p                          [default: False]
+    --help                          Show this message and exit.
 
 ```
 

@@ -1,36 +1,36 @@
 import os
+import time
 from contextlib import nullcontext
 from multiprocessing import Pool
-from time import time
 from typing import Literal, Optional, Tuple
 
-import numpy as np
-import pandas as pd
+import numpy
+import pandas
 import torch
 
 from .config import get_device
-from .import_data import save_dataframe_part
+from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
 from .test_data import generate_data
 
 
 def regression_single(
-    M: pd.DataFrame,
-    G: pd.DataFrame,
-    C: pd.DataFrame,
+    M: pandas.DataFrame,
+    G: pandas.DataFrame,
+    C: pandas.DataFrame,
     include: Tuple[bool, bool, bool, bool] = (True, True, True, True),
     regressions_per_chunk: int = 0,
     p_thresh: Optional[float] = None,
     region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
     window: Optional[int] = None,
-    M_annot: Optional[pd.DataFrame] = None,
-    G_annot: Optional[pd.DataFrame] = None,
+    M_annot: Optional[pandas.DataFrame] = None,
+    G_annot: Optional[pandas.DataFrame] = None,
     expression_only: bool = True,
     update_period: Optional[float] = 1,
     output_dir: Optional[str] = None,
     *,
     logger: Logger = Logger(),
-) -> pd.DataFrame:
+) -> pandas.DataFrame:
     """
     Calculates the multiple linear regression of the input dataframes M,
     G, and C, being methylation beta values, gene expression values, and
@@ -105,6 +105,10 @@ def regression_single(
         M_annot_sites = set(M_annot.index.values)
         G_annot_sites = set(G_annot.index.values)
 
+    if output_dir is not None:
+        logger.info('Clearing output directory')
+        initialize_dir(output_dir, **logger)
+
     logger.start_timer(
         'info',
         'Running full regression in {0} mode with "{1}" region filtration.',
@@ -127,7 +131,7 @@ def regression_single(
     oneX: torch.Tensor = torch.concat((one, one, Ct), 1).to(device)
     logger.time('Created root oneX tensor in {l} seconds')
 
-    index = pd.MultiIndex(
+    index = pandas.MultiIndex(
         levels=[[], []],
         codes=[[], []],
         names=['meth_site', 'gene_site'],
@@ -146,20 +150,20 @@ def regression_single(
         columns.extend(
             names for included, names in zip(include, names_group) if included
         )
-    out_df = pd.DataFrame(
+    out_df = pandas.DataFrame(
         index=index,
         columns=columns,
     )
     logger.time('Set up output dataframe')
 
     df = nrows - ncols - 1
-    logger.info('Running with {0} degrees of freedom.', df)
+    logger.info('Running with {0} degrees of freedom', df)
     log_prob = torch.distributions.studentT.StudentT(df).log_prob
 
     inner_logger = logger.alias()
     inner_logger.start_timer('info', 'Calculating chunks...')
     i = 0
-    last_time = time()
+    last_time = time.time()
     with Pool() if regressions_per_chunk else nullcontext() as pool:
         for (meth_site, M_row) in M.iterrows():
             y = torch.tensor(M_row).to(device)
@@ -212,12 +216,12 @@ def regression_single(
                 if not filter_p or p_value_np[1] >= p_thresh:
                     i += 1
 
-                    row = pd.DataFrame(
-                        np.array(list(zip(*results))).reshape(1, -1),
+                    row = pandas.DataFrame(
+                        numpy.array(list(zip(*results))).reshape(1, -1),
                         index=[(meth_site, gene_site)],
                         columns=columns,
                     )
-                    out_df = pd.concat((out_df, row))
+                    out_df = pandas.concat((out_df, row))
 
                     if (
                         regressions_per_chunk
@@ -238,14 +242,14 @@ def regression_single(
                         )
 
                         del out_df
-                        out_df = pd.DataFrame(
+                        out_df = pandas.DataFrame(
                             index=index,
                             columns=columns,
                         )
 
                 if update_period is not None:
-                    if time() - last_time > update_period:
-                        last_time = time()
+                    if time.time() - last_time > update_period:
+                        last_time = time.time()
                         inner_logger.time(
                             'Completed regression {i}/{0} in {l} seconds.'
                             ' Average regression time: {a} seconds',

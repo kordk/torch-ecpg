@@ -2,7 +2,7 @@ import os
 from typing import Any, List, Optional
 
 import click
-import pandas as pd
+import pandas
 import torch
 
 from .config import CIS_WINDOW, DISTAL_WINDOW, data, using_gpu
@@ -15,6 +15,7 @@ from .pearson_full import (
     pearson_chunk_tensor,
     pearson_full_tensor,
 )
+from .regression_full import regression_full
 from .regression_single import regression_single
 from .test_data import generate_data
 
@@ -215,6 +216,33 @@ def corr(
 
 
 @run.command()
+@click.option('-l', '--loci-per-chunk', show_default=True, type=int)
+@click.option('-p', '--p-thresh', show_default=True, type=float)
+@click.pass_context
+def mlr_full(
+    ctx: click.Context,
+    loci_per_chunk: Optional[int],
+    p_thresh: Optional[float],
+) -> None:
+    logger: Logger = ctx.obj['logger']
+
+    data_path = os.path.join(data['root_path'], data['input_dir'])
+    output_path = os.path.join(data['root_path'], data['output_dir'])
+
+    dataframes = read_dataframes(data_path, **logger)
+    M = dataframes[data['meth_file']]
+    G = dataframes[data['gene_file']]
+    C = dataframes[data['covar_file']]
+
+    args = [M, G, C, loci_per_chunk, p_thresh]
+    if loci_per_chunk is not None:
+        args.append(output_path)
+    output = regression_full(*args, **logger)
+    if loci_per_chunk is None:
+        save_dataframes([output], output_path, [data['output_file']], **logger)
+
+
+@run.command()
 @click.option(
     '-r', '--regressions-per-chunk', show_default=True, default=0, type=int
 )
@@ -269,7 +297,6 @@ def mlr(
     logger: Logger = ctx.obj['logger']
 
     data_path = os.path.join(data['root_path'], data['input_dir'])
-    annot_path = os.path.join(data['root_path'], data['annot_dir'])
     output_path = os.path.join(data['root_path'], data['output_dir'])
 
     dataframes = read_dataframes(data_path, **logger)
@@ -278,12 +305,14 @@ def mlr(
     C = dataframes[data['covar_file']]
     include = (not no_est, not no_err, not no_t, not no_p)
 
-    M_annot = pd.read_csv(
-        os.path.join(annot_path, data['meth_annot']), sep='\t'
-    ).set_index('name')
-    G_annot = pd.read_csv(
-        os.path.join(annot_path, data['gene_annot']), sep='\t'
-    ).set_index('name')
+    if region != 'all':
+        annot_path = os.path.join(data['root_path'], data['annot_dir'])
+        M_annot = pandas.read_csv(
+            os.path.join(annot_path, data['meth_annot']), sep='\t'
+        ).set_index('name')
+        G_annot = pandas.read_csv(
+            os.path.join(annot_path, data['gene_annot']), sep='\t'
+        ).set_index('name')
 
     expression_only = not full_output
     if region in ['cis', 'distal'] and window is None:
@@ -299,36 +328,13 @@ def mlr(
             )
             window = DISTAL_WINDOW
 
+    args = [M, G, C, include, regressions_per_chunk, p_thresh, region, window]
+    args.extend((None, None) if region == 'all' else (M_annot, G_annot))
+    args.extend((1, expression_only))
     if regressions_per_chunk:
-        regression_single(
-            M,
-            G,
-            C,
-            include=include,
-            regressions_per_chunk=regressions_per_chunk,
-            p_thresh=p_thresh,
-            region=region,
-            window=window,
-            M_annot=M_annot,
-            G_annot=G_annot,
-            expression_only=expression_only,
-            output_dir=output_path,
-            **logger,
-        )
-    else:
-        output = regression_single(
-            M,
-            G,
-            C,
-            include=include,
-            p_thresh=p_thresh,
-            region=region,
-            window=window,
-            M_annot=M_annot,
-            G_annot=G_annot,
-            expression_only=expression_only,
-            **logger,
-        )
+        args.append(output_path)
+    output = regression_single(*args, **logger)
+    if not regressions_per_chunk:
         save_dataframes([output], output_path, [data['output_file']], **logger)
 
 
