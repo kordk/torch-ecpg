@@ -48,17 +48,17 @@ def regression_full(
         initialize_dir(output_dir, **logger)
 
     logger.start_timer('info', 'Running regression_full...')
-    C: torch.Tensor = torch.tensor(
+    Ct: torch.Tensor = torch.tensor(
         C.to_numpy(), device=device, dtype=dtype
     ).repeat(mt_count, 1, 1)
     logger.time('Converted C to tensor in {l} seconds')
-    M: torch.Tensor = torch.tensor(
+    Mt: torch.Tensor = torch.tensor(
         M.to_numpy(), device=device, dtype=dtype
     ).unsqueeze(2)
     logger.time('Converted M to tensor in {l} seconds')
     ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
     logger.time('Created ones in {l} seconds')
-    X: torch.Tensor = torch.cat((ones, M, C), 2)
+    X: torch.Tensor = torch.cat((ones, Mt, Ct), 2)
     logger.time('Created X in {l} seconds')
     Xt = X.mT
     logger.time('Transposed X in {l} seconds')
