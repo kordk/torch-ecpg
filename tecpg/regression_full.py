@@ -33,19 +33,23 @@ def regression_full(
     dtype = torch.float32
     nrows, ncols = C.shape[0], C.shape[1] + 1
     mt_count, gt_count = len(M), len(G)
-    gt_site_names, mt_site_names = list(G.index.values), list(M.index.values)
+    gt_site_names = numpy.array(G.index.values)
+    mt_site_names = numpy.array(M.index.values)
     df = nrows - ncols - 1
     logger.info('Running with {0} degrees of freedom', df)
-    dft = torch.tensor(df, device=device, dtype=dtype)
+    dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
     log_prob = torch.distributions.studentT.StudentT(df).log_prob
     G_np = G.to_numpy()
-    results = []
     columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
     last_index = 0
+    results = []
     if loci_per_chunk:
         chunk_count = math.ceil(len(G) / loci_per_chunk)
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
+    if p_thresh is not None:
+        output_sizes = []
+        indices_list = []
 
     logger.start_timer('info', 'Running regression_full...')
     Ct: torch.Tensor = torch.tensor(
@@ -64,6 +68,8 @@ def regression_full(
     logger.time('Transposed X in {l} seconds')
     XtXi = Xt.bmm(X).inverse()
     logger.time('Calculated XtXi in {l} seconds')
+    XtXi_diag_sqrt = torch.diagonal(XtXi, dim1=1, dim2=2).sqrt()
+    logger.time('Calculated XtXi_diag in {l} seconds')
     XtXi_Xt = XtXi.bmm(Xt)
     logger.time('Calculated XtXi_Xt in {l} seconds')
     logger.time('Calculated X constants in {t} seconds')
@@ -72,20 +78,31 @@ def regression_full(
             Y = torch.tensor(G_row, device=device, dtype=dtype)
             B = XtXi_Xt.matmul(Y)
             E = (Y.unsqueeze(1) - X.bmm(B.unsqueeze(2))).squeeze(2)
-            scalars = (torch.sum(E * E, 1) / dft).view((-1, 1))
-            S = (torch.diagonal(XtXi, dim1=1, dim2=2) * scalars).sqrt()
+            scalars = (torch.sum(E * E, 1)).view((-1, 1)).sqrt() / dft_sqrt
+            S = XtXi_diag_sqrt * scalars
             T = B / S
             P = torch.exp(log_prob(T))
-            results.append(P)
+            if p_thresh is None:
+                results.append(P)
+            else:
+                indices = P[:, 1] >= p_thresh
+                output_sizes.append(indices.count_nonzero().item())
+                indices_list.extend(indices.cpu())
+                results.append(P[indices])
             if loci_per_chunk and (
                 index % loci_per_chunk == 0 or index == gt_count
             ):
                 gt_site_name_chunk = gt_site_names[last_index:index]
                 last_index = index
-                index_chunk = pandas.MultiIndex.from_product(
-                    [gt_site_name_chunk, mt_site_names],
-                    names=['gt_site', 'mt_site'],
-                )
+                if p_thresh is None:
+                    gt_sites = gt_site_name_chunk.repeat(mt_count)
+                    mt_sites = numpy.tile(mt_site_names, len(results))
+                else:
+                    gt_sites = gt_site_name_chunk.repeat(output_sizes)
+                    mask = numpy.array(indices_list, dtype=bool)
+                    mt_sites = mt_site_names.repeat(len(results))[mask]
+                index_chunk = [gt_sites, mt_sites]
+
                 file_name = str(logger.current_count + 1) + '.csv'
                 file_path = os.path.join(output_dir, file_name)
                 out = pandas.DataFrame(
@@ -93,8 +110,6 @@ def regression_full(
                     index=index_chunk,
                     columns=columns,
                 ).astype(float)
-                if p_thresh is not None:
-                    out = out[out.mt_p > p_thresh]
                 logger.count(
                     'Saving part {i}/{0}:',
                     chunk_count,
@@ -105,6 +120,8 @@ def regression_full(
                     dict(logger),
                 )
                 results.clear()
+                output_sizes.clear()
+                indices_list.clear()
 
         logger.time('Looped over methylation loci in {l} seconds')
         logger.time('Calculated regression_full in {t} seconds')
@@ -114,26 +131,26 @@ def regression_full(
             pool.close()
             pool.join()
             logger.time('Finished waiting for chunks to save in {l} seconds')
+            return
+
+        logger.start_timer('info', 'Generating dataframe from results...')
+        if p_thresh is None:
+            gt_sites = gt_site_names.repeat(mt_count)
+            mt_sites = numpy.tile(mt_site_names, len(results))
         else:
-            logger.start_timer('info', 'Generating dataframe from results...')
-            index_chunk = pandas.MultiIndex.from_product(
-                [gt_site_names, mt_site_names],
-                names=['gt_site', 'mt_site'],
-            )
-            logger.time('Finished creating indices in {l} seconds')
-            out = pandas.DataFrame(
-                torch.cat(results),
-                index=index_chunk,
-                columns=columns,
-            ).astype(float)
-            logger.time(
-                'Finished creating preliminary dataframe in {l} seconds'
-            )
-            if p_thresh is not None:
-                out = out[out.mt_p > p_thresh]
-            logger.time('Finished filtering p-values in {l} seconds')
-            logger.time('Created output dataframe in {t} total seconds')
-            return out
+            gt_sites = gt_site_names.repeat(output_sizes)
+            mask = numpy.array(indices_list, dtype=bool)
+            mt_sites = mt_site_names.repeat(len(results))[mask]
+        index_chunk = [gt_sites, mt_sites]
+        logger.time('Finished creating indices in {l} seconds')
+        out = pandas.DataFrame(
+            torch.cat(results),
+            index=index_chunk,
+            columns=columns,
+        ).astype(float)
+        logger.time('Finished creating preliminary dataframe in {l} seconds')
+        logger.time('Created output dataframe in {t} total seconds')
+        return out
 
 
 def test() -> None:
