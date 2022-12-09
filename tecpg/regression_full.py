@@ -32,19 +32,19 @@ def regression_full(
     device = get_device(**logger)
     dtype = torch.float32
     nrows, ncols = C.shape[0], C.shape[1] + 1
-    mt_count, gt_count = len(M), len(G)
-    gt_site_names = numpy.array(G.index.values)
+    gt_count, mt_count = len(G), len(M)
     mt_site_names = numpy.array(M.index.values)
+    gt_site_names = numpy.array(G.index.values)
     df = nrows - ncols - 1
     logger.info('Running with {0} degrees of freedom', df)
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
     log_prob = torch.distributions.studentT.StudentT(df).log_prob
-    G_np = G.to_numpy()
+    M_np = M.to_numpy()
     columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
     last_index = 0
     results = []
     if loci_per_chunk:
-        chunk_count = math.ceil(len(G) / loci_per_chunk)
+        chunk_count = math.ceil(len(M) / loci_per_chunk)
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
     if p_thresh is not None:
@@ -54,15 +54,15 @@ def regression_full(
     logger.start_timer('info', 'Running regression_full...')
     Ct: torch.Tensor = torch.tensor(
         C.to_numpy(), device=device, dtype=dtype
-    ).repeat(mt_count, 1, 1)
+    ).repeat(gt_count, 1, 1)
     logger.time('Converted C to tensor in {l} seconds')
-    Mt: torch.Tensor = torch.tensor(
-        M.to_numpy(), device=device, dtype=dtype
+    Gt: torch.Tensor = torch.tensor(
+        G.to_numpy(), device=device, dtype=dtype
     ).unsqueeze(2)
-    logger.time('Converted M to tensor in {l} seconds')
-    ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
+    logger.time('Converted G to tensor in {l} seconds')
+    ones = torch.ones((gt_count, nrows, 1), device=device, dtype=dtype)
     logger.time('Created ones in {l} seconds')
-    X: torch.Tensor = torch.cat((ones, Mt, Ct), 2)
+    X: torch.Tensor = torch.cat((ones, Gt, Ct), 2)
     logger.time('Created X in {l} seconds')
     Xt = X.mT
     logger.time('Transposed X in {l} seconds')
@@ -74,8 +74,8 @@ def regression_full(
     logger.time('Calculated XtXi_Xt in {l} seconds')
     logger.time('Calculated X constants in {t} seconds')
     with Pool() as pool:
-        for index, G_row in enumerate(G_np, 1):
-            Y = torch.tensor(G_row, device=device, dtype=dtype)
+        for index, M_row in enumerate(M_np, 1):
+            Y = torch.tensor(M_row, device=device, dtype=dtype)
             B = XtXi_Xt.matmul(Y)
             E = (Y.unsqueeze(1) - X.bmm(B.unsqueeze(2))).squeeze(2)
             scalars = (torch.sum(E * E, 1)).view((-1, 1)).sqrt() / dft_sqrt
@@ -90,17 +90,17 @@ def regression_full(
                 indices_list.extend(indices.cpu())
                 results.append(P[indices])
             if loci_per_chunk and (
-                index % loci_per_chunk == 0 or index == gt_count
+                index % loci_per_chunk == 0 or index == mt_count
             ):
-                gt_site_name_chunk = gt_site_names[last_index:index]
+                mt_site_name_chunk = mt_site_names[last_index:index]
                 last_index = index
                 if p_thresh is None:
-                    gt_sites = gt_site_name_chunk.repeat(mt_count)
-                    mt_sites = numpy.tile(mt_site_names, len(results))
+                    mt_sites = mt_site_name_chunk.repeat(gt_count)
+                    gt_sites = numpy.tile(gt_site_names, len(results))
                 else:
-                    gt_sites = gt_site_name_chunk.repeat(output_sizes)
+                    mt_sites = mt_site_name_chunk.repeat(output_sizes)
                     mask = numpy.array(indices_list, dtype=bool)
-                    mt_sites = mt_site_names.repeat(len(results))[mask]
+                    gt_sites = gt_site_names.repeat(len(results))[mask]
                 index_chunk = [gt_sites, mt_sites]
 
                 file_name = str(logger.current_count + 1) + '.csv'
@@ -135,12 +135,12 @@ def regression_full(
 
         logger.start_timer('info', 'Generating dataframe from results...')
         if p_thresh is None:
-            gt_sites = gt_site_names.repeat(mt_count)
-            mt_sites = numpy.tile(mt_site_names, len(results))
+            mt_sites = mt_site_names.repeat(gt_count)
+            gt_sites = numpy.tile(gt_site_names, len(results))
         else:
-            gt_sites = gt_site_names.repeat(output_sizes)
+            mt_sites = mt_site_names.repeat(output_sizes)
             mask = numpy.array(indices_list, dtype=bool)
-            mt_sites = mt_site_names.repeat(len(results))[mask]
+            gt_sites = gt_site_names.repeat(len(results))[mask]
         index_chunk = [gt_sites, mt_sites]
         logger.time('Finished creating indices in {l} seconds')
         out = pandas.DataFrame(
