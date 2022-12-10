@@ -10,11 +10,8 @@ from .gtp import save_gtp_data
 from .helper import initialize_dir
 from .import_data import read_dataframes, save_dataframes
 from .logger import Logger
-from .pearson_full import (
-    pearson_chunk_save_tensor,
-    pearson_chunk_tensor,
-    pearson_full_tensor,
-)
+from .pearson_full import (pearson_chunk_save_tensor, pearson_chunk_tensor,
+                           pearson_full_tensor)
 from .regression_full import regression_full
 from .regression_single import regression_single
 from .test_data import generate_data
@@ -330,7 +327,7 @@ def mlr(
 
     args = [M, G, C, include, regressions_per_chunk, p_thresh, region, window]
     args.extend((None, None) if region == 'all' else (M_annot, G_annot))
-    args.extend((1, expression_only))
+    args.extend((expression_only, 1))
     if regressions_per_chunk:
         args.append(output_path)
     output = regression_single(*args, **logger)

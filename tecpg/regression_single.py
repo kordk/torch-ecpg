@@ -127,7 +127,7 @@ def regression_single(
     nrows, ncols = C.shape[0], C.shape[1] + 1
     Ct = torch.tensor(C.to_numpy()).to(device)
     logger.time('Converted C to tensor in {l} seconds')
-    one = torch.ones((nrows, 1), dtype=torch.float64).to(device)
+    one = torch.ones((nrows, 1), dtype=torch.float32).to(device)
     oneX: torch.Tensor = torch.concat((one, one, Ct), 1).to(device)
     logger.time('Created root oneX tensor in {l} seconds')
 
@@ -213,7 +213,10 @@ def regression_single(
                     p_value_np = p_value.cpu().numpy()
                     results.append(p_value_np)
 
-                if not filter_p or p_value_np[1] >= p_thresh:
+                if (
+                    not filter_p
+                    or p_value_np[0 if expression_only else 1] >= p_thresh
+                ):
                     i += 1
 
                     row = pandas.DataFrame(
