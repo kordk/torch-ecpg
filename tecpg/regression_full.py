@@ -40,6 +40,7 @@ def regression_full(
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
     log_prob = torch.distributions.studentT.StudentT(df).log_prob
     M_np = M.to_numpy()
+    index_names = ['gt_site', 'mt_site']
     columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
     last_index = 0
     results = []
@@ -87,7 +88,7 @@ def regression_full(
             else:
                 indices = P[:, 1] >= p_thresh
                 output_sizes.append(indices.count_nonzero().item())
-                indices_list.extend(indices.cpu())
+                indices_list.append(indices)
                 results.append(P[indices])
             if loci_per_chunk and (
                 index % loci_per_chunk == 0 or index == mt_count
@@ -99,17 +100,18 @@ def regression_full(
                     gt_sites = numpy.tile(gt_site_names, len(results))
                 else:
                     mt_sites = mt_site_name_chunk.repeat(output_sizes)
-                    mask = numpy.array(indices_list, dtype=bool)
-                    gt_sites = gt_site_names.repeat(len(results))[mask]
+                    mask = torch.cat(indices_list).cpu().numpy()
+                    gt_sites = numpy.tile(gt_site_names, len(results))[mask]
                 index_chunk = [gt_sites, mt_sites]
 
                 file_name = str(logger.current_count + 1) + '.csv'
                 file_path = os.path.join(output_dir, file_name)
                 out = pandas.DataFrame(
-                    torch.cat(results),
+                    torch.cat(results).cpu().numpy(),
                     index=index_chunk,
                     columns=columns,
-                ).astype(float)
+                )
+                out.index.set_names(index_names, inplace=True)
                 logger.count(
                     'Saving part {i}/{0}:',
                     chunk_count,
@@ -139,23 +141,25 @@ def regression_full(
             gt_sites = numpy.tile(gt_site_names, len(results))
         else:
             mt_sites = mt_site_names.repeat(output_sizes)
-            mask = numpy.array(indices_list, dtype=bool)
-            gt_sites = gt_site_names.repeat(len(results))[mask]
+            mask = torch.cat(indices_list).cpu().numpy()
+            gt_sites = numpy.tile(gt_site_names, len(results))[mask]
         index_chunk = [gt_sites, mt_sites]
         logger.time('Finished creating indices in {l} seconds')
         out = pandas.DataFrame(
-            torch.cat(results),
+            torch.cat(results).cpu().numpy(),
             index=index_chunk,
             columns=columns,
-        ).astype(float)
+        )
+        out.index.set_names(index_names, inplace=True)
         logger.time('Finished creating preliminary dataframe in {l} seconds')
         logger.time('Created output dataframe in {t} total seconds')
         return out
 
 
 def test() -> None:
-    M, G, C = generate_data(100, 100, 100)
-    print(regression_full(M, G, C, 10))
+    M, G, C = generate_data(100, 1000, 1000)
+    logger = Logger(carry_data={'use_cpu': True})
+    print(regression_full(M, G, C, p_thresh=0.3, **logger))
 
 
 if __name__ == '__main__':

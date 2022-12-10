@@ -125,7 +125,7 @@ def regression_single(
         raise ValueError(message)
 
     nrows, ncols = C.shape[0], C.shape[1] + 1
-    Ct = torch.tensor(C.to_numpy()).to(device)
+    Ct = torch.tensor(C.to_numpy(), dtype=torch.float32).to(device)
     logger.time('Converted C to tensor in {l} seconds')
     one = torch.ones((nrows, 1), dtype=torch.float32).to(device)
     oneX: torch.Tensor = torch.concat((one, one, Ct), 1).to(device)
@@ -134,7 +134,7 @@ def regression_single(
     index = pandas.MultiIndex(
         levels=[[], []],
         codes=[[], []],
-        names=['gene_site', 'meth_site'],
+        names=['gt_site', 'mt_site'],
     )
     categories = (
         ['mt'] if expression_only else (['const', 'mt'] + C.columns.to_list())
@@ -166,7 +166,7 @@ def regression_single(
     last_time = time.time()
     with Pool() if regressions_per_chunk else nullcontext() as pool:
         for (gene_site, G_row) in G.iterrows():
-            y = torch.tensor(G_row).to(device)
+            y = torch.tensor(G_row, dtype=torch.float32).to(device)
             for (meth_site, M_row) in M.iterrows():
                 if region != 'all':
                     if (
@@ -188,7 +188,9 @@ def regression_single(
                             logger.info('Calculated')
 
                 results = []
-                oneX[:, 1] = torch.tensor(M_row.to_numpy()).to(device)
+                oneX[:, 1] = torch.tensor(
+                    M_row.to_numpy(), dtype=torch.float32
+                ).to(device)
                 XtX = oneX.mT.matmul(oneX)
                 Xty = oneX.mT.matmul(y)
                 beta = XtX.inverse().matmul(Xty)
