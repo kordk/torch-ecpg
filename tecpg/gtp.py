@@ -113,6 +113,7 @@ def process_gtp(
     C: pandas.DataFrame,
     geo_descs: List[str],
     geo_titles: List[str],
+    drop_na: bool = True,
     *,
     logger: Logger = Logger(),
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
@@ -137,21 +138,30 @@ def process_gtp(
     G_drop = set(G.columns) - set(M.columns)
     M.drop(M_drop, axis=1, inplace=True)
     G.drop(G_drop, axis=1, inplace=True)
-    start = len(G)
-    G.dropna(axis=0, inplace=True)
-    end = len(G)
-    logger.info(
-        'Dropped {0} rows ({1}%) of G with missing values',
-        start - end,
-        round(end / start * 100, 4),
-    )
+
+    if drop_na:
+        G_start = len(G)
+        G.dropna(axis=0, inplace=True)
+        G_end = len(G)
+        logger.info(
+            'Dropped {0} rows of G with missing values ({1}% remaining)',
+            G_start - G_end,
+            round(G_end / G_start * 100, 4),
+        )
+        M_start = len(M)
+        M.dropna(axis=0, inplace=True)
+        M_end = len(M)
+        logger.info(
+            'Dropped {0} rows of M with missing values ({1}% remaining)',
+            M_start - M_end,
+            round(M_end / M_start * 100, 4),
+        )
 
     C_drop = set(C.index) - set(M.columns)
     C.drop(C_drop, axis=0, inplace=True)
     C.drop('tissue', axis=1, inplace=True, errors='ignore')
     C.drop('race/ethnicity', axis=1, inplace=True, errors='ignore')
 
-    print(C)
     C['Sex'].replace('Male', 0, inplace=True)
     C['Sex'].replace('Female', 1, inplace=True)
 
@@ -184,7 +194,11 @@ def get_covariates(
 
 
 def generate_data(
-    gtp_path: str, simplify_covar: bool = False, *, logger: Logger = Logger()
+    gtp_path: str,
+    simplify_covar: bool = False,
+    drop_na: bool = True,
+    *,
+    logger: Logger = Logger(),
 ) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     """
     Generates methylation beta values, gene expression values, and
@@ -204,7 +218,7 @@ def generate_data(
     )
     geo_descs, _, geo_titles = geo_samples(data)
     C = get_covariates(chars, geo_titles, **logger)
-    return process_gtp(M, G, C, geo_descs, geo_titles, **logger)
+    return process_gtp(M, G, C, geo_descs, geo_titles, drop_na, **logger)
 
 
 def save_gtp_data(
@@ -212,6 +226,7 @@ def save_gtp_data(
     data_path: str,
     file_names: Optional[List[str]] = None,
     simplify_covar: bool = False,
+    drop_na: bool = True,
     *,
     logger: Logger = Logger(),
 ) -> None:
@@ -219,7 +234,7 @@ def save_gtp_data(
     Downloads data from www.ncbi.nlm.nih.gov. Saves GTP data in
     dataframes in the working data directory.
     """
-    data = generate_data(gtp_path, simplify_covar, **logger)
+    data = generate_data(gtp_path, simplify_covar, drop_na, **logger)
     logger.info('Saving into {0}', data_path)
     if file_names is None:
         save_dataframes(data, data_path, **logger)
