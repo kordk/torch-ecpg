@@ -64,6 +64,7 @@ def regression_full(
     ones = torch.ones((gt_count, nrows, 1), device=device, dtype=dtype)
     logger.time('Created ones in {l} seconds')
     X: torch.Tensor = torch.cat((ones, Gt, Ct), 2)
+    del Ct, Gt, ones
     logger.time('Created X in {l} seconds')
     Xt = X.mT
     logger.time('Transposed X in {l} seconds')
@@ -72,8 +73,20 @@ def regression_full(
     XtXi_diag_sqrt = torch.diagonal(XtXi, dim1=1, dim2=2).sqrt()
     logger.time('Calculated XtXi_diag in {l} seconds')
     XtXi_Xt = XtXi.bmm(Xt)
+    del Xt, XtXi
     logger.time('Calculated XtXi_Xt in {l} seconds')
     logger.time('Calculated X constants in {t} seconds')
+    if allocated_memory := torch.cuda.memory_allocated():
+        total_memory = torch.cuda.get_device_properties(0).total_memory
+        torch.cuda.empty_cache()
+        logger.info(
+            'CUDA device memory: {0} MB allocated by constants out of {1}'
+            ' MB total',
+            allocated_memory / 1_000_000,
+            total_memory / 1_000_000,
+        )
+    inner_logger = logger.alias()
+    inner_logger.start_timer('info', 'Calculating chunks...')
     with Pool() as pool:
         for index, M_row in enumerate(M_np, 1):
             Y = torch.tensor(M_row, device=device, dtype=dtype)
@@ -121,9 +134,17 @@ def regression_full(
                     (out, file_path, logger.current_count),
                     dict(logger),
                 )
+
+                inner_logger.time(
+                    'Completed chunk {i}/{0} in {l} seconds.'
+                    ' Average chunk time: {a} seconds',
+                    mt_count,
+                )
+
                 results.clear()
-                output_sizes.clear()
-                indices_list.clear()
+                if p_thresh is not None:
+                    output_sizes.clear()
+                    indices_list.clear()
 
         logger.time('Looped over methylation loci in {l} seconds')
         logger.time('Calculated regression_full in {t} seconds')
