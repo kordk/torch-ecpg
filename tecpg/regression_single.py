@@ -46,7 +46,7 @@ def regression_single(
     will be saved in output_dir.
 
     The p_thresh argument omits regression results with a gene
-    expression p-value below p_thresh. This will force p-value
+    expression p-value above p_thresh. This will force p-value
     calculation and filter the results even if p-values are not included
     in the output. If p_thresh is None (default), regression results
     will not be filtered.
@@ -217,7 +217,7 @@ def regression_single(
 
                 if (
                     not filter_p
-                    or p_value_np[0 if expression_only else 1] >= p_thresh
+                    or p_value_np[0 if expression_only else 1] <= p_thresh
                 ):
                     i += 1
 

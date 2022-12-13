@@ -99,7 +99,7 @@ def regression_full(
             if p_thresh is None:
                 results.append(P)
             else:
-                indices = P[:, 1] >= p_thresh
+                indices = P[:, 1] <= p_thresh
                 output_sizes.append(indices.count_nonzero().item())
                 indices_list.append(indices)
                 results.append(P[indices])
