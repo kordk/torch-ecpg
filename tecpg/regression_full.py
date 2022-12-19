@@ -1,22 +1,49 @@
 import math
 import os
+import time
 from multiprocessing import Pool
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy
 import pandas
 import torch
+from tecpg.config import get_device
+from tecpg.import_data import initialize_dir, save_dataframe_part
+from tecpg.logger import Logger
+from tecpg.test_data import generate_data
 
-from .config import get_device
-from .import_data import initialize_dir, save_dataframe_part
-from .logger import Logger
-from .test_data import generate_data
+
+class Prob:
+    def __init__(
+        self, df: int, device: torch.device, dtype: torch.dtype
+    ) -> None:
+        self.df = df
+        self.offset = torch.tensor(
+            -0.5 * math.log(df)
+            - 0.5 * math.log(math.pi)
+            - math.lgamma(0.5 * df)
+            + math.lgamma(0.5 * (df + 1.0)),
+            device=device,
+            dtype=dtype,
+        )
+        self.scalar = torch.tensor(
+            0.5 * (self.df + 1.0), device=device, dtype=dtype
+        )
+
+    def prob(self, value: torch.Tensor):
+        return (
+            self.offset - torch.log1p(value ** 2.0 / self.df) * self.scalar
+        ).exp()
 
 
 def regression_full(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
     C: pandas.DataFrame,
+    M_annot: Optional[pandas.DataFrame] = None,
+    G_annot: Optional[pandas.DataFrame] = None,
+    region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
+    window: Optional[int] = None,
     loci_per_chunk: Optional[int] = None,
     p_thresh: Optional[float] = None,
     output_dir: Optional[str] = None,
@@ -25,6 +52,20 @@ def regression_full(
 ) -> Optional[pandas.DataFrame]:
     if (output_dir is None) != (loci_per_chunk is None):
         error = 'Output dir and chunk size must be defined together.'
+        logger.error(error)
+        raise ValueError(error)
+    if region not in ['all', 'cis', 'distal', 'trans']:
+        error = f'Region {region} not valid. Use all, cis, distal, or trans.'
+        logger.error(error)
+        raise ValueError(error)
+    if region != 'all' and (G_annot is None or M_annot is None):
+        error = (
+            f'Missing M or G annotation files using region filtration {region}'
+        )
+        logger.error(error)
+        raise ValueError(error)
+    if region in ['cis', 'distal'] and window is None:
+        error = f'Window is None for region filtration {region}'
         logger.error(error)
         raise ValueError(error)
 
@@ -38,21 +79,41 @@ def regression_full(
     df = nrows - ncols - 1
     logger.info('Running with {0} degrees of freedom', df)
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
-    log_prob = torch.distributions.studentT.StudentT(df).log_prob
+    prob = Prob(df, device, dtype).prob
     M_np = M.to_numpy()
     index_names = ['gt_site', 'mt_site']
     columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
     last_index = 0
     results = []
-    if loci_per_chunk:
+    if p_thresh is None and region == 'all':
+        indices_list = None
+    else:
+        indices_list = []
+        output_sizes = []
+    if output_dir is not None:
         chunk_count = math.ceil(len(M) / loci_per_chunk)
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
-    if p_thresh is not None:
-        output_sizes = []
-        indices_list = []
 
     logger.start_timer('info', 'Running regression_full...')
+    if region != 'all':
+        M_annot = (
+            M_annot.drop(columns=['chromEnd', 'score', 'strand'])
+            .reindex(M.index)
+            .replace({'X': -1, 'Y': -2})
+        )
+        G_annot = (
+            G_annot.drop(columns=['chromEnd', 'score', 'strand'])
+            .reindex(G.index)
+            .replace({'X': -1, 'Y': -2})
+        )
+        M_chrom, M_pos = M_annot.to_numpy().T
+        G_chrom, G_pos = G_annot.to_numpy().T
+        M_chrom_t = torch.tensor(M_chrom, device=device, dtype=torch.int)
+        M_pos_t = torch.tensor(M_pos, device=device, dtype=torch.int)
+        G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int)
+        G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int)
+
     Ct: torch.Tensor = torch.tensor(
         C.to_numpy(), device=device, dtype=dtype
     ).repeat(gt_count, 1, 1)
@@ -64,7 +125,7 @@ def regression_full(
     ones = torch.ones((gt_count, nrows, 1), device=device, dtype=dtype)
     logger.time('Created ones in {l} seconds')
     X: torch.Tensor = torch.cat((ones, Gt, Ct), 2)
-    del Ct, Gt, ones
+    del Gt, Ct, ones
     logger.time('Created X in {l} seconds')
     Xt = X.mT
     logger.time('Transposed X in {l} seconds')
@@ -86,7 +147,7 @@ def regression_full(
             total_memory / 1_000_000,
         )
     inner_logger = logger.alias()
-    inner_logger.start_timer('info', 'Calculating chunks...')
+    inner_logger.start_timer('info', 'Calculating regression...')
     with Pool() as pool:
         for index, M_row in enumerate(M_np, 1):
             Y = torch.tensor(M_row, device=device, dtype=dtype)
@@ -95,20 +156,73 @@ def regression_full(
             scalars = (torch.sum(E * E, 1)).view((-1, 1)).sqrt() / dft_sqrt
             S = XtXi_diag_sqrt * scalars
             T = B / S
-            P = torch.exp(log_prob(T))
-            if p_thresh is None:
-                results.append(P)
+            P = prob(T)
+
+            if p_thresh is not None:
+                if region == 'all':
+                    indices = P[:, 1] <= p_thresh
+                elif region == 'cis':
+                    indices = (
+                        (P[:, 1] <= p_thresh)
+                        .logical_and(M_chrom_t[index - 1, None] == G_chrom_t)
+                        .logical_and(
+                            M_pos_t[index - 1, None] < G_pos_t + window
+                        )
+                        .logical_and(
+                            M_pos_t[index - 1, None] > G_pos_t - window
+                        )
+                    )
+                elif region == 'distal':
+                    indices = (
+                        (P[:, 1] <= p_thresh)
+                        .logical_and(M_chrom_t[index - 1, None] == G_chrom_t)
+                        .logical_and(
+                            (
+                                M_pos_t[index - 1, None] < G_pos_t - window
+                            ).logical_or(
+                                M_pos_t[index - 1, None] > G_pos_t + window
+                            )
+                        )
+                    )
+                elif region == 'trans':
+                    indices = (P[:, 1] <= p_thresh).logical_and(
+                        M_chrom_t[index - 1, None] != G_chrom_t
+                    )
             else:
-                indices = P[:, 1] <= p_thresh
-                output_sizes.append(indices.count_nonzero().item())
+                if region == 'cis':
+                    indices = (
+                        (M_chrom_t[index - 1, None] == G_chrom_t)
+                        .logical_and(
+                            M_pos_t[index - 1, None] < G_pos_t + window
+                        )
+                        .logical_and(
+                            M_pos_t[index - 1, None] > G_pos_t - window
+                        )
+                    )
+                elif region == 'distal':
+                    indices = (
+                        M_chrom_t[index - 1, None] == G_chrom_t
+                    ).logical_and(
+                        (
+                            M_pos_t[index - 1, None] < G_pos_t - window
+                        ).logical_or(
+                            M_pos_t[index - 1, None] > G_pos_t + window
+                        )
+                    )
+                elif region == 'trans':
+                    indices = M_chrom_t[index - 1, None] != G_chrom_t
+            if indices_list is not None:
                 indices_list.append(indices)
-                results.append(P[indices])
+                P = P[indices]
+                output_sizes.append(len(P))
+            results.append(P)
+
             if loci_per_chunk and (
                 index % loci_per_chunk == 0 or index == mt_count
             ):
                 mt_site_name_chunk = mt_site_names[last_index:index]
                 last_index = index
-                if p_thresh is None:
+                if indices_list is None:
                     mt_sites = mt_site_name_chunk.repeat(gt_count)
                     gt_sites = numpy.tile(gt_site_names, len(results))
                 else:
@@ -142,7 +256,7 @@ def regression_full(
                 )
 
                 results.clear()
-                if p_thresh is not None:
+                if indices_list is not None:
                     output_sizes.clear()
                     indices_list.clear()
 
@@ -157,7 +271,7 @@ def regression_full(
             return
 
         logger.start_timer('info', 'Generating dataframe from results...')
-        if p_thresh is None:
+        if indices_list is None:
             mt_sites = mt_site_names.repeat(gt_count)
             gt_sites = numpy.tile(gt_site_names, len(results))
         else:
@@ -178,9 +292,37 @@ def regression_full(
 
 
 def test() -> None:
-    M, G, C = generate_data(100, 1000, 1000)
+    M, G, C, M_annot, G_annot = generate_data(300, 10000, 50000, True)
+    M_annot.set_index('name', inplace=True)
+    G_annot.set_index('name', inplace=True)
     logger = Logger(carry_data={'use_cpu': True})
-    print(regression_full(M, G, C, p_thresh=0.3, **logger))
+    print(
+        regression_full(
+            M, G, C, M_annot, G_annot, 'cis', p_thresh=0.3, **logger
+        )
+    )
+
+
+def test_prob() -> None:
+    torch.cuda.empty_cache()
+    df = 200
+    device = torch.device('cuda')
+    dtype = torch.float32
+    prob_one = lambda t: torch.distributions.StudentT(df).log_prob(t).exp()
+    prob_two = Prob(df, device, dtype).prob
+    test = torch.rand((100_000_000, 4), device=device, dtype=dtype)
+    total_time_one = 0
+    total_time_two = 0
+    runs = 10
+    for _ in range(runs):
+        start_time = time.perf_counter()
+        prob_one(test)
+        total_time_one += time.perf_counter() - start_time
+    for _ in range(runs):
+        start_time = time.perf_counter()
+        prob_two(test)
+        total_time_two += time.perf_counter() - start_time
+    print(total_time_one / runs, total_time_two / runs)
 
 
 if __name__ == '__main__':

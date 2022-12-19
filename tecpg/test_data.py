@@ -9,16 +9,13 @@ def randrange(
     start: float,
     end: float,
     integer: bool = False,
-    seeded: bool = False,
-) -> Callable[[int | None], int | float]:
+) -> Callable[[], int | float]:
     """
     Returns a callable that generates a random float between start
     and end or an int if integer is True (default False).
     """
 
-    def func(seed: Optional[int] = None) -> int | float:
-        if seeded and seed is not None:
-            random.seed(seed)
+    def func(*_) -> int | float:
         if integer:
             return math.floor(random.random() * (end + 1 - start) + start)
         else:
@@ -88,7 +85,13 @@ def generate_data(
     m_rows: int,
     g_rows: int,
     annotation: bool = False,
-) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
+) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame] | Tuple[
+    pandas.DataFrame,
+    pandas.DataFrame,
+    pandas.DataFrame,
+    pandas.DataFrame,
+    pandas.DataFrame,
+]:
     """
     Generates two pandas dataframes for methylation and gene expression.
     Accepts a sample_size for the number of people, m_rows for the
@@ -115,9 +118,8 @@ def generate_data(
     def annotation_template(codes: List[str]) -> Dict[str, Any]:
         return {
             'chrom': randrange(1, 23, True),
-            'chromStart': randrange(1, 150_000_000, True, True),
-            'chromEnd': lambda x: randrange(1, 150_000_000, True, True)(x)
-            + randrange(0, 80, True)(),
+            'chromStart': randrange(1, 150_000_000, True),
+            'chromEnd': randrange(1, 150_000_000, True),
             'name': lambda x: codes[x],
             'score': lambda _: 0,
             'strand': lambda _: '+' if round(random.random()) else '-',
