@@ -195,7 +195,10 @@ def regression_single(
                 Xty = oneX.mT.matmul(y)
                 beta = XtX.inverse().matmul(Xty)
                 if include[0]:
-                    results.append(beta.cpu().numpy())
+                    if expression_only:
+                        results.append(beta[1:2].cpu().numpy())
+                    else:
+                        results.append(beta.cpu().numpy())
                 if include[1] or include[2] or include[3] or filter_p:
                     err = y - oneX.matmul(beta)
                     s2 = err.dot(err) / df
@@ -256,8 +259,10 @@ def regression_single(
                     if time.time() - last_time > update_period:
                         last_time = time.time()
                         inner_logger.time(
-                            'Completed regression {i}/{0} in {l} seconds.'
-                            ' Average regression time: {a} seconds',
+                            (
+                                'Completed regression {i}/{0} in {l} seconds.'
+                                ' Average regression time: {a} seconds'
+                            ),
                             regressions,
                         )
                         inner_logger.info(
