@@ -240,3 +240,9 @@ def save_gtp_data(
         save_dataframes(data, data_path, **logger)
     else:
         save_dataframes(data, data_path, file_names, **logger)
+    logger.warning(
+        'GTP methylation, gene expression, and covariates downloaded. If you'
+        ' would like to use region filtration, please manually copy the'
+        ' associated files from the tecpg/demo directory or produce them'
+        ' yourself.'
+    )
