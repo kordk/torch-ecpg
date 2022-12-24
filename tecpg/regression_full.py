@@ -42,6 +42,7 @@ def regression_full(
     loci_per_chunk: Optional[int] = None,
     p_thresh: Optional[float] = None,
     output_dir: Optional[str] = None,
+    methylation_only: bool = True,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -78,7 +79,10 @@ def regression_full(
     prob = create_prob(df, device, dtype)
     M_np = M.to_numpy()
     index_names = ['gt_site', 'mt_site']
-    columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
+    if methylation_only:
+        columns = ['mt_p']
+    else:
+        columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
 
     last_index = 0
     results = []
@@ -189,10 +193,12 @@ def regression_full(
                 region_indices_list.append(region_indices)
 
             T = B / S
+            if methylation_only:
+                T = T[:, 1:2]
             P = prob(T)
 
             if p_thresh is not None:
-                p_indices = P[:, 1] <= p_thresh
+                p_indices = P[:, 0 if methylation_only else 1] <= p_thresh
                 p_indices_list.append(p_indices)
                 P = P[p_indices]
             if filtration:

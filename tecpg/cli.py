@@ -225,6 +225,14 @@ def corr(
 @click.option('--cis', 'region', show_default=True, flag_value='cis')
 @click.option('--distal', 'region', show_default=True, flag_value='distal')
 @click.option('--trans', 'region', show_default=True, flag_value='trans')
+@click.option(
+    '--full-output',
+    '-f',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+)
 @click.pass_context
 def mlr_full(
     ctx: click.Context,
@@ -232,6 +240,7 @@ def mlr_full(
     p_thresh: Optional[float],
     region: str,
     window: Optional[int],
+    full_output: bool,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -264,12 +273,13 @@ def mlr_full(
                 'Using default window for distal of {0} bases', DISTAL_WINDOW
             )
             window = DISTAL_WINDOW
+    methylation_only = not full_output
 
     args = [M, G, C]
     args.extend((None, None) if region == 'all' else (M_annot, G_annot))
     args.extend([region, window, loci_per_chunk, p_thresh])
-    if loci_per_chunk is not None:
-        args.append(output_path)
+    args.append(None if loci_per_chunk is None else output_path)
+    args.append(methylation_only)
     output = regression_full(*args, **logger)
     if loci_per_chunk is None:
         save_dataframes([output], output_path, [data['output_file']], **logger)
