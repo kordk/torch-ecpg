@@ -208,8 +208,8 @@ def regression_full(
             if loci_per_chunk and (
                 index % loci_per_chunk == 0 or index == mt_count
             ):
-                last_index = index
                 mt_sites = mt_site_names[last_index:index].repeat(output_sizes)
+                last_index = index
                 if region != 'all':
                     region_mask = torch.cat(region_indices_list).cpu().numpy()
                 if p_thresh is None:
