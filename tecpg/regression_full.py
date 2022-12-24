@@ -35,14 +35,15 @@ def regression_full(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
     C: pandas.DataFrame,
-    M_annot: Optional[pandas.DataFrame] = None,
     G_annot: Optional[pandas.DataFrame] = None,
+    M_annot: Optional[pandas.DataFrame] = None,
     region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
     window: Optional[int] = None,
     loci_per_chunk: Optional[int] = None,
     p_thresh: Optional[float] = None,
     output_dir: Optional[str] = None,
     methylation_only: bool = True,
+    p_only: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -54,7 +55,7 @@ def regression_full(
         error = f'Region {region} not valid. Use all, cis, distal, or trans.'
         logger.error(error)
         raise ValueError(error)
-    if region != 'all' and (G_annot is None or M_annot is None):
+    if region != 'all' and (G_annot is None or G_annot is None):
         error = (
             f'Missing M or G annotation files using region filtration {region}'
         )
@@ -69,20 +70,31 @@ def regression_full(
     device = get_device(**logger)
     dtype = torch.float32
     nrows, ncols = C.shape[0], C.shape[1] + 1
-    gt_count, mt_count = len(G), len(M)
-    mt_site_names = numpy.array(M.index.values)
+    mt_count, gt_count = len(M), len(G)
     gt_site_names = numpy.array(G.index.values)
+    mt_site_names = numpy.array(M.index.values)
     df = nrows - ncols - 1
     logger.info('Running with {0} degrees of freedom', df)
 
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
     prob = create_prob(df, device, dtype)
-    M_np = M.to_numpy()
-    index_names = ['gt_site', 'mt_site']
-    if methylation_only:
-        columns = ['mt_p']
+    G_np = G.to_numpy()
+    index_names = ['mt_site', 'gt_site']
+    if p_only:
+        if methylation_only:
+            columns = ['mt_p']
+        else:
+            columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
     else:
-        columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
+        categories = (
+            ['mt']
+            if methylation_only
+            else (['const', 'mt'] + C.columns.to_list())
+        )
+        suffixes = ['_est', '_err', '_t', '_p']
+        columns = [
+            column + suffix for column in categories for suffix in suffixes
+        ]
 
     last_index = 0
     results = []
@@ -94,43 +106,43 @@ def regression_full(
         p_indices_list = None
         if region == 'all':
             filtration = False
-            output_sizes = gt_count
+            output_sizes = mt_count
     else:
         p_indices_list = []
 
     if output_dir is not None:
-        chunk_count = math.ceil(len(M) / loci_per_chunk)
+        chunk_count = math.ceil(len(G) / loci_per_chunk)
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
 
     logger.start_timer('info', 'Running regression_full...')
     if region != 'all':
-        M_annot = (
-            M_annot.drop(columns=['chromEnd', 'score', 'strand'])
-            .reindex(M.index)
-            .replace({'X': -1, 'Y': -2})
-        )
         G_annot = (
             G_annot.drop(columns=['chromEnd', 'score', 'strand'])
             .reindex(G.index)
             .replace({'X': -1, 'Y': -2})
         )
-        M_chrom, M_pos = M_annot.to_numpy().T
+        M_annot = (
+            M_annot.drop(columns=['chromEnd', 'score', 'strand'])
+            .reindex(M.index)
+            .replace({'X': -1, 'Y': -2})
+        )
         G_chrom, G_pos = G_annot.to_numpy().T
-        M_chrom_t = torch.tensor(M_chrom, device=device, dtype=torch.int)
-        M_pos_t = torch.tensor(M_pos, device=device, dtype=torch.int)
+        M_chrom, M_pos = M_annot.to_numpy().T
         G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int)
         G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int)
+        M_chrom_t = torch.tensor(M_chrom, device=device, dtype=torch.int)
+        M_pos_t = torch.tensor(M_pos, device=device, dtype=torch.int)
 
     Ct: torch.Tensor = torch.tensor(
         C.to_numpy(), device=device, dtype=dtype
-    ).repeat(gt_count, 1, 1)
-    Gt: torch.Tensor = torch.tensor(
-        G.to_numpy(), device=device, dtype=dtype
+    ).repeat(mt_count, 1, 1)
+    Mt: torch.Tensor = torch.tensor(
+        M.to_numpy(), device=device, dtype=dtype
     ).unsqueeze(2)
-    ones = torch.ones((gt_count, nrows, 1), device=device, dtype=dtype)
-    X: torch.Tensor = torch.cat((ones, Gt, Ct), 2)
-    del Gt, Ct, ones
+    ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
+    X: torch.Tensor = torch.cat((ones, Mt, Ct), 2)
+    del Mt, Ct, ones
     Xt = X.mT
     XtXi = Xt.bmm(X).inverse()
     XtXi_diag_sqrt = torch.diagonal(XtXi, dim1=1, dim2=2).sqrt()
@@ -149,8 +161,8 @@ def regression_full(
     inner_logger = logger.alias()
     inner_logger.start_timer('info', 'Calculating regression...')
     with Pool() as pool:
-        for index, M_row in enumerate(M_np, 1):
-            Y = torch.tensor(M_row, device=device, dtype=dtype)
+        for index, G_row in enumerate(G_np, 1):
+            Y = torch.tensor(G_row, device=device, dtype=dtype)
 
             if region == 'all':
                 B = XtXi_Xt.matmul(Y)
@@ -162,26 +174,26 @@ def regression_full(
             else:
                 if region == 'cis':
                     region_indices = (
-                        (M_chrom_t[index - 1, None] == G_chrom_t)
+                        (G_chrom_t[index - 1, None] == M_chrom_t)
                         .logical_and(
-                            M_pos_t[index - 1, None] < G_pos_t + window
+                            G_pos_t[index - 1, None] < M_pos_t + window
                         )
                         .logical_and(
-                            M_pos_t[index - 1, None] > G_pos_t - window
+                            G_pos_t[index - 1, None] > M_pos_t - window
                         )
                     )
                 elif region == 'distal':
                     region_indices = (
-                        M_chrom_t[index - 1, None] == G_chrom_t
+                        G_chrom_t[index - 1, None] == M_chrom_t
                     ).logical_and(
                         (
-                            M_pos_t[index - 1, None] < G_pos_t - window
+                            G_pos_t[index - 1, None] < M_pos_t - window
                         ).logical_or(
-                            M_pos_t[index - 1, None] > G_pos_t + window
+                            G_pos_t[index - 1, None] > M_pos_t + window
                         )
                     )
                 elif region == 'trans':
-                    region_indices = M_chrom_t[index - 1, None] != G_chrom_t
+                    region_indices = G_chrom_t[index - 1, None] != M_chrom_t
 
                 B = XtXi_Xt[region_indices].matmul(Y)
                 E = (
@@ -192,41 +204,49 @@ def regression_full(
 
                 region_indices_list.append(region_indices)
 
-            T = B / S
             if methylation_only:
-                T = T[:, 1:2]
+                B = B[:, 1:2]
+                S = S[:, 1:2]
+            T = B / S
             P = prob(T)
 
             if p_thresh is not None:
                 p_indices = P[:, 0 if methylation_only else 1] <= p_thresh
                 p_indices_list.append(p_indices)
                 P = P[p_indices]
+                if not p_only:
+                    B = B[p_indices]
+                    S = S[p_indices]
+                    T = T[p_indices]
             if filtration:
                 output_sizes.append(len(P))
-            results.append(P)
+            if p_only:
+                results.append(P)
+            else:
+                results.append(torch.cat((B, S, T, P), dim=1))
 
             if loci_per_chunk and (
-                index % loci_per_chunk == 0 or index == mt_count
+                index % loci_per_chunk == 0 or index == gt_count
             ):
-                mt_sites = mt_site_names[last_index:index].repeat(output_sizes)
+                gt_sites = gt_site_names[last_index:index].repeat(output_sizes)
                 last_index = index
                 if region != 'all':
                     region_mask = torch.cat(region_indices_list).cpu().numpy()
                 if p_thresh is None:
                     if region == 'all':
-                        gt_sites = numpy.tile(gt_site_names, len(results))
+                        mt_sites = numpy.tile(mt_site_names, len(results))
                     else:
-                        gt_sites = numpy.tile(gt_site_names, len(results))[
+                        mt_sites = numpy.tile(mt_site_names, len(results))[
                             region_mask
                         ]
                 else:
                     mask = torch.cat(p_indices_list).cpu().numpy()
                     if region == 'all':
-                        gt_sites = numpy.tile(gt_site_names, len(results))[
+                        mt_sites = numpy.tile(mt_site_names, len(results))[
                             mask
                         ]
                     else:
-                        gt_sites = numpy.tile(gt_site_names, len(results))[
+                        mt_sites = numpy.tile(mt_site_names, len(results))[
                             region_mask
                         ][mask]
                 index_chunk = [gt_sites, mt_sites]
@@ -252,7 +272,7 @@ def regression_full(
                 inner_logger.time(
                     'Completed chunk {i}/{0} in {l} seconds.'
                     ' Average chunk time: {a} seconds',
-                    mt_count,
+                    gt_count,
                 )
 
                 results.clear()
@@ -276,18 +296,18 @@ def regression_full(
         logger.start_timer('info', 'Generating dataframe from results...')
         if region != 'all':
             region_mask = torch.cat(region_indices_list).cpu().numpy()
-        mt_sites = mt_site_names.repeat(output_sizes)
+        gt_sites = gt_site_names.repeat(output_sizes)
         if p_indices_list is None:
             if region == 'all':
-                gt_sites = numpy.tile(gt_site_names, len(results))
+                mt_sites = numpy.tile(mt_site_names, len(results))
             else:
-                gt_sites = numpy.tile(gt_site_names, len(results))[region_mask]
+                mt_sites = numpy.tile(mt_site_names, len(results))[region_mask]
         else:
             mask = torch.cat(p_indices_list).cpu().numpy()
             if region == 'all':
-                gt_sites = numpy.tile(gt_site_names, len(results))[mask]
+                mt_sites = numpy.tile(mt_site_names, len(results))[mask]
             else:
-                gt_sites = numpy.tile(gt_site_names, len(results))[
+                mt_sites = numpy.tile(mt_site_names, len(results))[
                     region_mask
                 ][mask]
         index_chunk = [gt_sites, mt_sites]

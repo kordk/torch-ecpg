@@ -233,6 +233,9 @@ def corr(
     default=False,
     type=bool,
 )
+@click.option(
+    '--p-only', '-P', is_flag=True, show_default=True, default=False, type=bool
+)
 @click.pass_context
 def mlr_full(
     ctx: click.Context,
@@ -241,6 +244,7 @@ def mlr_full(
     region: str,
     window: Optional[int],
     full_output: bool,
+    p_only: bool,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -279,7 +283,7 @@ def mlr_full(
     args.extend((None, None) if region == 'all' else (M_annot, G_annot))
     args.extend([region, window, loci_per_chunk, p_thresh])
     args.append(None if loci_per_chunk is None else output_path)
-    args.append(methylation_only)
+    args.extend([methylation_only, p_only])
     output = regression_full(*args, **logger)
     if loci_per_chunk is None:
         save_dataframes([output], output_path, [data['output_file']], **logger)
