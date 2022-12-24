@@ -7,10 +7,11 @@ from typing import Literal, Optional
 import numpy
 import pandas
 import torch
-from tecpg.config import get_device
-from tecpg.import_data import initialize_dir, save_dataframe_part
-from tecpg.logger import Logger
-from tecpg.test_data import generate_data
+
+from .config import get_device
+from .import_data import initialize_dir, save_dataframe_part
+from .logger import Logger
+from .test_data import generate_data
 
 
 class Prob:
