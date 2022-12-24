@@ -44,15 +44,13 @@ def test(cwd: str) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        stdout = ANSI_ESCAPE.sub(
-            '', process.stdout.read().decode('ascii').replace('\n\n', '\n')
-        )
+        stdout = ANSI_ESCAPE.sub('', process.stdout.read().decode('ascii'))
         output += OUTPUT_PREFIX.format(
             command=' '.join(command), stdout=stdout
         )
         print(f'Completed {index} out of {len(ARGS_LIST)}')
 
-    return output
+    return output.replace('\r\n', '\n')
 
 
 def main() -> None:
