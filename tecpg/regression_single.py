@@ -25,7 +25,7 @@ def regression_single(
     window: Optional[int] = None,
     M_annot: Optional[pandas.DataFrame] = None,
     G_annot: Optional[pandas.DataFrame] = None,
-    expression_only: bool = True,
+    methylation_only: bool = True,
     update_period: Optional[float] = 1,
     output_dir: Optional[str] = None,
     *,
@@ -45,11 +45,11 @@ def regression_single(
     chunked with regressions_per_chunk regressions per chunk. The chunks
     will be saved in output_dir.
 
-    The p_thresh argument omits regression results with a gene
-    expression p-value above p_thresh. This will force p-value
-    calculation and filter the results even if p-values are not included
-    in the output. If p_thresh is None (default), regression results
-    will not be filtered.
+    The p_thresh argument omits regression results with a methylation
+    p-value above p_thresh. This will force p-value calculation and
+    filter the results even if p-values are not included in the output.
+    If p_thresh is None (default), regression results will not be
+    filtered.
 
     The region can be set to either all, cis, distal, or trans. If set
     to all, the regression will run an all-by-all comparison, comparing
@@ -62,11 +62,11 @@ def regression_single(
     chromosomes. M_annot and G_annot optional dataframes are used to
     locate the methylation and gene expression sites.
 
-    If expression_only is set to False, the intercept, gene expression,
-    and covariate regression results (everything) will be outputted.
-    Otherwise, if set to True which is the default, only the gene
-    expression results will be saved. Either way, the covariates and
-    constant intercept will be included in the regression calculation.
+    If methylation_only is set to False, the intercept, methylation, and
+    covariate regression results (everything) will be outputted.
+    Otherwise, if set to True which is the default, only the methylation
+    results will be saved. Either way, the covariates and constant
+    intercept will be included in the regression calculation.
 
     Logs an update on the completion of the function every update_period
     seconds. If update_period is None, these logs will be omitted.
@@ -112,7 +112,7 @@ def regression_single(
     logger.start_timer(
         'info',
         'Running full regression in {0} mode with "{1}" region filtration.',
-        ('expression only' if expression_only else 'full output'),
+        ('methylation only' if methylation_only else 'full output'),
         region,
     )
 
@@ -137,7 +137,7 @@ def regression_single(
         names=['gt_site', 'mt_site'],
     )
     categories = (
-        ['mt'] if expression_only else (['const', 'mt'] + C.columns.to_list())
+        ['mt'] if methylation_only else (['const', 'mt'] + C.columns.to_list())
     )
     columns = []
     for category in categories:
@@ -195,7 +195,7 @@ def regression_single(
                 Xty = oneX.mT.matmul(y)
                 beta = XtX.inverse().matmul(Xty)
                 if include[0]:
-                    if expression_only:
+                    if methylation_only:
                         results.append(beta[1:2].cpu().numpy())
                     else:
                         results.append(beta.cpu().numpy())
@@ -204,7 +204,7 @@ def regression_single(
                     s2 = err.dot(err) / df
                     cov_beta = s2 * XtX.inverse()
                     std_err = torch.diagonal(cov_beta).sqrt()
-                    if expression_only:
+                    if methylation_only:
                         beta = beta[1:2]
                         std_err = std_err[1:2]
                 if include[1]:
@@ -220,7 +220,7 @@ def regression_single(
 
                 if (
                     not filter_p
-                    or p_value_np[0 if expression_only else 1] <= p_thresh
+                    or p_value_np[0 if methylation_only else 1] <= p_thresh
                 ):
                     i += 1
 
@@ -259,10 +259,8 @@ def regression_single(
                     if time.time() - last_time > update_period:
                         last_time = time.time()
                         inner_logger.time(
-                            (
-                                'Completed regression {i}/{0} in {l} seconds.'
-                                ' Average regression time: {a} seconds'
-                            ),
+                            'Completed regression {i}/{0} in {l} seconds.'
+                            ' Average regression time: {a} seconds',
                             regressions,
                         )
                         inner_logger.info(

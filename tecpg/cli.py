@@ -355,7 +355,7 @@ def mlr(
             .drop(['chromEnd', 'score', 'strand'])
         )
 
-    expression_only = not full_output
+    methylation_only = not full_output
     if region in ['cis', 'distal'] and window is None:
         logger.info('No region window provided. Resorting to default.')
         if region == 'cis':
@@ -371,7 +371,7 @@ def mlr(
 
     args = [M, G, C, include, regressions_per_chunk, p_thresh, region, window]
     args.extend((None, None) if region == 'all' else (M_annot, G_annot))
-    args.extend((expression_only, 1))
+    args.extend((methylation_only, 1))
     if regressions_per_chunk:
         args.append(output_path)
     output = regression_single(*args, **logger)
