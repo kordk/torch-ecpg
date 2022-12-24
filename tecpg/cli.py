@@ -237,7 +237,7 @@ def corr(
     '--p-only', '-P', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.pass_context
-def mlr_full(
+def mlr(
     ctx: click.Context,
     loci_per_chunk: Optional[int],
     p_thresh: Optional[float],
@@ -322,7 +322,7 @@ def mlr_full(
     '--no-p', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.pass_context
-def mlr(
+def mlr_single(
     ctx: click.Context,
     regressions_per_chunk: int,
     p_thresh: Optional[float],

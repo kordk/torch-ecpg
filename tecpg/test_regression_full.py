@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 
-BASE_COMMAND = ['tecpg', 'run', 'mlr-full']
+BASE_COMMAND = ['tecpg', 'run', 'mlr']
 ARGS_LIST = [
     ['-f'],
     ['-f', '--cis'],
