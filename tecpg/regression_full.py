@@ -14,27 +14,21 @@ from .logger import Logger
 from .test_data import generate_data
 
 
-class Prob:
-    def __init__(
-        self, df: int, device: torch.device, dtype: torch.dtype
-    ) -> None:
-        self.df = df
-        self.offset = torch.tensor(
-            -0.5 * math.log(df)
-            - 0.5 * math.log(math.pi)
-            - math.lgamma(0.5 * df)
-            + math.lgamma(0.5 * (df + 1.0)),
-            device=device,
-            dtype=dtype,
-        )
-        self.scalar = torch.tensor(
-            0.5 * (self.df + 1.0), device=device, dtype=dtype
-        )
+def create_prob(df: int, device: torch.device, dtype: torch.dtype):
+    offset = torch.tensor(
+        -0.5 * math.log(df)
+        - 0.5 * math.log(math.pi)
+        - math.lgamma(0.5 * df)
+        + math.lgamma(0.5 * (df + 1.0)),
+        device=device,
+        dtype=dtype,
+    )
+    scalar = torch.tensor(0.5 * (df + 1.0), device=device, dtype=dtype)
 
-    def prob(self, value: torch.Tensor):
-        return (
-            self.offset - torch.log1p(value ** 2.0 / self.df) * self.scalar
-        ).exp()
+    def prob(value: torch.Tensor):
+        return (offset - torch.log1p(value ** 2.0 / df) * scalar).exp()
+
+    return prob
 
 
 def regression_full(
@@ -81,7 +75,7 @@ def regression_full(
     logger.info('Running with {0} degrees of freedom', df)
 
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
-    prob = Prob(df, device, dtype).prob
+    prob = create_prob(df, device, dtype)
     M_np = M.to_numpy()
     index_names = ['gt_site', 'mt_site']
     columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
@@ -304,13 +298,13 @@ def regression_full(
 
 
 def test() -> None:
-    M, G, C, M_annot, G_annot = generate_data(300, 10000, 50000, True)
+    M, G, C, M_annot, G_annot = generate_data(300, 5000, 5000, True)
     M_annot.set_index('name', inplace=True)
     G_annot.set_index('name', inplace=True)
-    logger = Logger(carry_data={'use_cpu': True})
+    logger = Logger(carry_data={'use_cpu': False})
     print(
         regression_full(
-            M, G, C, M_annot, G_annot, 'cis', p_thresh=0.3, **logger
+            M, G, C, M_annot, G_annot, 'all', p_thresh=0.3, **logger
         )
     )
 
@@ -321,7 +315,7 @@ def test_prob() -> None:
     device = torch.device('cuda')
     dtype = torch.float32
     prob_one = lambda t: torch.distributions.StudentT(df).log_prob(t).exp()
-    prob_two = Prob(df, device, dtype).prob
+    prob_two = create_prob(df, device, dtype)
     test = torch.rand((100_000_000, 4), device=device, dtype=dtype)
     total_time_one = 0
     total_time_two = 0
