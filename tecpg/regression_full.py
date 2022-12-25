@@ -251,6 +251,16 @@ def regression_full(
                         ][mask]
                 index_chunk = [gt_sites, mt_sites]
 
+                if index == loci_per_chunk and allocated_memory:
+                    allocated_memory = torch.cuda.memory_allocated()
+                    logger.info(
+                        'CUDA device memory: At the peak of chunk 1, {0} MB'
+                        ' allocated out of {1} MB total. If needed, increase'
+                        ' --loci-per-chunk accordingly',
+                        allocated_memory / 1_000_000,
+                        total_memory / 1_000_000,
+                    )
+
                 file_name = str(logger.current_count + 1) + '.csv'
                 file_path = os.path.join(output_dir, file_name)
                 out = pandas.DataFrame(
