@@ -308,7 +308,10 @@ def regression_full(
         logger.start_timer('info', 'Generating dataframe from results...')
         if region != 'all':
             region_mask = torch.cat(region_indices_list).cpu().numpy()
+            del region_indices_list[:]
         gt_sites = gt_site_names.repeat(output_sizes)
+        if filtration:
+            del output_sizes[:]
         if p_indices_list is None:
             if region == 'all':
                 mt_sites = numpy.tile(mt_site_names, len(results))
@@ -316,6 +319,7 @@ def regression_full(
                 mt_sites = numpy.tile(mt_site_names, len(results))[region_mask]
         else:
             mask = torch.cat(p_indices_list).cpu().numpy()
+            del p_indices_list[:]
             if region == 'all':
                 mt_sites = numpy.tile(mt_site_names, len(results))[mask]
             else:
