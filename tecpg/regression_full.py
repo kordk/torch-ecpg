@@ -8,7 +8,7 @@ import numpy
 import pandas
 import torch
 
-from .config import get_device
+from .config import DTYPE, get_device
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
 from .test_data import generate_data
@@ -68,7 +68,7 @@ def regression_full(
 
     logger.info('Initializing regression variables')
     device = get_device(**logger)
-    dtype = torch.float32
+    dtype = DTYPE
     nrows, ncols = C.shape[0], C.shape[1] + 1
     mt_count, gt_count = len(M), len(G)
     gt_site_names = numpy.array(G.index.values)
@@ -349,7 +349,7 @@ def test_prob() -> None:
     torch.cuda.empty_cache()
     df = 200
     device = torch.device('cuda')
-    dtype = torch.float32
+    dtype = DTYPE
     prob_one = lambda t: torch.distributions.StudentT(df).log_prob(t).exp()
     prob_two = create_prob(df, device, dtype)
     test = torch.rand((100_000_000, 4), device=device, dtype=dtype)

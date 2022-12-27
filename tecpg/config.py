@@ -18,6 +18,7 @@ data = {
 
 CIS_WINDOW = 1_000_000  # 1 Mb
 DISTAL_WINDOW = 50_000  # 50 Kb
+DTYPE = torch.float32
 
 
 def get_device(*, logger: Logger = Logger()) -> torch.device:

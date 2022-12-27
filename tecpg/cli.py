@@ -1,23 +1,24 @@
+import itertools
+import math
 import os
 from typing import Any, List, Optional
 
 import click
 import pandas
+import psutil
 import torch
 
-from .config import CIS_WINDOW, DISTAL_WINDOW, data, using_gpu
+from .config import CIS_WINDOW, DISTAL_WINDOW, DTYPE, data, using_gpu
 from .gtp import save_gtp_data
 from .helper import initialize_dir
 from .import_data import read_dataframes, save_dataframes
 from .logger import Logger
-from .pearson_full import (
-    pearson_chunk_save_tensor,
-    pearson_chunk_tensor,
-    pearson_full_tensor,
-)
+from .pearson_full import (pearson_chunk_save_tensor, pearson_chunk_tensor,
+                           pearson_full_tensor)
 from .regression_full import regression_full
 from .regression_single import regression_single
 from .test_data import generate_data
+from .tool import estimate_loci_per_chunk
 
 
 @click.group()
@@ -544,6 +545,143 @@ def init(ctx: click.Context, root_dirs: List[str]) -> None:
 
     log_dir = os.path.join(path, data['log_dir'])
     logger.save(log_dir=log_dir)
+
+
+@cli.command()
+@click.option('-t', '--target-bytes', type=int)
+@click.option('-s', '--samples', type=int)
+@click.option('-m', '--mt-count', type=int)
+@click.option('-g', '--gt-count', type=int)
+@click.option('-c', '--covar-count', type=int)
+@click.option('-F', '--filtration', type=float)
+@click.option('-f', '--full-output', type=bool)
+@click.option('-P', '--p-only', type=bool)
+@click.option('-p', '--p-filtration', type=bool)
+@click.option('-r', '--region-filtration', type=bool)
+@click.option('-C', '--cpu', show_default=True, default=False, type=bool)
+@click.pass_context
+def chunks(
+    ctx: click.Context,
+    target_bytes: Optional[int],
+    samples: Optional[int],
+    mt_count: Optional[int],
+    gt_count: Optional[int],
+    covar_count: Optional[int],
+    filtration: Optional[float],
+    full_output: Optional[bool],
+    p_only: Optional[bool],
+    p_filtration: Optional[bool],
+    region_filtration: Optional[bool],
+    cpu: bool,
+) -> None:
+    '''
+    Estimates --loci-per-chunk.
+
+    Estimate optimal --loci-per-chunk to maximize parallelization within
+    memory limits given certain variables about the input and the
+    system.
+    '''
+    logger: Logger = ctx.obj['logger']
+
+    if filtration is None and (
+        None in (p_filtration, region_filtration)
+        or True in (p_filtration, region_filtration)
+    ):
+        error = (
+            'Define --filtration, a float from 0 to 1 for the proportion of'
+            ' rows left after region or p-value filtration, if'
+            ' region_filtration or p_filtration is included'
+        )
+        logger.error(error)
+        raise ValueError(error)
+    if filtration is None:
+        filtration = 1
+    datum_bytes = torch.ones(1, dtype=DTYPE).element_size()
+
+    if target_bytes is None:
+        if cpu or not torch.cuda.is_available():
+            target_bytes = psutil.virtual_memory().total * 0.8
+            logger.info(
+                'Target memory not supplied. Inferred target of {0} MB of'
+                ' CPU memory (80% of detected)',
+                target_bytes / 1_000_000,
+            )
+        else:
+            target_bytes = torch.cuda.mem_get_info()[0] * 0.8
+            logger.info(
+                'Target memory not supplied. Inferred target of {0} MB of'
+                ' CUDA memory (80% of detected)',
+                target_bytes / 1_000_000,
+            )
+    if None in (samples, mt_count, gt_count, covar_count):
+        logger.info(
+            'Data size not complete. Inferring from data in working directory.'
+        )
+        data_path = os.path.join(data['root_path'], data['input_dir'])
+        dataframes = read_dataframes(data_path, **logger)
+        M = dataframes[data['meth_file']]
+        G = dataframes[data['gene_file']]
+        C = dataframes[data['covar_file']]
+        if samples is None:
+            samples = len(C)
+            logger.info('Samples not provided. Inferred {0}.')
+        if mt_count is None:
+            mt_count = len(M)
+            logger.info('Methylation loci count not provided. Inferred {0}.')
+        if gt_count is None:
+            gt_count = len(G)
+            logger.info(
+                'Gene expression loci count not provided. Inferred {0}.'
+            )
+        if covar_count is None:
+            covar_count = len(C.columns)
+            logger.info('Covariate count not provided. Inferred {0}.')
+
+    logger.info('Estimated loci per chunk:')
+    logger.info('Full output, p only, p filtration, region filtration')
+    for (
+        full_output_,
+        p_only_,
+        p_filtration_,
+        region_filtration_,
+    ) in itertools.product((False, True), repeat=4):
+        if (
+            (full_output is not None and full_output != full_output_)
+            or (p_only is not None and p_only != p_only_)
+            or (p_filtration is not None and p_filtration != p_filtration_)
+            or (
+                region_filtration is not None
+                and region_filtration != region_filtration_
+            )
+        ):
+            continue
+        estimate = estimate_loci_per_chunk(
+            target_bytes,
+            samples,
+            mt_count,
+            gt_count,
+            covar_count,
+            datum_bytes,
+            filtration,
+            full_output_,
+            p_only_,
+            p_filtration_,
+            region_filtration_,
+        )
+        if estimate >= gt_count:
+            estimate = 'No chunking needed'
+        elif estimate < 1:
+            estimate = 'Not possible'
+        else:
+            estimate = f'{math.floor(estimate)} loci per chunk'
+        logger.info(
+            '{0}, {1}, {2}, {3}: {4}',
+            full_output_,
+            p_only_,
+            p_filtration_,
+            region_filtration_,
+            estimate,
+        )
 
 
 def start() -> None:
