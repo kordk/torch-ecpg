@@ -167,10 +167,11 @@ def regression_full(
             if region == 'all':
                 B = XtXi_Xt.matmul(Y)
                 E = (Y.unsqueeze(1) - X.bmm(B.unsqueeze(2))).squeeze(2)
+                del Y
                 scalars = (torch.sum(E * E, 1)).view((-1, 1)).sqrt() / dft_sqrt
+                del E
                 S = XtXi_diag_sqrt * scalars
-                T = B / S
-                P = prob(T)
+                del scalars
             else:
                 if region == 'cis':
                     region_indices = (
@@ -199,8 +200,11 @@ def regression_full(
                 E = (
                     Y.unsqueeze(1) - X[region_indices].bmm(B.unsqueeze(2))
                 ).squeeze(2)
+                del Y
                 scalars = (torch.sum(E * E, 1)).view((-1, 1)).sqrt() / dft_sqrt
+                del E
                 S = XtXi_diag_sqrt[region_indices] * scalars
+                del scalars
 
                 region_indices_list.append(region_indices)
 
@@ -229,9 +233,12 @@ def regression_full(
                 index % loci_per_chunk == 0 or index == gt_count
             ):
                 gt_sites = gt_site_names[last_index:index].repeat(output_sizes)
+                if filtration:
+                    del output_sizes[:]
                 last_index = index
                 if region != 'all':
                     region_mask = torch.cat(region_indices_list).cpu().numpy()
+                    del region_indices_list[:]
                 if p_thresh is None:
                     if region == 'all':
                         mt_sites = numpy.tile(mt_site_names, len(results))
@@ -241,6 +248,7 @@ def regression_full(
                         ]
                 else:
                     mask = torch.cat(p_indices_list).cpu().numpy()
+                    del p_indices_list[:]
                     if region == 'all':
                         mt_sites = numpy.tile(mt_site_names, len(results))[
                             mask
@@ -251,16 +259,6 @@ def regression_full(
                         ][mask]
                 index_chunk = [gt_sites, mt_sites]
 
-                if index == loci_per_chunk and allocated_memory:
-                    allocated_memory = torch.cuda.memory_allocated()
-                    logger.info(
-                        'CUDA device memory: At the peak of chunk 1, {0} MB'
-                        ' allocated out of {1} MB total. If needed, increase'
-                        ' --loci-per-chunk accordingly',
-                        allocated_memory / 1_000_000,
-                        total_memory / 1_000_000,
-                    )
-
                 file_name = str(logger.current_count + 1) + '.csv'
                 file_path = os.path.join(output_dir, file_name)
                 out = pandas.DataFrame(
@@ -268,6 +266,16 @@ def regression_full(
                     index=index_chunk,
                     columns=columns,
                 )
+                if index == loci_per_chunk and allocated_memory:
+                    torch.cuda.empty_cache()
+                    allocated_memory = torch.cuda.max_memory_allocated()
+                    logger.info(
+                        'CUDA device memory, chunk 1: {0} MB allocated out of'
+                        ' {1} MB total. If needed, increase --loci-per-chunk'
+                        ' accordingly',
+                        allocated_memory / 1_000_000,
+                        total_memory / 1_000_000,
+                    )
                 out.index.set_names(index_names, inplace=True)
                 logger.count(
                     'Saving part {i}/{0}:',
@@ -282,16 +290,10 @@ def regression_full(
                 inner_logger.time(
                     'Completed chunk {i}/{0} in {l} seconds.'
                     ' Average chunk time: {a} seconds',
-                    gt_count,
+                    chunk_count,
                 )
 
-                results.clear()
-                if filtration:
-                    output_sizes.clear()
-                if p_thresh is not None:
-                    p_indices_list.clear()
-                if region != 'all':
-                    region_indices_list.clear()
+                del results[:]
 
         logger.time('Looped over methylation loci in {l} seconds')
         logger.time('Calculated regression_full in {t} seconds')

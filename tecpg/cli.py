@@ -13,12 +13,19 @@ from .gtp import save_gtp_data
 from .helper import initialize_dir
 from .import_data import read_dataframes, save_dataframes
 from .logger import Logger
-from .pearson_full import (pearson_chunk_save_tensor, pearson_chunk_tensor,
-                           pearson_full_tensor)
+from .pearson_full import (
+    pearson_chunk_save_tensor,
+    pearson_chunk_tensor,
+    pearson_full_tensor,
+)
 from .regression_full import regression_full
 from .regression_single import regression_single
 from .test_data import generate_data
-from .tool import estimate_loci_per_chunk
+from .tool import (
+    estimate_constants_bytes,
+    estimate_loci_per_chunk_e_peak,
+    estimate_loci_per_chunk_results_peak,
+)
 
 
 @click.group()
@@ -624,20 +631,43 @@ def chunks(
         C = dataframes[data['covar_file']]
         if samples is None:
             samples = len(C)
-            logger.info('Samples not provided. Inferred {0}.')
+            logger.info('Samples not provided. Inferred {0}.', samples)
         if mt_count is None:
             mt_count = len(M)
-            logger.info('Methylation loci count not provided. Inferred {0}.')
+            logger.info(
+                'Methylation loci count not provided. Inferred {0}.', mt_count
+            )
         if gt_count is None:
             gt_count = len(G)
             logger.info(
-                'Gene expression loci count not provided. Inferred {0}.'
+                'Gene expression loci count not provided. Inferred {0}.',
+                gt_count,
             )
         if covar_count is None:
             covar_count = len(C.columns)
-            logger.info('Covariate count not provided. Inferred {0}.')
+            logger.info(
+                'Covariate count not provided. Inferred {0}.', covar_count
+            )
 
-    logger.info('Estimated loci per chunk:')
+    logger.info(
+        'Estimated loci per chunk for target peak memory usage of {0} bytes:',
+        target_bytes,
+    )
+    if region_filtration is not True:
+        constants_bytes = estimate_constants_bytes(
+            samples, mt_count, gt_count, covar_count, datum_bytes, False
+        )
+        logger.info(
+            '{0} bytes for constants (without region filtration)',
+            constants_bytes,
+        )
+    if region_filtration is not False:
+        constants_bytes = estimate_constants_bytes(
+            samples, mt_count, gt_count, covar_count, datum_bytes, True
+        )
+        logger.info(
+            '{0} bytes for constants (with region filtration)', constants_bytes
+        )
     logger.info('Full output, p only, p filtration, region filtration')
     for (
         full_output_,
@@ -655,7 +685,7 @@ def chunks(
             )
         ):
             continue
-        estimate = estimate_loci_per_chunk(
+        estimate_e = estimate_loci_per_chunk_e_peak(
             target_bytes,
             samples,
             mt_count,
@@ -668,19 +698,41 @@ def chunks(
             p_filtration_,
             region_filtration_,
         )
+        estimate_results = estimate_loci_per_chunk_results_peak(
+            target_bytes,
+            samples,
+            mt_count,
+            gt_count,
+            covar_count,
+            datum_bytes,
+            filtration,
+            full_output_,
+            p_only_,
+            region_filtration_,
+        )
+
+        if estimate_e < estimate_results:
+            estimate = estimate_e
+            peak = 'Peak memory after scalars and E'
+        else:
+            estimate = estimate_results
+            peak = 'Peak memory after results concatenation'
+
         if estimate >= gt_count:
             estimate = 'No chunking needed'
         elif estimate < 1:
             estimate = 'Not possible'
         else:
             estimate = f'{math.floor(estimate)} loci per chunk'
+
         logger.info(
-            '{0}, {1}, {2}, {3}: {4}',
+            '{0}, {1}, {2}, {3}: {4}, {5}',
             full_output_,
             p_only_,
             p_filtration_,
             region_filtration_,
             estimate,
+            peak,
         )
 
 
