@@ -14,7 +14,7 @@ from .logger import Logger
 from .test_data import generate_data
 
 
-def create_prob(df: int, device: torch.device, dtype: torch.dtype):
+def create_studentt_p(df: int, device: torch.device, dtype: torch.dtype):
     offset = torch.tensor(
         -0.5 * math.log(df)
         - 0.5 * math.log(math.pi)
@@ -27,6 +27,17 @@ def create_prob(df: int, device: torch.device, dtype: torch.dtype):
 
     def prob(value: torch.Tensor):
         return (offset - torch.log1p(value ** 2.0 / df) * scalar).exp()
+
+    return prob
+
+
+def create_normal_p(device: torch.device, dtype: torch.dtype):
+    scalar = (
+        torch.tensor(2, device=device, dtype=dtype).sqrt().reciprocal().neg()
+    )
+
+    def prob(value: torch.Tensor) -> torch.Tensor:
+        return torch.erf(scalar * value.abs()) + 1
 
     return prob
 
@@ -77,7 +88,8 @@ def regression_full(
     logger.info('Running with {0} degrees of freedom', df)
 
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
-    prob = create_prob(df, device, dtype)
+    # prob = create_studentt_p(df, device, dtype)
+    normal_p = create_normal_p(device, dtype)
     G_np = G.to_numpy()
     index_names = ['mt_site', 'gt_site']
     if p_only:
@@ -212,7 +224,7 @@ def regression_full(
                 B = B[:, 1:2]
                 S = S[:, 1:2]
             T = B / S
-            P = prob(T)
+            P = normal_p(T)
 
             if p_thresh is not None:
                 p_indices = P[:, 0 if methylation_only else 1] <= p_thresh
@@ -357,7 +369,7 @@ def test_prob() -> None:
     device = torch.device('cuda')
     dtype = DTYPE
     prob_one = lambda t: torch.distributions.StudentT(df).log_prob(t).exp()
-    prob_two = create_prob(df, device, dtype)
+    prob_two = create_studentt_p(df, device, dtype)
     test = torch.rand((100_000_000, 4), device=device, dtype=dtype)
     total_time_one = 0
     total_time_two = 0
