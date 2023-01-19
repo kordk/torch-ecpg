@@ -224,7 +224,8 @@ def corr(
 
 
 @run.command()
-@click.option('-l', '--loci-per-chunk', show_default=True, type=int)
+@click.option('-g', '--gene-loci-per-chunk', show_default=True, type=int)
+@click.option('-m', '--meth-loci-per-chunk', show_default=True, type=int)
 @click.option('-p', '--p-thresh', show_default=True, type=float)
 @click.option(
     '--all', 'region', show_default=True, flag_value='all', default=True
@@ -247,7 +248,8 @@ def corr(
 @click.pass_context
 def mlr(
     ctx: click.Context,
-    loci_per_chunk: Optional[int],
+    gene_loci_per_chunk: Optional[int],
+    meth_loci_per_chunk: Optional[int],
     p_thresh: Optional[float],
     region: str,
     window: Optional[int],
@@ -256,6 +258,9 @@ def mlr(
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
+    chunking = (
+        gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
+    )
     data_path = os.path.join(data['root_path'], data['input_dir'])
     output_path = os.path.join(data['root_path'], data['output_dir'])
 
@@ -289,11 +294,13 @@ def mlr(
 
     args = [M, G, C]
     args.extend((None, None) if region == 'all' else (M_annot, G_annot))
-    args.extend([region, window, loci_per_chunk, p_thresh])
-    args.append(None if loci_per_chunk is None else output_path)
+    args.extend(
+        [region, window, gene_loci_per_chunk, meth_loci_per_chunk, p_thresh]
+    )
+    args.append(None if not chunking else output_path)
     args.extend([methylation_only, p_only])
     output = regression_full(*args, **logger)
-    if loci_per_chunk is None:
+    if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)
 
 
@@ -560,6 +567,7 @@ def init(ctx: click.Context, root_dirs: List[str]) -> None:
 @click.option('-m', '--mt-count', type=int)
 @click.option('-g', '--gt-count', type=int)
 @click.option('-c', '--covar-count', type=int)
+@click.option('-M', '--meth-loci-per-chunk', type=int)
 @click.option('-F', '--filtration', type=float)
 @click.option('-f', '--full-output', type=bool)
 @click.option('-P', '--p-only', type=bool)
@@ -574,6 +582,7 @@ def chunks(
     mt_count: Optional[int],
     gt_count: Optional[int],
     covar_count: Optional[int],
+    meth_loci_per_chunk: Optional[int],
     filtration: Optional[float],
     full_output: Optional[bool],
     p_only: Optional[bool],
@@ -582,9 +591,9 @@ def chunks(
     cpu: bool,
 ) -> None:
     '''
-    Estimates --loci-per-chunk.
+    Estimates --gene-loci-per-chunk.
 
-    Estimate optimal --loci-per-chunk to maximize parallelization within
+    Estimate optimal --gene-loci-per-chunk to maximize parallelization within
     memory limits given certain variables about the input and the
     system.
     '''
@@ -648,6 +657,9 @@ def chunks(
             logger.info(
                 'Covariate count not provided. Inferred {0}.', covar_count
             )
+
+    if meth_loci_per_chunk:
+        mt_count = meth_loci_per_chunk
 
     logger.info(
         'Estimated loci per chunk for target peak memory usage of {0} bytes:',
