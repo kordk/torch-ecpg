@@ -272,10 +272,10 @@ def mlr(
     if region != 'all':
         annot_path = os.path.join(data['root_path'], data['annot_dir'])
         M_annot = pandas.read_csv(
-            os.path.join(annot_path, data['meth_annot']), sep='\t'
+            os.path.join(annot_path, data['meth_annot']), sep=None
         ).set_index('name')
         G_annot = pandas.read_csv(
-            os.path.join(annot_path, data['gene_annot']), sep='\t'
+            os.path.join(annot_path, data['gene_annot']), sep=None
         ).set_index('name')
 
     if region in ['cis', 'distal'] and window is None:
@@ -371,14 +371,14 @@ def mlr_single(
         annot_path = os.path.join(data['root_path'], data['annot_dir'])
         M_annot = (
             pandas.read_csv(
-                os.path.join(annot_path, data['meth_annot']), sep='\t'
+                os.path.join(annot_path, data['meth_annot']), sep=None
             )
             .set_index('name')
             .drop(['chromEnd', 'score', 'strand'])
         )
         G_annot = (
             pandas.read_csv(
-                os.path.join(annot_path, data['gene_annot']), sep='\t'
+                os.path.join(annot_path, data['gene_annot']), sep=None
             )
             .set_index('name')
             .drop(['chromEnd', 'score', 'strand'])
