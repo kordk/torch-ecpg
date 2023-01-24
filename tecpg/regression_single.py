@@ -134,7 +134,7 @@ def regression_single(
     index = pandas.MultiIndex(
         levels=[[], []],
         codes=[[], []],
-        names=['gt_site', 'mt_site'],
+        names=['gt_id', 'mt_id'],
     )
     categories = (
         ['mt'] if methylation_only else (['const', 'mt'] + C.columns.to_list())

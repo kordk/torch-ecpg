@@ -118,7 +118,7 @@ def regression_full(
         G_chrom, G_pos = G_annot.to_numpy().T
         M_chrom, M_pos = M_annot.to_numpy().T
 
-    index_names = ['mt_site', 'gt_site']
+    index_names = ['mt_id', 'gt_id']
     if p_only:
         if methylation_only:
             columns = ['mt_p']
