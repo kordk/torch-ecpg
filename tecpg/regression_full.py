@@ -10,6 +10,7 @@ import torch
 from colorama import Fore as colors
 
 from .config import DTYPE, get_device
+from .helper import trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
 from .test_data import generate_data
@@ -83,6 +84,27 @@ def regression_full(
         logger.error(error)
         raise ValueError(error)
 
+    if region != 'all':
+        logger.info('Initializing region filtration')
+        G_annot = (
+            G_annot.drop(columns=['chromEnd', 'score', 'strand'])
+            .reindex(G.index)
+            .replace({'X': -1, 'Y': -2})
+            .dropna()
+        )
+        M_annot = (
+            M_annot.drop(columns=['chromEnd', 'score', 'strand'])
+            .reindex(M.index)
+            .replace({'X': -1, 'Y': -2})
+            .dropna()
+        )
+
+        trim_dataframes([G_annot, G], **logger)
+        trim_dataframes([M_annot, M], **logger)
+
+        G_chrom, G_pos = G_annot.to_numpy().T.astype(int)
+        M_chrom, M_pos = M_annot.to_numpy().T.astype(int)
+
     logger.info('Initializing regression variables')
     device = get_device(**logger)
     dtype = DTYPE
@@ -104,20 +126,6 @@ def regression_full(
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
 
-    if region != 'all':
-        G_annot = (
-            G_annot.drop(columns=['chromEnd', 'score', 'strand'])
-            .reindex(G.index)
-            .replace({'X': -1, 'Y': -2})
-        )
-        M_annot = (
-            M_annot.drop(columns=['chromEnd', 'score', 'strand'])
-            .reindex(M.index)
-            .replace({'X': -1, 'Y': -2})
-        )
-        G_chrom, G_pos = G_annot.to_numpy().T
-        M_chrom, M_pos = M_annot.to_numpy().T
-
     index_names = ['gt_id', 'mt_id']
     if p_only:
         if methylation_only:
@@ -136,8 +144,8 @@ def regression_full(
         ]
 
     if region != 'all':
-        G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int)
-        G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int)
+        G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int8)
+        G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int32)
 
     if meth_loci_per_chunk is None:
         Ct: torch.Tensor = torch.tensor(
@@ -194,21 +202,21 @@ def regression_full(
             if region != 'all':
                 if meth_loci_per_chunk is None:
                     M_chrom_t = torch.tensor(
-                        M_chrom, device=device, dtype=torch.int
+                        M_chrom, device=device, dtype=torch.int8
                     )
                     M_pos_t = torch.tensor(
-                        M_pos, device=device, dtype=torch.int
+                        M_pos, device=device, dtype=torch.int32
                     )
                 else:
                     M_chrom_t = torch.tensor(
                         M_chrom[start_index:end_index],
                         device=device,
-                        dtype=torch.int,
+                        dtype=torch.int8,
                     )
                     M_pos_t = torch.tensor(
                         M_pos[start_index:end_index],
                         device=device,
-                        dtype=torch.int,
+                        dtype=torch.int32,
                     )
 
             Mt: torch.Tensor = torch.tensor(

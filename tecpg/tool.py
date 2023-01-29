@@ -93,6 +93,7 @@ def estimate_constants_bytes(
         + 2 * mt_count * samples * datum_bytes * (covar_count + 2)
     )
     if region_filtration:
-        constants_bytes += 2 * datum_bytes * mt_count * gt_count
+        # 4 bytes for int32 pos and 1 byte for int8 chrom
+        constants_bytes += 5 * mt_count * gt_count
 
     return constants_bytes

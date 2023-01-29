@@ -5,7 +5,6 @@ from typing import List, Tuple
 import numpy as np
 import pandas
 import requests
-
 from .logger import Logger
 
 
@@ -56,7 +55,7 @@ def initialize_dir(directory: str, *, logger: Logger = Logger()) -> None:
 
 
 def read_csv(
-    file_name: str, sep: str = ',', logger: Logger = Logger()
+    file_name: str, sep: str = ',', *, logger: Logger = Logger()
 ) -> pandas.DataFrame:
     """
     Reads file_name as a csv with separator sep and returns
@@ -69,3 +68,20 @@ def read_csv(
         '[tab]' if sep == '\t' else sep,
     )
     return pandas.read_csv(file_name, sep=sep, index_col=[0])
+
+
+def trim_dataframes(
+    dataframes: List[pandas.DataFrame],
+    *,
+    logger: Logger = Logger(),
+    **drop_kwargs,
+) -> None:
+    if len(dataframes) < 2:
+        logger.warning('Skipped trimming dataframes: less than two inputs')
+        return
+
+    indices = [set(df.index) for df in dataframes]
+    shared = indices[0].intersection(*indices[1:])
+
+    for df, index in zip(dataframes, indices):
+        df.drop(index - shared, inplace=True, **drop_kwargs)
