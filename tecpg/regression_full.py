@@ -62,6 +62,71 @@ def regression_full(
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
+    '''
+    Calculates the multiple linear regression of the input dataframes M,
+    G, and C, being methylation beta values, gene expression values, and
+    covariates using torch. This is done for every pair of methylation
+    id and gene id. The regression formula is G ~ M + C1 + C2 + ...
+
+    The p-values are the Student's T CDF function evaluated on the t
+    statistic for each regression. Torch does not currently support the
+    Student's T CDF function or any function that would help to
+    implement it in python. Instead, the normal distribution CDF is used
+    as an approximation of the Student's T CDF. For more degrees of
+    freedom (ie. more samples, fewer covariates), this approximation
+    is more accurate.
+
+    M_annot and G_annot are annotation files that provide the positions
+    of each methylation and gene expression id. They are optional and
+    only required for region filtration.
+
+    Region filtration filters the input by the distance between the
+    methylation id and the gene expression id for each regression. Cis
+    filtration only allows regressions where the ids are within a
+    specified distance, the window, on the same chromosome. Distal
+    analyses only allow regressions with ids with a distance greater
+    than the window on the same chromosome. Trans analyses only allow
+    regressions with methylation and gene expression ids on the same
+    chromosome. The last region filtration mode, all, does not filter
+    by region.
+
+    P-value filtration filters the output of the regression by only
+    including regressions with a p-value below p_thresh.
+
+    For larger inputs, one may encounter memory limits. If this is the
+    case, there are two ways of chunking the input data to avoid these
+    limits: methylation chunking and gene expression chunking. Specify
+    the number of meth_loci_per_chunk and gene_loci_per_chunk. Gene
+    expression chunking is less detrimental to performance than
+    methylation chunking, but both shuold be avoided as they sacrifice
+    parallelization and speed. Both chunking methods are optional, and
+    they can be combined together as well. Use the chunks command to
+    estimate how many gene_loci_per_chunk to use for given settings. If
+    no chunking is used, the output dataframe is returned. If chunking
+    is used, chunks are saved to output files in output_dir.
+
+    The methylation_only boolean option which defaults to true
+    determines whether only methylation results should be saved in the
+    output. If false, the intercept, methylation, and covariate results
+    are saved. Regardless of this value, the intercept and covariates
+    are used in the regression calculation. This parameter only affects
+    the inclusion of output data.
+
+    The p_only boolean option which defaults to false determines whether
+    to include the estimate, standard error, Student's T statistic, and
+    p-value (if false) or just the p-value (if true) for a faster saving
+    time and lower output size.
+
+    The file_format parameter is a string that determines the file name
+    of each chunk saved in output_dir based on a formatting string with
+    the parameters meth_chunk for the methylation chunk number and
+    gene_chunk for the gene expression chunk number. The string is
+    formatted using:
+        file_format.format(
+            meth_chunk=meth_index_str,
+            gene_chunk=gene_index_str,
+        )
+    '''
     chunking = (
         gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
     )
