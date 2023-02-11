@@ -92,7 +92,9 @@ def pearson_full_tensor(
         'Finished calculating pearson_full_tensor in {t} seconds.', ignore=True
     )
     if flatten:
-        return corr_pd.stack()
+        corr_pd = corr_pd.stack()
+        corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
+        return corr_pd
     return corr_pd
 
 
@@ -168,7 +170,9 @@ def pearson_chunk_tensor(
     logger.time('Calculated pearson_chunk_tensor in {t} seconds')
 
     if flatten:
-        return corr_pd.stack()
+        corr_pd = corr_pd.stack()
+        corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
+        return corr_pd
     return corr_pd
 
 
@@ -237,10 +241,11 @@ def pearson_chunk_save_tensor(
                 file_name = str(logger.current_count + 1) + '.csv'
                 file_path = os.path.join(output_dir, file_name)
                 logger.count('Saving part {i}/{0}: ', save_chunk_count)
+                if flatten:
+                    corr_pd = corr_pd.stack()
+                    corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
                 pool.apply_async(
-                    save_dataframe_part,
-                    (corr_pd.stack() if flatten else corr_pd, file_path),
-                    dict(logger),
+                    save_dataframe_part, (corr_pd, file_path), dict(logger)
                 )
                 del corr_pd
                 corr_pd = pandas.DataFrame()
@@ -274,10 +279,11 @@ def pearson_chunk_save_tensor(
         file_name = str(logger.current_count + 1) + '.csv'
         file_path = os.path.join(output_dir, file_name)
         logger.count('Saving part {i}/{0}: ', save_chunk_count)
+        if flatten:
+            corr_pd = corr_pd.stack()
+            corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
         pool.apply_async(
-            save_dataframe_part,
-            (corr_pd.stack() if flatten else corr_pd, file_path),
-            dict(logger),
+            save_dataframe_part, (corr_pd, file_path), dict(logger)
         )
 
         pool.close()
