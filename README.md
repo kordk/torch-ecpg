@@ -79,3 +79,8 @@ This image from https://en.wikipedia.org/wiki/Student%27s_t-distribution shows t
 ## Documentation
 
 Currently, the README and the `tecpg ... --help` commands serve as documentation. Within the code, the function docstrings provide a lot of information about the function. The extensive type hints give added insight into the purpose of functions.
+
+## Acknowledgements
+
+This work was partially supported by an NIH NCI MERIT award (R37, CA233774, PI: Kober) and Cancer Center Support Grant (P30, CA082103, Co-I: Olshen).
+
