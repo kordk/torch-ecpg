@@ -84,3 +84,8 @@ Currently, the README and the `tecpg ... --help` commands serve as documentation
 
 This work was partially supported by an NIH NCI MERIT award (R37, CA233774, PI: Kober) and Cancer Center Support Grant (P30, CA082103, Co-I: Olshen).
 
+To cite this tool, please refer to this repostiory and the pre-print available at bioRxiv (https://www.biorxiv.org/content/10.1101/2023.03.07.531597v1):
+
+Kober KM, Berger LG, Roy R, Olshen A. Torch-eCpG: A fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. bioRxiv. 2023:2023.2003.2007.531597.
+
+
