@@ -28,7 +28,7 @@ def create_studentt_p(df: int, device: torch.device, dtype: torch.dtype):
     scalar = torch.tensor(0.5 * (df + 1.0), device=device, dtype=dtype)
 
     def prob(value: torch.Tensor):
-        return (offset - torch.log1p(value ** 2.0 / df) * scalar).exp()
+        return (offset - torch.log1p(value**2.0 / df) * scalar).exp()
 
     return prob
 
@@ -51,7 +51,9 @@ def regression_full(
     M_annot: Optional[pandas.DataFrame] = None,
     G_annot: Optional[pandas.DataFrame] = None,
     region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
-    window: Optional[int] = None,
+    window_base: Optional[int] = None,
+    downstream: Optional[int] = None,
+    upstream: Optional[int] = None,
     gene_loci_per_chunk: Optional[int] = None,
     meth_loci_per_chunk: Optional[int] = None,
     p_thresh: Optional[float] = None,
@@ -82,16 +84,16 @@ def regression_full(
 
     Region filtration filters the input by the distance between the
     methylation id and the gene expression id for each regression. Cis
-    filtration only allows regressions where the ids are within a
+    filtration only allows regressions where the ids are within
     specified distance, the window, on the same chromosome. Distal
-    analyses only allow regressions with ids with a distance greater
+    analyses only allow regressions with ids with  distance greater
     than the window on the same chromosome. Trans analyses only allow
     regressions with methylation and gene expression ids on the same
     chromosome. The last region filtration mode, all, does not filter
     by region.
 
     P-value filtration filters the output of the regression by only
-    including regressions with a p-value below p_thresh.
+    including regressions with  p-value below p_thresh.
 
     For larger inputs, one may encounter memory limits. If this is the
     case, there are two ways of chunking the input data to avoid these
@@ -114,11 +116,11 @@ def regression_full(
 
     The p_only boolean option which defaults to false determines whether
     to include the estimate, standard error, Student's T statistic, and
-    p-value (if false) or just the p-value (if true) for a faster saving
+    p-value (if false) or just the p-value (if true) for  faster saving
     time and lower output size.
 
-    The file_format parameter is a string that determines the file name
-    of each chunk saved in output_dir based on a formatting string with
+    The file_format parameter is  string that determines the file name
+    of each chunk saved in output_dir based on  formatting string with
     the parameters meth_chunk for the methylation chunk number and
     gene_chunk for the gene expression chunk number. The string is
     formatted using:
@@ -144,17 +146,22 @@ def regression_full(
         )
         logger.error(error)
         raise ValueError(error)
-    if region in ['cis', 'distal'] and window is None:
-        error = f'Window is None for region filtration {region}'
+    if region in ['cis', 'distal'] and (
+        window_base is None or downstream is None or upstream is None
+    ):
+        error = (
+            f'Region filtration {region} requires window_base, downstream, and'
+            ' upstream not to be None'
+        )
         logger.error(error)
         raise ValueError(error)
 
     if region != 'all':
         logger.info('Initializing region filtration')
         G_annot = (
-            G_annot.drop(columns=['chromEnd', 'score', 'strand'])
+            G_annot.drop(columns=['chromEnd', 'score'])
             .reindex(G.index)
-            .replace({'X': -1, 'Y': -2})
+            .replace({'X': -1, 'Y': -2, '+': 1, '-': -1})
             .dropna()
         )
         M_annot = (
@@ -167,7 +174,7 @@ def regression_full(
         trim_dataframes([G_annot, G], **logger)
         trim_dataframes([M_annot, M], **logger)
 
-        G_chrom, G_pos = G_annot.to_numpy().T.astype(int)
+        G_chrom, G_pos, G_strand = G_annot.to_numpy().T.astype(int)
         M_chrom, M_pos = M_annot.to_numpy().T.astype(int)
 
     logger.info('Initializing regression variables')
@@ -211,6 +218,7 @@ def regression_full(
     if region != 'all':
         G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int8)
         G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int32)
+        G_strand_t = torch.tensor(G_strand, device=device, dtype=torch.int8)
 
     if meth_loci_per_chunk is None:
         Ct: torch.Tensor = torch.tensor(
@@ -299,8 +307,10 @@ def regression_full(
                 total_memory = torch.cuda.get_device_properties(0).total_memory
                 torch.cuda.empty_cache()
                 mc_logger.info(
-                    'CUDA device memory: {0} MB allocated by constants out of'
-                    ' {1} MB total',
+                    (
+                        'CUDA device memory: {0} MB allocated by constants out'
+                        ' of {1} MB total'
+                    ),
                     allocated_memory / 1_000_000,
                     total_memory / 1_000_000,
                 )
@@ -321,24 +331,23 @@ def regression_full(
                     S = XtXi_diag_sqrt * scalars
                     del scalars
                 else:
-                    if region == 'cis':
+                    if region in ('cis', 'distal'):
+                        # The None in the index of the G tensors makes
+                        # the shape of the tensor suitable to broadcast
+                        # to the shape of the M tensors.
                         region_indices = (
                             (G_chrom_t[index - 1, None] == M_chrom_t)
                             .logical_and(
-                                G_pos_t[index - 1, None] < M_pos_t + window
+                                G_strand_t[index - 1, None]
+                                * (window_base - upstream)
+                                < G_pos_t[index - 1, None] - M_pos_t
                             )
                             .logical_and(
-                                G_pos_t[index - 1, None] > M_pos_t - window
-                            )
-                        )
-                    elif region == 'distal':
-                        region_indices = (
-                            G_chrom_t[index - 1, None] == M_chrom_t
-                        ).logical_and(
-                            (
-                                G_pos_t[index - 1, None] < M_pos_t - window
-                            ).logical_or(
-                                G_pos_t[index - 1, None] > M_pos_t + window
+                                G_pos_t[index - 1, None] - M_pos_t
+                                < (
+                                    G_strand_t[index - 1, None]
+                                    * (window_base + downstream)
+                                )
                             )
                         )
                     elif region == 'trans':
@@ -430,9 +439,11 @@ def regression_full(
                         torch.cuda.empty_cache()
                         allocated_memory = torch.cuda.max_memory_allocated()
                         mc_logger.info(
-                            'CUDA device memory, chunk 1: {0} MB allocated out'
-                            ' of {1} MB total. If needed, increase'
-                            ' --loci-per-chunk accordingly',
+                            (
+                                'CUDA device memory, chunk 1: {0} MB allocated'
+                                ' out of {1} MB total. If needed, increase'
+                                ' --loci-per-chunk accordingly'
+                            ),
                             allocated_memory / 1_000_000,
                             total_memory / 1_000_000,
                         )
@@ -448,8 +459,10 @@ def regression_full(
                     )
 
                     inner_logger.time(
-                        'Completed chunk {i}/{0} in {l} seconds.'
-                        ' Average chunk time: {a} seconds',
+                        (
+                            'Completed chunk {i}/{0} in {l} seconds.'
+                            ' Average chunk time: {a} seconds'
+                        ),
                         chunk_count,
                     )
 
@@ -518,8 +531,10 @@ def regression_full(
                     )
 
                     inner_logger.time(
-                        'Completed methylation chunk {0}/{1} in {l} seconds.'
-                        ' Average chunk time: {a} seconds',
+                        (
+                            'Completed methylation chunk {0}/{1} in {l}'
+                            ' seconds. Average chunk time: {a} seconds'
+                        ),
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )

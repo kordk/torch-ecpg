@@ -8,9 +8,19 @@ import pandas
 import psutil
 import torch
 
-from .config import CIS_WINDOW, DISTAL_WINDOW, DTYPE, data, using_gpu
+from .config import (
+    DEFAULT_CIS_DOWNSTREAM,
+    DEFAULT_CIS_UPSTREAM,
+    DEFAULT_CIS_WINDOW_BASE,
+    DEFAULT_DISTAL_DOWNSTREAM,
+    DEFAULT_DISTAL_UPSTREAM,
+    DEFAULT_DISTAL_WINDOW_BASE,
+    DTYPE,
+    data,
+    using_gpu,
+)
 from .gtp import save_gtp_data
-from .helper import initialize_dir
+from .helper import default_region_parameter, initialize_dir
 from .import_data import read_dataframes, save_dataframes
 from .logger import Logger
 from .pearson_full import (
@@ -230,10 +240,12 @@ def corr(
 @click.option(
     '--all', 'region', show_default=True, flag_value='all', default=True
 )
-@click.option('-w', '--window', show_default=True, type=int)
 @click.option('--cis', 'region', show_default=True, flag_value='cis')
 @click.option('--distal', 'region', show_default=True, flag_value='distal')
 @click.option('--trans', 'region', show_default=True, flag_value='trans')
+@click.option('-w', '--window-base', show_default=True, type=int)
+@click.option('-d', '--downstream', show_default=True, type=int)
+@click.option('-u', '--upstream', show_default=True, type=int)
 @click.option(
     '--full-output',
     '-f',
@@ -252,7 +264,9 @@ def mlr(
     meth_loci_per_chunk: Optional[int],
     p_thresh: Optional[float],
     region: str,
-    window: Optional[int],
+    window_base: Optional[int],
+    downstream: Optional[int],
+    upstream: Optional[int],
     full_output: bool,
     p_only: bool,
 ) -> None:
@@ -278,27 +292,43 @@ def mlr(
             os.path.join(annot_path, data['gene_annot']), sep=None
         ).set_index('name')
 
-    if region in ['cis', 'distal'] and window is None:
-        logger.info('No region window provided. Resorting to default.')
-        if region == 'cis':
-            logger.info(
-                'Using default window for cis of {0} bases', CIS_WINDOW
-            )
-            window = CIS_WINDOW
-        if region == 'distal':
-            logger.info(
-                'Using default window for distal of {0} bases', DISTAL_WINDOW
-            )
-            window = DISTAL_WINDOW
+    window_base = default_region_parameter(
+        'window_base',
+        window_base,
+        region,
+        {'cis': DEFAULT_CIS_WINDOW_BASE, 'distal': DEFAULT_DISTAL_WINDOW_BASE},
+    )
+    downstream = default_region_parameter(
+        'downstream',
+        downstream,
+        region,
+        {'cis': DEFAULT_CIS_DOWNSTREAM, 'distal': DEFAULT_DISTAL_DOWNSTREAM},
+    )
+    upstream = default_region_parameter(
+        'upstream',
+        upstream,
+        region,
+        {'cis': DEFAULT_CIS_UPSTREAM, 'distal': DEFAULT_DISTAL_UPSTREAM},
+    )
+
     methylation_only = not full_output
 
     args = [M, G, C]
     args.extend((None, None) if region == 'all' else (M_annot, G_annot))
     args.extend(
-        [region, window, gene_loci_per_chunk, meth_loci_per_chunk, p_thresh]
+        [
+            region,
+            window_base,
+            downstream,
+            upstream,
+            gene_loci_per_chunk,
+            meth_loci_per_chunk,
+            p_thresh,
+        ]
     )
-    args.append(None if not chunking else output_path)
+    args.append(None if not chunking else output_path)  # output_dir
     args.extend([methylation_only, p_only])
+
     output = regression_full(*args, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)
@@ -389,14 +419,16 @@ def mlr_single(
         logger.info('No region window provided. Resorting to default.')
         if region == 'cis':
             logger.info(
-                'Using default window for cis of {0} bases', CIS_WINDOW
+                'Using default window for cis of {0} bases',
+                DEFAULT_CIS_UPSTREAM,
             )
-            window = CIS_WINDOW
+            window = DEFAULT_CIS_UPSTREAM
         if region == 'distal':
             logger.info(
-                'Using default window for distal of {0} bases', DISTAL_WINDOW
+                'Using default window for distal of {0} bases',
+                DEFAULT_DISTAL_UPSTREAM,
             )
-            window = DISTAL_WINDOW
+            window = DEFAULT_DISTAL_UPSTREAM
 
     args = [M, G, C, include, regressions_per_chunk, p_thresh, region, window]
     args.extend((None, None) if region == 'all' else (M_annot, G_annot))
@@ -618,15 +650,19 @@ def chunks(
         if cpu or not torch.cuda.is_available():
             target_bytes = psutil.virtual_memory().total * 0.8
             logger.info(
-                'Target memory not supplied. Inferred target of {0} MB of'
-                ' CPU memory (80% of detected)',
+                (
+                    'Target memory not supplied. Inferred target of {0} MB of'
+                    ' CPU memory (80% of detected)'
+                ),
                 target_bytes / 1_000_000,
             )
         else:
             target_bytes = torch.cuda.mem_get_info()[0] * 0.8
             logger.info(
-                'Target memory not supplied. Inferred target of {0} MB of'
-                ' CUDA memory (80% of detected)',
+                (
+                    'Target memory not supplied. Inferred target of {0} MB of'
+                    ' CUDA memory (80% of detected)'
+                ),
                 target_bytes / 1_000_000,
             )
     if None in (samples, mt_count, gt_count, covar_count):

@@ -1,6 +1,3 @@
-from typing import Tuple
-
-
 def estimate_loci_per_chunk_e_peak(
     target_bytes: int,
     samples: int,
