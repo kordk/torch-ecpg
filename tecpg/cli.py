@@ -15,6 +15,7 @@ from .config import (
     DEFAULT_DISTAL_DOWNSTREAM,
     DEFAULT_DISTAL_UPSTREAM,
     DEFAULT_DISTAL_WINDOW_BASE,
+    DEFAULT_FLOAT_FORMAT,
     DTYPE,
     data,
     using_gpu,
@@ -138,6 +139,13 @@ from .tool import (
     default=False,
     type=bool,
 )
+@click.option(
+    '-F',
+    '--float-format',
+    show_default=True,
+    default=DEFAULT_FLOAT_FORMAT,
+    type=str,
+)
 @click.pass_context
 def cli(
     ctx: Optional[click.Context] = None,
@@ -156,6 +164,7 @@ def cli(
     debug: Optional[bool] = None,
     log_dir: Optional[str] = None,
     no_log_file: Optional[bool] = None,
+    float_format: Optional[str] = None,
     obj: Optional[dict] = None,
 ) -> None:
     """The root cli group"""
@@ -180,6 +189,9 @@ def cli(
     if cpu_threads:
         torch.set_num_threads(cpu_threads)
         logger.carry_data['use_cpu'] = True
+    logger.carry_data['float_format'] = (
+        DEFAULT_FLOAT_FORMAT if float_format is None else float_format
+    )
     ctx.obj['logger'] = logger
 
 
