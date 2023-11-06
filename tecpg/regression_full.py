@@ -82,17 +82,17 @@ def regression_full(
     of each methylation and gene expression id. They are optional and
     only required for region filtration.
 
-    Region filtration filters the input by the distance between the
-    methylation id and the gene expression id for each regression. Cis
-    filtration only allows regressions where the ids are within
-    specified distance, the window, on the same chromosome. Distal
-    analyses only allow regressions with ids with  distance greater
-    than the window on the same chromosome. Trans analyses only allow
-    regressions with methylation and gene expression ids on the same
-    chromosome. The last region filtration mode, all, does not filter
-    by region.
+    Cis and distal filtration only allow regressions where the
+    methylation locus position is within the region with the origin of
+    window_base bases away from the gene transcript start site starting
+    upstream bases to one side and downstream to another, with the
+    orientation of the region dictated by the strand of the gene
+    expression locus. Trans analyses only allow regressions with
+    methylation and gene expression ids on the same chromosome. The last
+    region filtration mode, all, does not filter and instead keeps all
+    regressions.
 
-    P-value filtration filters the output of the regression by only
+    P-value filtration filters the output of the regressions by only
     including regressions with  p-value below p_thresh.
 
     For larger inputs, one may encounter memory limits. If this is the
@@ -132,6 +132,8 @@ def regression_full(
     chunking = (
         gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
     )
+
+    # Detect errors in the input values
     if (output_dir is None) != (not chunking):
         error = 'Output dir and chunk size must be defined together.'
         logger.error(error)
@@ -156,6 +158,7 @@ def regression_full(
         logger.error(error)
         raise ValueError(error)
 
+    # Prepare annotation tensors if region filtration is used
     if region != 'all':
         logger.info('Initializing region filtration')
         G_annot = (
@@ -177,6 +180,11 @@ def regression_full(
         G_chrom, G_pos, G_strand = G_annot.to_numpy().T.astype(int)
         M_chrom, M_pos = M_annot.to_numpy().T.astype(int)
 
+        G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int8)
+        G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int32)
+        G_strand_t = torch.tensor(G_strand, device=device, dtype=torch.int8)
+
+    # Initializes some constants
     logger.info('Initializing regression variables')
     device = get_device(**logger)
     dtype = DTYPE
@@ -191,13 +199,14 @@ def regression_full(
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
     # prob = create_studentt_p(df, device, dtype)
     normal_p = create_normal_p(device, dtype)
-
     if gene_loci_per_chunk is not None:
         chunk_count = math.ceil(len(G) / gene_loci_per_chunk)
+
     if chunking:
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
 
+    # Determines the column names for the output dataframe
     index_names = ['gt_id', 'mt_id']
     if p_only:
         if methylation_only:
@@ -215,11 +224,7 @@ def regression_full(
             column + suffix for suffix in suffixes for column in categories
         ]
 
-    if region != 'all':
-        G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int8)
-        G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int32)
-        G_strand_t = torch.tensor(G_strand, device=device, dtype=torch.int8)
-
+    # Create covariate tensor
     if meth_loci_per_chunk is None:
         Ct: torch.Tensor = torch.tensor(
             C.to_numpy(), device=device, dtype=dtype
@@ -229,6 +234,7 @@ def regression_full(
             C.to_numpy(), device=device, dtype=dtype
         ).repeat(meth_loci_per_chunk, 1, 1)
 
+    # Initialize variables for use in the regression calculation loop
     end_index = 0
     results = []
     filtration = True
@@ -242,29 +248,34 @@ def regression_full(
     else:
         p_indices_list = []
 
+    # Create methylation chunk (mc_) and chunk saving (inner_) logger
     mc_logger = logger.alias()
     mc_logger.info_color = colors.GREEN
     inner_logger = mc_logger.alias()
+
+    # Use the multiprocessing pool
     with Pool() as pool:
+        # Loop for methylation chunks or ran once with index 0 if no
+        # methylation chunking
         for meth_chunk_index in (
             (0,) if meth_loci_per_chunk is None else range(meth_chunk_count)
         ):
+            # Log methylation chunk index
             logger.info('STARTING METHYLATION CHUNK {0}', meth_chunk_index + 1)
             mc_logger.info_template = (
                 '[CHUNK' + str(meth_chunk_index + 1) + '{modifier}] {message}'
             )
             mc_logger.current_count = 0
 
+            # Slice M into M_chunk or copy for no methylation chunking
             if meth_loci_per_chunk is not None:
                 start_index = end_index
                 end_index = (meth_chunk_index + 1) * meth_loci_per_chunk
-
-            if meth_loci_per_chunk is None:
-                M_chunk = M
-            else:
                 M_chunk = M[start_index:end_index]
                 if len(M_chunk) < meth_loci_per_chunk:
                     Ct = Ct[: len(M_chunk)]
+            else:
+                M_chunk = M
 
             mt_count = len(M_chunk)
             mt_site_names = numpy.array(M_chunk.index.values)
@@ -272,6 +283,9 @@ def regression_full(
                 output_sizes = mt_count
 
             mc_logger.start_timer('info', 'Running regression_full...')
+
+            # Create methylation loci chromosome and position tensors
+            # for the current chunk
             if region != 'all':
                 if meth_loci_per_chunk is None:
                     M_chrom_t = torch.tensor(
@@ -292,6 +306,8 @@ def regression_full(
                         dtype=torch.int32,
                     )
 
+            # Calculate constants for the current methylation chunk to
+            # massively increase performance
             Mt: torch.Tensor = torch.tensor(
                 M_chunk.to_numpy(), device=device, dtype=dtype
             ).unsqueeze(2)
@@ -303,8 +319,15 @@ def regression_full(
             XtXi_diag_sqrt = torch.diagonal(XtXi, dim1=1, dim2=2).sqrt()
             XtXi_Xt = XtXi.bmm(Xt)
             del Xt, XtXi
+
+            # Display amount of total memory occupied by the constants
+            # for the current methylation chunk (if the device is CUDA
+            # enabled)
             if allocated_memory := torch.cuda.memory_allocated():
-                total_memory = torch.cuda.get_device_properties(0).total_memory
+                device_properties: torch.cuda._CudaDeviceProperties = (
+                    torch.cuda.get_device_properties(0)
+                )
+                total_memory: int = device_properties.total_memory
                 torch.cuda.empty_cache()
                 mc_logger.info(
                     (
@@ -315,12 +338,14 @@ def regression_full(
                     total_memory / 1_000_000,
                 )
 
+            # Inner loop over each gene expression locus
             last_index = 0
             inner_logger.start_timer('info', 'Calculating regression...')
             for index, G_row in enumerate(G_np, 1):
                 Y = torch.tensor(G_row, device=device, dtype=dtype)
 
                 if region == 'all':
+                    # No region filtration
                     B = XtXi_Xt.matmul(Y)
                     E = (Y.unsqueeze(1) - X.bmm(B.unsqueeze(2))).squeeze(2)
                     del Y
@@ -331,11 +356,12 @@ def regression_full(
                     S = XtXi_diag_sqrt * scalars
                     del scalars
                 else:
+                    # Creates a boolean mask for the region filtration
                     if region in ('cis', 'distal'):
                         # The None in the index of the G tensors makes
                         # the shape of the tensor suitable to broadcast
-                        # to the shape of the M tensors.
-                        region_indices = (
+                        # to the shape of the M tensors
+                        region_indices_mask = (
                             (G_chrom_t[index - 1, None] == M_chrom_t)
                             .logical_and(
                                 G_strand_t[index - 1, None]
@@ -351,30 +377,35 @@ def regression_full(
                             )
                         )
                     elif region == 'trans':
-                        region_indices = (
+                        region_indices_mask = (
                             G_chrom_t[index - 1, None] != M_chrom_t
                         )
 
-                    B = XtXi_Xt[region_indices].matmul(Y)
+                    B = XtXi_Xt[region_indices_mask].matmul(Y)
                     E = (
-                        Y.unsqueeze(1) - X[region_indices].bmm(B.unsqueeze(2))
+                        Y.unsqueeze(1)
+                        - X[region_indices_mask].bmm(B.unsqueeze(2))
                     ).squeeze(2)
                     del Y
                     scalars = (torch.sum(E * E, 1)).view(
                         (-1, 1)
                     ).sqrt() / dft_sqrt
                     del E
-                    S = XtXi_diag_sqrt[region_indices] * scalars
+                    S = XtXi_diag_sqrt[region_indices_mask] * scalars
                     del scalars
 
-                    region_indices_list.append(region_indices)
+                    region_indices_list.append(region_indices_mask)
 
+                # Remove unnecessary values if only methylation is
+                # desired
                 if methylation_only:
                     B = B[:, 1:2]
                     S = S[:, 1:2]
+
                 T = B / S
                 P = normal_p(T)
 
+                # Keep results below p_thresh if supplied
                 if p_thresh is not None:
                     p_indices = P[:, 0 if methylation_only else 1] <= p_thresh
                     p_indices_list.append(p_indices)
@@ -383,16 +414,21 @@ def regression_full(
                         B = B[p_indices]
                         S = S[p_indices]
                         T = T[p_indices]
+
                 if filtration:
                     output_sizes.append(len(P))
+
+                # Append current regression results
                 if p_only:
                     results.append(P)
                 else:
                     results.append(torch.cat((B, S, T, P), dim=1))
 
+                # Save output when gene chunking is used
                 if gene_loci_per_chunk and (
                     index % gene_loci_per_chunk == 0 or index == gt_count
                 ):
+                    # Filter results
                     gt_sites = gt_site_names[last_index:index].repeat(
                         output_sizes
                     )
@@ -424,17 +460,23 @@ def regression_full(
                             ][mask]
                     index_chunk = [gt_sites, mt_sites]
 
+                    # Create path to save and file name
                     gene_index_str = str(mc_logger.current_count + 1)
                     meth_index_str = str(meth_chunk_index + 1)
                     file_name = file_format.format(
                         meth_chunk=meth_index_str, gene_chunk=gene_index_str
                     )
                     file_path = os.path.join(output_dir, file_name)
+
+                    # Create output dataframe
                     out = pandas.DataFrame(
                         torch.cat(results).cpu().numpy(),
                         index=index_chunk,
                         columns=columns,
                     )
+                    out.index.set_names(index_names, inplace=True)
+
+                    # CUDA memory notice
                     if index == gene_loci_per_chunk and allocated_memory:
                         torch.cuda.empty_cache()
                         allocated_memory = torch.cuda.max_memory_allocated()
@@ -447,7 +489,8 @@ def regression_full(
                             allocated_memory / 1_000_000,
                             total_memory / 1_000_000,
                         )
-                    out.index.set_names(index_names, inplace=True)
+
+                    # Save output with multiprocessing pool
                     mc_logger.count(
                         'Saving part {i}/{0}:',
                         chunk_count,
@@ -458,6 +501,7 @@ def regression_full(
                         dict(mc_logger),
                     )
 
+                    # Report gene chunk time
                     inner_logger.time(
                         (
                             'Completed chunk {i}/{0} in {l} seconds.'
@@ -471,7 +515,10 @@ def regression_full(
             mc_logger.time('Looped over methylation loci in {l} seconds')
             mc_logger.time('Calculated regression_full in {t} seconds')
 
+            # Filter gene chunking is not used and save results if
+            # methylation chunking is used
             if gene_loci_per_chunk is None:
+                # Filter results
                 mc_logger.start_timer(
                     'info', 'Generating dataframe from results...'
                 )
@@ -500,6 +547,8 @@ def regression_full(
                             region_mask
                         ][mask]
                 index_chunk = [gt_sites, mt_sites]
+
+                # Create output dataframe
                 mc_logger.time('Finished creating indices in {l} seconds')
                 out = pandas.DataFrame(
                     torch.cat(results).cpu().numpy(),
@@ -512,13 +561,17 @@ def regression_full(
                 )
                 mc_logger.time('Created output dataframe in {t} total seconds')
 
+                # Save results if methylation chunking is used
                 if meth_loci_per_chunk is not None:
+                    # Create path to save and file name
                     gene_index_str = '1'
                     meth_index_str = str(meth_chunk_index + 1)
                     file_name = file_format.format(
                         meth_chunk=meth_index_str, gene_chunk=gene_index_str
                     )
                     file_path = os.path.join(output_dir, file_name)
+
+                    # Save methylation chunk
                     mc_logger.count(
                         'Saving methylation chunk {0}/{1}:',
                         meth_chunk_index + 1,
@@ -538,6 +591,7 @@ def regression_full(
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )
+
                     del results[:]
 
             logger.time(
@@ -545,6 +599,7 @@ def regression_full(
                 meth_chunk_index + 1,
             )
 
+        # Wait for chunks to save
         if chunking:
             logger.time('Waiting for chunks to save...')
             pool.close()
@@ -555,6 +610,9 @@ def regression_full(
             'Finished calculating the multiple linear regression in {t} total'
             ' seconds'
         )
+
+        # Return output as pandas.DataFrame if neither gene nor
+        # methylation chunking are used
         if not chunking:
             return out
 
