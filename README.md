@@ -1,6 +1,6 @@
 # tecpg
 
-Python eCpG mapper with CLI using pytorch.
+Expression quantitative trait methylation (eQTM) mapper to identify expression accociated CpG (eCpG) loci with python CLI using pytorch.
 
 ## Installation
 
@@ -31,7 +31,63 @@ The program will automatically determine whether there is a CUDA enabled device 
 
 ## Inputs
 
-Methylation values, gene expression values, and covariates are provided in csv or tsv files in the `<working>/data` directory. For methylation and gene expression, columns are for individual samples and each row is for an id. For the covariates, the columns are the type of covariate and the rows are the sample. Annotation files are used for region filtration and are stored in the `<working>/annot`. They use the `bed6` standard and store the positions of the methylation or gene expression ids.
+Methylation values, gene expression values, and covariates are provided in CSV or TSV files in the `<working>/data` directory. For methylation and gene expression, columns are for individual samples and each row is for a loci. For the covariates, the columns are the type of covariate and the rows are the sample. Annotation files are used for region filtration and are stored in the `<working>/annot`. They use the `BED6` standard and store the positions of the methylation or gene expression loci.
+
+Methylatlion CSV datafiles from the GTP dataset (see Demostration below):
+```bash
+head -5 data/M.csv | cut -d, -f1-5
+```
+```
+,5881,5896,5915,5949
+cg00000029,0.551142626425936,0.606679809418831,0.593760482022385,0.554829598676022
+cg00000108,0.998563692332771,0.9979593001545,0.997893371350954,0.997293677663346
+cg00000165,0.266529984719736,0.159711109475489,0.145981687514545,0.100000350688528
+cg00000236,0.812799925026805,0.897011511592051,0.908067942964869,0.863719773724759
+```
+
+Gene expression CSV datafiles from the GTP dataset (see Demostration below):
+```bash
+head data/G.csv | cut -d, -f1-5
+```
+```
+,5881,5896,5915,5949
+ILMN_1762337,43.10106,48.30485,37.49239,43.99564
+ILMN_2055271,61.09617,61.84258,47.78094,49.32763
+ILMN_1736007,51.30634,45.80393,45.43285,40.39254
+ILMN_2383229,48.15523,42.69902,35.71749,39.52501
+```
+```bash
+head -5 data/C.csv
+```
+
+Covariate CSV datafiles from the GTP dataset (see Demostration below):
+```
+,Sex,age
+5881,1,44
+5896,1,50
+5915,0,52
+5949,1,56
+```
+
+Annotation BED6 files for the gene expression and methylation data (i.e., Illumina HumanHT-12 and Illumina MethylationEPIC arrays):
+```bash
+head -5 annot/*
+```
+```
+==> annot/G.bed6 <==
+chrom   chromStart      chromEnd        name            score   strand
+2       128604584       128604633       ILMN_1792672    0       -
+11      193773          193822          ILMN_3237022    0       +
+13      44410552        44410601        ILMN_1904052    0       -
+17      79524173        79524222        ILMN_1807600    0       -
+
+==> annot/M.bed6 <==
+chrom   chromStart      chromEnd        name            score   strand
+20      61847650        61847650        cg18478105      0       -
+X       24072640        24072640        cg09835024      0       -
+9       131463936       131463936       cg14361672      0       +
+17      80159506        80159506        cg01763666      0       +
+```
 
 ## Output
 
@@ -82,7 +138,7 @@ Currently, the README and the `tecpg ... --help` commands serve as documentation
 
 ## Demonstration
 
-Here is a demonstration of tecpg using real data publicly available from the n=340 participants from the GTP project. The participants were assayed using the Illumina HumanMethylation450 (n=349,220 CpG loci) and HumanHT-12 (n=39,353 expression probes) arrays.
+Here is a demonstration of tecpg using real data publicly available from the n=340 participants from the Grady Trauma Project (GTP) (Gene Expression Omnibus (GEO) accession numbers GSE72680, GSE58137). The participants were assayed using the Illumina HumanMethylation450 (n=349,220 CpG loci) and HumanHT-12 (n=39,353 expression probes) arrays.
 
 1. Create the evaluation directory
 ```bash
