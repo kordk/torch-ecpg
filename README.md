@@ -80,6 +80,145 @@ This image from https://en.wikipedia.org/wiki/Student%27s_t-distribution shows t
 
 Currently, the README and the `tecpg ... --help` commands serve as documentation. Within the code, the function docstrings provide a lot of information about the function. The extensive type hints give added insight into the purpose of functions.
 
+## Demonstration
+
+Here is a demonstration of tecpg using real data publicly available from the n=340 participants from the GTP project. The participants were assayed using the Illumina HumanMethylation450 (n=349,220 CpG loci) and HumanHT-12 (n=39,353 expression probes) arrays.
+
+1. Create the evaluation directory
+```bash
+mkdir test; cd test
+```
+
+2. Download the GTP example dataset
+```bash
+tecpg data gtp
+```
+```
+[INFO] CUDA GPU detected. This device supports CUDA.
+Are you sure you want to overwrite the data directory? [y/N]: y
+[INFO] Creating directory /home/kord-test/proj/torch-ecpg/eval/GTP...
+[INFO] Removing directory /home/kord-test/proj/torch-ecpg/eval/GTP...
+[INFO] Creating directory /home/kord-test/proj/torch-ecpg/eval/GTP...
+[INFO] Downloading GTP raw data (this could take a very long time)
+[INFO] Downloading 4 files...
+[INFOTIMER] Downloading 1/4: CovariateMatrix.txt.gz...
+[INFOTIMER] Downloaded in 0.0631 seconds
+[INFOTIMER] Downloading 2/4: MethylationBetaValues.tsv.gz…
+[INFO] Reading 3 csv files...
+[INFOTIMER] Reading 1/3: MethylationBetaValues.tsv.gz
+[INFO] Reading csv file /home/kord-test/proj/torch-ecpg/test/GTP/MethylationBetaValues.tsv.gz with separator [tab]
+[INFOTIMER] Read 1/3 in 105.2349 seconds
+[INFOTIMER] Reading 2/3: GeneExpressionValues_1.tsv.gz
+[INFO] Reading csv file /home/kord-test/proj/torch-ecpg/test/GTP/GeneExpressionValues_1.tsv.gz with separator [tab]
+[INFOTIMER] Read 2/3 in 1.8076 seconds
+[INFOTIMER] Reading 3/3: GeneExpressionValues_2.tsv.gz
+[INFO] Reading csv file /home/kord-test/proj/torch-ecpg/test/GTP/GeneExpressionValues_2.tsv.gz with separator [tab]
+[INFOTIMER] Read 3/3 in 4.6601 seconds
+[INFOTIMER] Finished reading GTP csv files in 111.703 seconds.
+[INFO] Concatenating gene expression parts
+[INFO] Removing covariates without enough data for all samples
+[INFO] Dropping unneeded columns (p-values)
+[INFO] Normalizing column names
+[INFO] Removing nonoverlapping columns
+[INFO] Dropped 17337 rows of G with missing values (69.4173% remaining)
+[INFO] Dropped 104132 rows of M with missing values (77.0306% remaining)
+[INFO] Sorting columns
+[INFO] Saving into /home/kord-test/proj/torch-ecpg/test/data
+[INFO] Creating directory /home/kord-test/proj/torch-ecpg/test/data...
+[INFO] Saving 3 dataframes...
+[INFOTIMER] Saving 1/3: M.csv
+[INFOTIMER] Saved 1/3 in 151.9341 seconds
+[INFOTIMER] Saving 2/3: G.csv
+[INFOTIMER] Saved 2/3 in 9.7193 seconds
+[INFOTIMER] Saving 3/3: C.csv
+[INFOTIMER] Saved 3/3 in 0.0022 seconds
+[INFOTIMER] Finished saving 3 dataframes in 161.6562 seconds.
+[WARNING] GTP methylation, gene expression, and covariates downloaded. If you would like to use region filtration, please manually copy the associated files from the tecpg/demo directory or produce them yourself.
+```
+
+3. Copy and rename the demo annotation files to their default locations. We created these annotation files to be used with these arrays. The users will need to create their own for datasets using other arrays or measuring approaches (e.g., RNA-seq).
+
+
+```bash
+mkdir annot
+cp ../demo/annoEPIC.hg19.bed6 annot/M.bed6
+cp ../demo/annoHT12.hg19.bed6 annot/G.bed6
+```
+
+4. Run the CIS loci analysis. This analysis has a small memory footprint and completes quickly.
+```bash
+tecpg run mlr --help
+```
+```
+[INFO] CUDA GPU detected. This device supports CUDA.
+Usage: tecpg run mlr [OPTIONS]
+
+Options:
+  -g, --gene-loci-per-chunk INTEGER
+  -m, --meth-loci-per-chunk INTEGER
+  -p, --p-thresh FLOAT
+  --all                           [default: all]
+  -w, --window INTEGER
+  --cis                           [default: all]
+  --distal                        [default: all]
+  --trans                         [default: all]
+  -f, --full-output               [default: False]
+  -P, --p-only                    [default: False]
+  --help                          Show this message and exit.
+```
+```bash
+tecpg run mlr --cis -p 0.00001 -g 10000 -m 10000
+```
+
+## Selecting a GPU when multiple are available
+
+We have run into this issue when using a development system or a cluster (e.g., Sun Grid Engine) where the system has numerous GPUs and selection is necessary. 
+
+Find the ID of the GPU you’d like to use:
+```
+nvidia-smi
+Fri Dec 15 13:33:36 2023       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 530.30.02              Driver Version: 530.30.02    CUDA Version: 12.1     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                  Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf            Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA A2                       On | 00000000:81:00.0 Off |                    0 |
+|  0%   38C    P8                9W /  60W|      0MiB / 15356MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+|   1  NVIDIA L4                       On | 00000000:82:00.0 Off |                    0 |
+| N/A   54C    P8               18W /  75W|      0MiB / 23034MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|  No running processes found                                                           |
++---------------------------------------------------------------------------------------+
+```
+
+Here, we see GPU 0 is the A2 (previous one) and GPU 1 is the L4 (new one).
+
+Selection of the GPU to use can be done through software (e.g., https://discuss.pytorch.org/t/selecting-the-gpu/20276) or using the shell. For software that we are not going to be editing directly (e.g., tecpg), we use the shell variable direction.
+ 
+The the environment variable CUDA_VISIBLE_DEVICES can be set when you call python.
+ 
+To use the A2 GPU, the following re-mapping works:
+```bash
+CUDA_VISIBLE_DEVICES=1,0 python tecpg run mlr --all --p-thresh 0.000001 -g 100 -m 100000
+```
+
+To use the L4 GPU, the following re-mapping works:
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python tecpg run mlr --all --p-thresh 0.000001 -g 100 -m 100000
+```
+
 ## Acknowledgements
 
 This work was partially supported by an NIH NCI MERIT award (R37, CA233774, PI: Kober) and Cancer Center Support Grant (P30, CA082103, Co-I: Olshen).
