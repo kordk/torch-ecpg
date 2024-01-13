@@ -29,7 +29,7 @@ If you have issues with using `pip` in the command line, try `python -m pip` or 
 
 The program will automatically determine whether there is a CUDA enabled device and use it if available. To force calculation on the CPU, set the `--threads` option to a nonzero integer. This will also set the number of CPU threads used.
 
-## Inputs
+## Input data
 
 Methylation values, gene expression values, and covariates are provided in CSV or TSV files in the `<working>/data` directory. For methylation and gene expression, columns are for individual samples and each row is for a loci. For the covariates, the columns are the type of covariate and the rows are the sample. Annotation files are used for region filtration and are stored in the `<working>/annot`. They use the `BED6` standard and store the positions of the methylation or gene expression loci.
 
@@ -88,6 +88,23 @@ X       24072640        24072640        cg09835024      0       -
 9       131463936       131463936       cg14361672      0       +
 17      80159506        80159506        cg01763666      0       +
 ```
+Example data for evaluation can be created with tecpg:
+```bash
+tecpg data --help
+```
+```
+[INFO] CUDA GPU detected. This device supports CUDA.
+Usage: tecpg data [OPTIONS] COMMAND [ARGS]...
+
+  Base group for data management.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  dummy  Generates dummy data.
+  gtp    Downloads and extracts GTP data.
+```
 
 ## Output
 
@@ -145,7 +162,7 @@ Here is a demonstration of tecpg using real data publicly available from the n=3
 mkdir test; cd test
 ```
 
-2. Download the GTP example dataset
+2. Download and prepare the GTP example dataset
 ```bash
 tecpg data gtp
 ```
