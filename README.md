@@ -2,6 +2,8 @@
 
 Expression quantitative trait methylation (eQTM) mapper to identify expression accociated CpG (eCpG) loci with python CLI using pytorch.
 
+A manuscript describing the tool, "Torch-eCpG: A fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units", was accepted for publication in BMC Bioinformatics.
+
 ## Installation
 
 Pip install from github using `git+https://`.
