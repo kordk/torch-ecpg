@@ -1,0 +1,23 @@
+The following explains how to save a docker image as a file that can
+be moved to a new machine, and how to load that image once moved.
+
+To list images available for saving:
+
+$ docker image ls
+
+To save a docker image:
+
+$ docker save tecpg-container | bzip2 > tecpg-container.tar.bz2
+
+Where "tecpg-container" is the image name (found with above list
+command if unsure). Bzip2 could be replaced with gzip if one
+preferred. Either way, expect this command to take some time to
+run. The tecpg-container image is around 5.3G after compression.
+
+After transferring the image to a new host, load the compressed tar
+file as follows:
+
+$ docker load -i tecpg-container.tar.b2
+
+Again, expect the unzipping to take some time.
+

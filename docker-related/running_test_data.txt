@@ -1,0 +1,41 @@
+The following commands will install test data and execute a test run
+via the docker container.
+
+To download the test data:
+
+$ docker run -it --rm -w /usr/src/app/test --name my-running-app \
+  -v "$(pwd)/test":/usr/src/app/test tecpg-container \
+  tecpg data gtp
+
+Examining in more detail: "docker run -it --rm" starts the container
+with "--it" leaving stdin open and assigning a pseudo-terminal and
+"--rm" removing the container on exit-- this removes the "container"
+not the container's underlying "image" to use Docker's
+vocabulary. These two options can likely be omitted. The option
+"--name my-running-app" assigns an arbitrary user provided name to the
+container, for instance to differentiate between two concurrently
+running containers of the same image.
+
+Option '-v "$(pwd)/test":/usr/src/app/test' binds a directory on the
+host filesystem to one inside the container, /usr/src/app/test. In
+this example it's assumed that there is a directory named "test" on
+the host that's child to the directory from which the command is
+executed.
+
+The final line "tecpg data gtp" is provided to the container in the
+same form as if it was run directly on the host without the container. 
+
+Two .bed files are not downloaded with the above command. Here they
+are copied from an install of tecpg done outside the container to the
+test directory outside the container. (Perhaps would be good to add
+these to the test data download?)
+
+$ cp /home/aaron/proj/torch-ecpg/demo/annoEPIC.hg19.bed6 annot/M.bed6
+$ cp /home/aaron/proj/torch-ecpg/demo/annoHT12.hg19.bed6 annot/G.bed6
+
+Finally the test itself is run:
+
+$ docker run -it --rm -w /usr/src/app/test --name my-running-app \
+  -v "$(pwd)/test":/usr/src/app/test tecpg-container \
+  tecpg run mlr --cis -p 0.00001 -g 10000 -m 10000
+
