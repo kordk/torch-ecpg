@@ -17,7 +17,7 @@ If you want to be able to edit the code for debugging and development, install i
 ```bash
 cd [path/to/code/directory]
 git clone https://github.com/kordk/torch-ecpg.git
-cd tecpg
+cd torch-ecpg
 pip install --editable .
 ```
 
