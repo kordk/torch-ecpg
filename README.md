@@ -1,8 +1,17 @@
 # tecpg
 
-Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) mapper to identify expression accociated CpG (eCpG) loci with python CLI using pytorch.
+Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) mapper to identify expression associated CpG (eCpG) loci with python CLI using pytorch.
 
 If you use Torch-eCpG in your research, please cite the following paper: Kober, K.M., Berger, L., Roy, R. et al. Torch-eCpG: a fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. BMC Bioinformatics 25, 71 (2024). https://doi.org/10.1186/s12859-024-05670-4
+
+## Docker Image
+
+A docker image is now available for the Torch-eCpG (tecpg) tool to perform eQTM mapping analysis. The docker image provides a pre-configured environment for running tecpg.
+
+The image can be created from the instructions in the docker-related/ directory.
+
+Alternatively, a full image is available for download from docker hub:
+https://hub.docker.com/repository/docker/kordk/torch-ecpg/general
 
 ## Installation
 
