@@ -222,7 +222,6 @@ Are you sure you want to overwrite the data directory? [y/N]: y
 
 3. Copy and rename the demo annotation files to their default locations. We created these annotation files to be used with these arrays. The users will need to create their own for datasets using other arrays or measuring approaches (e.g., RNA-seq).
 
-
 ```bash
 mkdir annot
 cp ../demo/annoEPIC.hg19.bed6 annot/M.bed6
@@ -252,6 +251,160 @@ Options:
 ```
 ```bash
 tecpg run mlr --cis -p 0.00001 -g 10000 -m 10000
+```
+
+## Alternative annotation and assignment of regions
+
+There are times when we may want to define our own classifications for a region (e.g., CIS) and apply different annotations to our mapping data. 
+
+In these cases, we first run the mapping for all eCpG gene combinations:
+```bash
+tecpg run mlr --all -g 100 -m 100000
+```
+
+This analsis will produce a large number of mapping results:
+```bash
+ls output/
+1-100.csv
+1-101.csv
+1-102.csv
+1-103.csv
+...
+```
+
+We then use a script to classify the mappings in each file. 
+```
+./assignRegionToEcpg.py -h
+
+assignRegionToEcpg.py - assign a region class to eCpGs
+
+usage: assignRegionToEcpg.py [hD] -d <tecpg eQTM output> -g <gene annotation file> -m <methylation annotation file> -o <outfile name>
+ e.g.: assignRegionToEcpg.py -d 1-1.csv -g G.bed6 -m M.bed6 -o ecpg.annot.csv
+
+```
+
+Here is an example using the assignRegionToEcpg.py script (available in the demo/ directory):
+```bash
+assignRegionToEcpg.py \
+    -d output/1-100.csv \
+    -g annot/G.bed6 \
+    -m annot/M.bed6 \
+    -o 1-100.annot.csv > assignRegionToEcpg.py.log
+```
+
+The script has visual descriptions of the region being classified in the code. For example, for CIS regions below are separate definitions for the '+' and '-' strands. These offsets can be changed in the defaults section at the start of the script. We welcome updates and modifications to the script to improve usability (e.g., user flags to set the offsets, etc.).
+
+```
+## DEFAULTS - Kennedy et al. BMC Genomics (2018) 19:476
+
+#PVALCUTOFF=0.00001                   ## 10-5 is "suggestive" in Kennedy 2018
+#PVALCUTOFF=0.00000000001             ## 10-11 is "significant" in Kennedy 2018
+PVALCUTOFF=np.float32(0.000001)       ## 10-6 is our "exploratory" cutoff
+
+## DISTAL >50Kb TSS
+DISTAL_OFFSET=50000
+
+## CIS <50Kb TSS
+CIS_OFFSET=0
+CIS_UPSTREAM_DISTANCE=50000
+
+## PROMOTER +/- 2500 bp TSS
+PROMOTER_OFFSET=0
+PROMOTER_UPSTREAM_DISTANCE=2500
+PROMOTER_DOWNSTREAM_DISTANCE=2500
+
+        ##
+        ## check for CIS - positive strand
+        ##
+
+        # CIS:    < 50Kb upstream from TSS
+
+        #                         |>>>>>>>| gene
+        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        #                         | TSS (strand=“+”)
+        #                         | -offset (0Kb)
+        #                 | -region start (50Kb)
+        #                    | cpg
+        #                 |-------| target region
+        # upstream                                   downstream
+
+        ##
+        ## check for CIS - negative strand
+        ##
+
+        # CIS:    < 50Kb upstream from TSS
+
+        #           |<<<<<<| gene
+        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        #                  | TSS (strand=“-”)
+        #                         | +offset (50Kb)
+        #                         | region end
+        #                      | cpg
+        #                  |------| target region
+        # downstream                                   upstream
+```
+
+This script will provide information regarding the mappings for which classes were called, as well as thoses annotations that were missing.
+
+If memory is no issue, all of the output files can be concatenated together and the classification can be done at once. Fair warning that the script is not memory efficient and can quickly consume all available memory.
+
+```bash
+head -1` output/1-1.csv >all.ecpg.csv
+cat output/*csv | fgrep -v gt_id >>all.ecpg.csv
+```
+
+```bash
+/usr/bin/time -v ./assignRegionToEcpg.py \
+    -d output/1-1.csv \
+    -g annot/G.bed6 \
+    -m annot/M.bed6 \
+    -o 1-1.annot.csv > assignRegionToEcpg.py.1-1.log 2>&1
+```
+
+The script outputs brief information about the annotation and mappings.
+```bash
+egrep -v "Excluding|missing"  assignRegionToEcpg.py.1-1.log
+
+[MAIN][INFO] eCpG datafile: output/1-1.csv
+[MAIN][INFO] gene anntoation file: annot/G.bed6
+[MAIN][INFO] methylation anntoation file: annot/M.bed6
+[MAIN][INFO] output file name: 1-1.annot.csv
+[readBed6AnnotatioFileToDict][INFO] Skipped (NA) 10002 loci from annot/G.bed6
+[readBed6AnnotatioFileToDict][INFO] Processed 44938 loci from annot/G.bed6
+[readBed6AnnotatioFileToDict][INFO] Skipped (NA) 0 loci from annot/M.bed6
+[readBed6AnnotatioFileToDict][INFO] Processed 865859 loci from annot/M.bed6
+[MAIN][INFO] Using default p-value cutoff of 1e-06
+[reportPvalues][INFO] P-values read: 9999800
+[reportPvalues][INFO] P < 0.000001 2489
+[reportPvalues][INFO] P < 0.0000001 1262
+[reportPvalues][INFO] P < 0.00000001 919
+[reportPvalues][INFO] P < 0.000000001 919
+[assignRegion][INFO] eCpgs Processed: 9999800 Assigned: 2198 Excluded (any): 9997503
+[assignRegion][INFO] eCpgs Counts by Region: {'trans': 2164, 'distal': 34, 'cis': 0, 'promoter': 0, 'genebody': 0}
+[MAIN][INFO] Saving annotated data to: 1-1.annot.csv
+```
+
+The annotated CSV file has the region in the final column:
+```bash
+head 1-1.annot.csv
+mt_id,mt_chrom,mt_chromStart,mt_strand,gt_id,gt_chrom,gt_chromStart,gt_strand,region
+cg00004105,10,100022608,+,ILMN_1662364,16,70286329,-,TRANS
+cg00005619,11,47608722,-,ILMN_1662364,16,70286329,-,TRANS
+cg00009088,11,60930188,-,ILMN_1662364,16,70286329,-,TRANS
+cg00009196,20,19954588,+,ILMN_1662364,16,70286329,-,TRANS
+cg00010853,6,30653167,+,ILMN_1662364,16,70286329,-,TRANS
+cg00017826,2,30644955,-,ILMN_1662364,16,70286329,-,TRANS
+cg00017931,6,157932180,-,ILMN_1662364,16,70286329,-,TRANS
+cg00025591,21,48026043,+,ILMN_1662364,16,70286329,-,TRANS
+cg00026290,4,10686554,+,ILMN_1662364,16,70286329,-,TRANS
+```
+
+
+```
+cut -d, -f9 1-1.annot.csv | sort | uniq -c
+     34 DISTAL
+      1 region
+   2164 TRANS
 ```
 
 ## Selecting a GPU when multiple are available
