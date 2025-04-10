@@ -11,7 +11,7 @@ A docker image is now available for the Torch-eCpG (tecpg) tool to perform eQTM 
 The image can be created from the instructions in the docker-related/ directory.
 
 Alternatively, a full image is available for download from docker hub:
-https://hub.docker.com/repository/docker/kordk/torch-ecpg/general
+https://hub.docker.com/r/kordk/torch-ecpg
 
 ## Installation
 
