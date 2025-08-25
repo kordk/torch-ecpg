@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Optional
 
 import pandas
 
-from .config import data
+from .config import DEFAULT_FLOAT_FORMAT, data
 from .helper import initialize_dir, read_csv
 from .logger import Logger
 
@@ -35,7 +35,12 @@ def save_dataframes(
     for df, file_name in zip(dataframes, file_names):
         logger.time('Saving {i}/{0}: {1}', len(dataframes), file_name)
         file_path = os.path.join(output_dir, file_name)
-        save_func(df, file_path, *args, **kwargs)
+        save_func(
+            df,
+            file_path,
+            *args,
+            **kwargs,
+        )
         logger.time_check(
             'Saved {i}/{0} in {l} seconds',
             len(dataframes),
@@ -94,7 +99,15 @@ def save_dataframe_part(
         first = os.stat(file_path).st_size == 0
 
     mode = 'w' if first else 'a'
-    dataframe.to_csv(file_path, mode=mode, header=first)
+    print(dataframe.dtypes)
+    dataframe.to_csv(
+        file_path,
+        float_format=logger.carry_data.get(
+            'float_format', DEFAULT_FLOAT_FORMAT
+        ),
+        mode=mode,
+        header=first,
+    )
 
     if chunk_number is None:
         logger.count_check('Done saving part {i}')

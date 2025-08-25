@@ -85,19 +85,28 @@ def generate_data(
     m_rows: int,
     g_rows: int,
     annotation: bool = False,
-) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame] | Tuple[
-    pandas.DataFrame,
-    pandas.DataFrame,
-    pandas.DataFrame,
-    pandas.DataFrame,
-    pandas.DataFrame,
-]:
+) -> (
+    Tuple[
+        pandas.DataFrame,
+        pandas.DataFrame,
+        pandas.DataFrame,
+    ]
+    | Tuple[
+        pandas.DataFrame,
+        pandas.DataFrame,
+        pandas.DataFrame,
+        pandas.DataFrame,
+        pandas.DataFrame,
+    ]
+):
     """
     Generates two pandas dataframes for methylation and gene expression.
     Accepts a sample_size for the number of people, m_rows for the
     number of methylation loci, and g_rows for the number of gene
     expression loci. Returns a tuple of the methylation and gene
     expression dataframes.
+
+    Return order: M, G, C, M_annot, G_annot
     """
     person_codes = generate_codes(sample_size)
     m_row_codes = generate_codes(m_rows, 'cg')

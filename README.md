@@ -135,12 +135,12 @@ You may want to include only certain regression results. There are two ways of f
 
 1. P-value filtration - all p-values are computed first. Then, regression results with a p-value above a supplied threshold are excluded from the output. This decreases output size and thus increases speed as saving is an expensive operation.
 2. Region filtration - region filtration requires annotation files that dictate the positions of methylation and gene expression ids. Then, regressions are filtered by one of the following methods:
-   - Cis: the position of the gene expression id and methylation id is within a supplied window and they lie on the same chromosome.
-   - Distal: the position of the gene expression id and methylation id is outside of a supplied window and they lie on the same chromosome.
+   - Cis: the position of the methylation id is within a window containing a certain number of bases upstream and downstream from a certain number of bases (window_base) away from the transcript start site of the gene and they lie on the same chromosome.
+   - Distal: same logic as cis, but with different default values for the window_base, upstream, and downstream parameters.
    - Trans: the gene expression id and methylation id lie on different chromosomes.
-   - All: no filtration.
+   - All: no region filtration.
 
-P-value filtration filters results after calculating the regression. Region filtration filters the input before the regression results are computed.
+P-value filtration filters results after calculating the regression, and it saves output time. Region filtration filters the input before the regression results are computed, and it saves both output time and computation time.
 
 ## MLR approximate p-values
 
@@ -459,6 +459,4 @@ CUDA_VISIBLE_DEVICES=0,1 python tecpg run mlr --all --p-thresh 0.000001 -g 100 -
 ## Acknowledgements
 
 This work was partially supported by an NIH NCI MERIT award (R37, CA233774, PI: Kober) and Cancer Center Support Grant (P30, CA082103, Co-I: Olshen).
-
-
 

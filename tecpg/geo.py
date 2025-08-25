@@ -21,7 +21,7 @@ def geo_dict(
     """
     Reads file_path as a geo data text file. Returns a dictionary that
     maps keys to data and a dictionary that maps characteristics with a
-    list of values for each person, based on char_id. If decompress is
+    list of values for each sample, based on char_id. If decompress is
     None, it will infer whether to decompress with gzip if the file_path
     ends with .gz. If set to a boolean, it will decompress if True.
     """

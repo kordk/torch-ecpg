@@ -1,11 +1,14 @@
 import os
 import shutil
-from typing import List, Tuple
+from typing import Dict, List, Tuple, TypeVar
 
 import numpy as np
 import pandas
 import requests
+
 from .logger import Logger
+
+T = TypeVar('T')
 
 
 def random_list(length: int, minimum: float, maximum: float) -> List[float]:
@@ -85,3 +88,30 @@ def trim_dataframes(
 
     for df, index in zip(dataframes, indices):
         df.drop(index - shared, inplace=True, **drop_kwargs)
+
+
+def default_region_parameter(
+    region_parameter_name: str,
+    region_parameter: T | None,
+    region: str,
+    defaults: Dict[str, T],
+    *,
+    logger: Logger = Logger(),
+) -> T | None:
+    if region in defaults and region_parameter == None:
+        updated_region_parameter = defaults[region]
+        logger.info(
+            'Using default value {0} for region parameter {1} and region {2}',
+            updated_region_parameter,
+            region_parameter_name,
+            region,
+        )
+        return updated_region_parameter
+    if region not in defaults and region_parameter != None:
+        logger.info(
+            'Region parameter {0} provided but ignored for region {1}',
+            region_parameter_name,
+            region,
+        )
+        return None
+    return region_parameter
