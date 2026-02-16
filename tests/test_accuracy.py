@@ -10,7 +10,7 @@ from typing import List
 # Ensure we can import tecpg
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if root_dir not in sys.path:
-    sys.path.append(root_dir)
+    sys.path.insert(0, root_dir)
 
 import tecpg
 from tecpg.test_data import generate_data
