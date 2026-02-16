@@ -469,37 +469,9 @@ def tecpg_mlr_lstsq(
                     # We have (G_chunk * M_chunk) results.
                     # M sites are same for all G in this chunk.
 
-                    if filtration:
-                        # output_sizes contains sizes per gene?
-                        # No, output_sizes.append(len(P)) above happens ONCE for the whole chunk block?
-                        # Wait. My "Gene Chunk" here matches `gene_loci_per_chunk`.
-                        # In `regression_full`, the loop is over single genes.
-                        # `if index % gene_loci_per_chunk == 0`: save.
-                        # So `regression_full` aggregates results for `gene_loci_per_chunk` genes.
-                        # My implementation iterates `gene_chunk_count`.
-                        # So I am already at the granularity of saving.
-
-                        # But wait, `output_sizes` in `regression_full` tracks size per gene.
-                        # `gt_sites = gt_site_names[last_index:index].repeat(output_sizes)`
-                        # This implies `output_sizes` is a list of integers, one per gene.
-                        # In my code, I processed the whole chunk at once.
-                        # So `output_sizes` has 1 element: the total number of surviving pairs in this chunk.
-                        # This is a problem for generating `gt_sites` index!
-                        # `gt_sites` index needs to repeat each gene name N times, where N is how many meth sites it paired with.
-                        # If I flattened everything, I lost the structure (G, M).
-                        # I need to recover the structure or generate indices differently.
-
-                        # If `region != 'all'` or `p_thresh` is used, the number of M per G varies.
-                        # I have `region_mask` (G*M flattened, or (G, M)).
-                        # `p_indices` is subset of `region_mask`.
-                        # It's hard to reconstruct counts per gene efficiently from flattened arrays.
-
-                        # Alternative: Generate indices BEFORE flattening/masking.
-                        # G names: (G_chunk,). Expand to (G_chunk, M_chunk). Flatten to (G_chunk*M_chunk).
-                        # M names: (M_chunk,). Expand to (G_chunk, M_chunk). Flatten.
-                        # Then apply masks.
-                        pass
-
+                    # Generate full indices for the block. At this point, any filtration
+                    # has already been applied to the data; indexing is identical for
+                    # filtered and non-filtered cases.
                     # Generate full indices for the block
                     # gt_chunk_names (G_chunk)
                     # mt_site_names (M_chunk)
