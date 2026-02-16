@@ -74,7 +74,7 @@ def read_chunk_results(output_dir):
     full_df.sort_index(inplace=True)
     return full_df
 
-def run_comparison_test(test_name, M, G, C, M_annot=None, G_annot=None, **kwargs):
+def run_comparison_test(test_name, M, G, C, M_annot=None, G_annot=None, logit_transform=False, **kwargs):
     print(f"\n--- Running Test: {test_name} ---")
     logger = Logger()
 
@@ -83,7 +83,8 @@ def run_comparison_test(test_name, M, G, C, M_annot=None, G_annot=None, **kwargs
         'M_annot': M_annot, 'G_annot': G_annot,
         'logger': logger,
         'p_only': False,
-        'methylation_only': False
+        'methylation_only': False,
+        'logit_transform': logit_transform,
     }
     args.update(kwargs)
 
@@ -206,33 +207,47 @@ def main():
         g_rows = 50
         M, G, C = generate_data(sample_size, m_rows, g_rows, annotation=False)
 
-        run_comparison_test("All Region", M, G, C, region='all')
+        for logit_transform in [False, True]:
+            transform_suffix = " (M-values)" if logit_transform else " (Beta)"
 
-        run_comparison_test(
-            "All Region Chunked",
-            M, G, C,
-            region='all',
-            meth_loci_per_chunk=20,
-            output_dir="test_output_chunked"
-        )
+            run_comparison_test(
+                f"All Region{transform_suffix}",
+                M, G, C,
+                region='all',
+                logit_transform=logit_transform
+            )
+
+            run_comparison_test(
+                f"All Region Chunked{transform_suffix}",
+                M, G, C,
+                region='all',
+                meth_loci_per_chunk=20,
+                output_dir=f"test_output_chunked{'_transformed' if logit_transform else ''}",
+                logit_transform=logit_transform
+            )
 
         print("\nGenerating data with annotation...")
         M, G, C, M_annot, G_annot = generate_data(sample_size, m_rows, g_rows, annotation=True)
         M_annot.set_index('name', inplace=True)
         G_annot.set_index('name', inplace=True)
 
-        run_comparison_test(
-            "Cis Region",
-            M, G, C, M_annot, G_annot,
-            region='cis',
-            window_base=0, upstream=50000, downstream=50000
-        )
+        for logit_transform in [False, True]:
+            transform_suffix = " (M-values)" if logit_transform else " (Beta)"
 
-        run_comparison_test(
-            "Trans Region",
-            M, G, C, M_annot, G_annot,
-            region='trans'
-        )
+            run_comparison_test(
+                f"Cis Region{transform_suffix}",
+                M, G, C, M_annot, G_annot,
+                region='cis',
+                window_base=0, upstream=50000, downstream=50000,
+                logit_transform=logit_transform
+            )
+
+            run_comparison_test(
+                f"Trans Region{transform_suffix}",
+                M, G, C, M_annot, G_annot,
+                region='trans',
+                logit_transform=logit_transform
+            )
 
         print("\nAll tests passed successfully!")
 
