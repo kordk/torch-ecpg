@@ -1,0 +1,612 @@
+import math
+import os
+import time
+from multiprocessing import Pool
+from typing import Literal, Optional
+
+import numpy
+import pandas
+import torch
+from colorama import Fore as colors
+
+from .config import DTYPE, get_device
+from .helper import trim_dataframes
+from .import_data import initialize_dir, save_dataframe_part
+from .logger import Logger
+
+
+def create_normal_p(device: torch.device, dtype: torch.dtype):
+    scalar = (
+        torch.tensor(2, device=device, dtype=dtype).sqrt().reciprocal().neg()
+    )
+
+    def prob(value: torch.Tensor) -> torch.Tensor:
+        return torch.erf(scalar * value.abs()) + 1
+
+    return prob
+
+
+def tecpg_mlr_lstsq(
+    M: pandas.DataFrame,
+    G: pandas.DataFrame,
+    C: pandas.DataFrame,
+    M_annot: Optional[pandas.DataFrame] = None,
+    G_annot: Optional[pandas.DataFrame] = None,
+    region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
+    window_base: Optional[int] = None,
+    downstream: Optional[int] = None,
+    upstream: Optional[int] = None,
+    gene_loci_per_chunk: Optional[int] = None,
+    meth_loci_per_chunk: Optional[int] = None,
+    p_thresh: Optional[float] = None,
+    output_dir: Optional[str] = None,
+    methylation_only: bool = True,
+    p_only: bool = False,
+    file_format: str = '{meth_chunk}-{gene_chunk}.csv',
+    *,
+    logger: Logger = Logger(),
+) -> Optional[pandas.DataFrame]:
+    '''
+    Calculates the multiple linear regression of the input dataframes M,
+    G, and C using torch.linalg.lstsq.
+    '''
+    chunking = (
+        gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
+    )
+
+    # Detect errors in the input values
+    if (output_dir is None) != (not chunking):
+        error = 'Output dir and chunk size must be defined together.'
+        logger.error(error)
+        raise ValueError(error)
+    if region not in ['all', 'cis', 'distal', 'trans']:
+        error = f'Region {region} not valid. Use all, cis, distal, or trans.'
+        logger.error(error)
+        raise ValueError(error)
+    if region != 'all' and (G_annot is None or M_annot is None):
+        error = (
+            f'Missing M or G annotation files using region filtration {region}'
+        )
+        logger.error(error)
+        raise ValueError(error)
+    if region in ['cis', 'distal'] and (
+        window_base is None or downstream is None or upstream is None
+    ):
+        error = (
+            f'Region filtration {region} requires window_base, downstream, and'
+            ' upstream not to be None'
+        )
+        logger.error(error)
+        raise ValueError(error)
+
+    # Prepare annotation tensors if region filtration is used
+    if region != 'all':
+        logger.info('Initializing region filtration')
+        G_annot = (
+            G_annot.drop(columns=['chromEnd', 'score'])
+            .reindex(G.index)
+            .replace({'X': -1, 'Y': -2, '+': 1, '-': -1})
+            .dropna()
+        )
+        M_annot = (
+            M_annot.drop(columns=['chromEnd', 'score', 'strand'])
+            .reindex(M.index)
+            .replace({'X': -1, 'Y': -2})
+            .dropna()
+        )
+
+        trim_dataframes([G_annot, G], **logger)
+        trim_dataframes([M_annot, M], **logger)
+
+        G_chrom, G_pos, G_strand = G_annot.to_numpy().T.astype(int)
+        M_chrom, M_pos = M_annot.to_numpy().T.astype(int)
+
+        G_chrom_t = torch.tensor(G_chrom, device=get_device(**logger), dtype=torch.int8)
+        G_pos_t = torch.tensor(G_pos, device=get_device(**logger), dtype=torch.int32)
+        G_strand_t = torch.tensor(G_strand, device=get_device(**logger), dtype=torch.int8)
+
+    # Initializes some constants
+    logger.info('Initializing regression variables (lstsq)')
+    device = get_device(**logger)
+    dtype = DTYPE
+    if meth_loci_per_chunk is not None:
+        meth_chunk_count = math.ceil(len(M) / meth_loci_per_chunk)
+    else:
+        meth_chunk_count = 1
+
+    nrows, ncols = C.shape[0], C.shape[1] + 1
+    G_np = G.to_numpy()
+    gt_count = len(G)
+    gt_site_names = numpy.array(G.index.values)
+    df = nrows - ncols - 1
+    logger.info('Running with {0} degrees of freedom', df)
+    normal_p = create_normal_p(device, dtype)
+
+    if gene_loci_per_chunk is not None:
+        gene_chunk_count = math.ceil(len(G) / gene_loci_per_chunk)
+    else:
+        gene_chunk_count = 1
+
+    if chunking:
+        logger.info('Initializing output directory')
+        initialize_dir(output_dir, **logger)
+
+    # Determines the column names for the output dataframe
+    index_names = ['gt_id', 'mt_id']
+    if p_only:
+        if methylation_only:
+            columns = ['mt_p']
+        else:
+            columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
+    else:
+        categories = (
+            ['mt']
+            if methylation_only
+            else (['const', 'mt'] + C.columns.to_list())
+        )
+        suffixes = ['_est', '_err', '_t', '_p']
+        columns = [
+            column + suffix for suffix in suffixes for column in categories
+        ]
+
+    # Create covariate tensor
+    if meth_loci_per_chunk is None:
+        Ct_base: torch.Tensor = torch.tensor(
+            C.to_numpy(), device=device, dtype=dtype
+        ).repeat(len(M), 1, 1)
+    else:
+        Ct_base: torch.Tensor = torch.tensor(
+            C.to_numpy(), device=device, dtype=dtype
+        ).repeat(meth_loci_per_chunk, 1, 1)
+
+    # Initialize variables for use in the regression calculation loop
+    end_index = 0
+    results = []
+    filtration = True
+    output_sizes = []
+    if region != 'all':
+        region_indices_list = []
+    if p_thresh is None:
+        p_indices_list = None
+        if region == 'all':
+            filtration = False
+    else:
+        p_indices_list = []
+
+    # Create methylation chunk (mc_) and chunk saving (inner_) logger
+    mc_logger = logger.alias()
+    mc_logger.info_color = colors.GREEN
+    inner_logger = mc_logger.alias()
+
+    # Use the multiprocessing pool
+    with Pool() as pool:
+        # Loop for methylation chunks or ran once with index 0 if no
+        # methylation chunking
+        for meth_chunk_index in range(meth_chunk_count):
+            # Log methylation chunk index
+            logger.info('STARTING METHYLATION CHUNK {0}', meth_chunk_index + 1)
+            mc_logger.info_template = (
+                '[CHUNK' + str(meth_chunk_index + 1) + '{modifier}] {message}'
+            )
+            mc_logger.current_count = 0
+
+            # Slice M into M_chunk or copy for no methylation chunking
+            if meth_loci_per_chunk is not None:
+                start_index = end_index
+                end_index = (meth_chunk_index + 1) * meth_loci_per_chunk
+                M_chunk = M[start_index:end_index]
+                if len(M_chunk) < meth_loci_per_chunk:
+                    Ct = Ct_base[: len(M_chunk)]
+                else:
+                    Ct = Ct_base
+            else:
+                M_chunk = M
+                Ct = Ct_base
+                start_index = 0
+                end_index = len(M)
+
+            mt_count = len(M_chunk)
+            mt_site_names = numpy.array(M_chunk.index.values)
+            if region == 'all' and p_thresh is None:
+                # If no filtration, output size is constant per gene chunk
+                pass # Calculated later
+
+            mc_logger.start_timer('info', 'Running tecpg_mlr_lstsq...')
+
+            # Create methylation loci chromosome and position tensors
+            # for the current chunk
+            if region != 'all':
+                if meth_loci_per_chunk is None:
+                    M_chrom_t = torch.tensor(
+                        M_chrom, device=device, dtype=torch.int8
+                    )
+                    M_pos_t = torch.tensor(
+                        M_pos, device=device, dtype=torch.int32
+                    )
+                else:
+                    M_chrom_t = torch.tensor(
+                        M_chrom[start_index:end_index],
+                        device=device,
+                        dtype=torch.int8,
+                    )
+                    M_pos_t = torch.tensor(
+                        M_pos[start_index:end_index],
+                        device=device,
+                        dtype=torch.int32,
+                    )
+
+            # Calculate design matrix X for the current methylation chunk
+            Mt: torch.Tensor = torch.tensor(
+                M_chunk.to_numpy(), device=device, dtype=dtype
+            ).unsqueeze(2)
+            ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
+            X: torch.Tensor = torch.cat((ones, Mt, Ct), 2) # (M, S, K)
+            del Mt, ones
+
+            # Pre-calculate diagonal of (X^T X)^-1 for Standard Error using QR decomposition
+            # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
+            # We need the diagonal elements.
+            Q, R = torch.linalg.qr(X, mode='reduced')
+            # Calculate R_inv. R is upper triangular.
+            # torch.linalg.inv works, or solve_triangular
+            # For batch, inv is fine.
+            R_inv = torch.linalg.inv(R)
+            # XtXi_diag = sum(R_inv^2, dim=2) ? No.
+            # (R^-1)(R^-1)^T diagonal is sum of squares of rows of R^-1.
+            # R_inv is (M, K, K).
+            # We want diag((R_inv) @ (R_inv).mT)
+            # Element [i, j, j] = sum_k R_inv[i, j, k] * R_inv[i, j, k]
+            XtXi_diag_sqrt = (R_inv.pow(2).sum(dim=2)).sqrt()
+            del Q, R, R_inv
+
+            # Display amount of total memory occupied by the constants
+            if allocated_memory := torch.cuda.memory_allocated():
+                device_properties: torch.cuda._CudaDeviceProperties = (
+                    torch.cuda.get_device_properties(0)
+                )
+                total_memory: int = device_properties.total_memory
+                torch.cuda.empty_cache()
+                mc_logger.info(
+                    (
+                        'CUDA device memory: {0} MB allocated by constants out'
+                        ' of {1} MB total'
+                    ),
+                    allocated_memory / 1_000_000,
+                    total_memory / 1_000_000,
+                )
+
+            # Loop over gene chunks
+            inner_logger.start_timer('info', 'Calculating regression (lstsq)...')
+
+            gene_end_index = 0
+
+            for gene_chunk_index in range(gene_chunk_count):
+                gene_start_index = gene_end_index
+                if gene_loci_per_chunk is not None:
+                    gene_end_index = min((gene_chunk_index + 1) * gene_loci_per_chunk, len(G))
+                else:
+                    gene_end_index = len(G)
+
+                G_chunk_np = G_np[gene_start_index:gene_end_index]
+                chunk_len = gene_end_index - gene_start_index
+
+                # Transpose gene expression matrix to serve as target matrix Y
+                # G_chunk_np is (G_chunk, S). Transpose to (S, G_chunk).
+                Y = torch.tensor(G_chunk_np.T, device=device, dtype=dtype) # (S, G_chunk)
+
+                # Solve using lstsq(X, Y)
+                # X is (M_chunk, S, K). Y is (S, G_chunk).
+                # We need to solve for B of shape (M_chunk, K, G_chunk).
+                # Broadcast Y to (1, S, G_chunk)?
+                # torch.linalg.lstsq(A, B):
+                # A: (*, m, n). B: (*, m, k).
+                # If we want output (*, n, k).
+                # Here A=X is (M_chunk, S, K).
+                # We want B to match M_chunk dim.
+                # So expand Y to (M_chunk, S, G_chunk).
+                Y_expanded = Y.unsqueeze(0).expand(mt_count, -1, -1)
+
+                # Coefficients B
+                lstsq_result = torch.linalg.lstsq(X, Y_expanded)
+                B = lstsq_result.solution # (M_chunk, K, G_chunk)
+
+                # Calculate Residuals E = Y - X B
+                # X: (M, S, K). B: (M, K, G).
+                # X @ B -> (M, S, G).
+                E = Y_expanded - X.matmul(B)
+
+                # RSS = sum(E^2, dim=1) -> (M, G)
+                RSS = E.pow(2).sum(dim=1)
+
+                # Sigma = sqrt(RSS / df)
+                # Standard Errors S = XtXi_diag_sqrt * Sigma
+                # XtXi_diag_sqrt is (M, K). RSS is (M, G).
+                # We need S of shape (M, K, G).
+                # Expand XtXi_diag_sqrt to (M, K, 1).
+                # Expand RSS to (M, 1, G).
+
+                Sigma = (RSS / df).sqrt().unsqueeze(1) # (M, 1, G)
+                S = XtXi_diag_sqrt.unsqueeze(2) * Sigma # (M, K, G)
+
+                del E, RSS, Sigma, Y_expanded, Y
+
+                # Calculate T and P
+                # B is (M, K, G). S is (M, K, G).
+
+                # Reshape to (M * G, K) for easier filtering if we were to filter now?
+                # regression_full output format requires (M, K) per regression.
+                # Here we have K coeffs per regression.
+                # We need to align with regression_full output.
+                # regression_full output columns: [mt_est, mt_err, mt_t, mt_p, ...]
+                # It flattens the result.
+                # Let's verify output format.
+                # regression_full produces results list of tensors of shape (N, 4*K) or something?
+                # No, results.append(torch.cat((B, S, T, P), dim=1)).
+                # B, S, T, P in regression_full are (N_subset, K).
+                # So concatenated is (N_subset, 4*K).
+                # Here we have B (M, K, G).
+                # We need to permute to (M, G, K).
+                B = B.permute(0, 2, 1) # (M, G, K)
+                S = S.permute(0, 2, 1)
+                T = B / S
+                P = normal_p(T)
+
+                # Now we have tensors of shape (M, G, K).
+                # We need to flatten to (M*G, K) to apply filters efficiently?
+                # Or apply masks on the (M, G) grid.
+
+                if region != 'all':
+                    # Create mask
+                    # G_chrom_t etc are full length. Slice for current chunk.
+                    G_chrom_chunk = G_chrom_t[gene_start_index:gene_end_index]
+                    G_pos_chunk = G_pos_t[gene_start_index:gene_end_index]
+                    G_strand_chunk = G_strand_t[gene_start_index:gene_end_index]
+
+                    # Compute mask (M, G)
+                    if region in ('cis', 'distal'):
+                        # M_chrom_t: (M,)
+                        # G_chrom_chunk: (G,)
+                        # Broadcast: (M, 1) vs (1, G) -> (M, G)
+                        # Note: regression_full loop was over genes, so it did (M, 1) vs scalar.
+                        # Here:
+                        region_mask = (
+                            (M_chrom_t.unsqueeze(1) == G_chrom_chunk.unsqueeze(0))
+                            .logical_and(
+                                G_strand_chunk.unsqueeze(0) * (window_base - upstream) < (G_pos_chunk.unsqueeze(0) - M_pos_t.unsqueeze(1))
+                            )
+                            .logical_and(
+                                (G_pos_chunk.unsqueeze(0) - M_pos_t.unsqueeze(1)) < (G_strand_chunk.unsqueeze(0) * (window_base + downstream))
+                            )
+                        )
+                    elif region == 'trans':
+                        region_mask = (M_chrom_t.unsqueeze(1) != G_chrom_chunk.unsqueeze(0))
+
+                # Flatten the tensors to (M*G, K)
+                # We want the order to match regression_full:
+                # regression_full loops M (outer), then G (inner).
+                # results.append() inside G loop.
+                # So effective order is M1_G1, M1_G2... NO.
+                # regression_full:
+                # Loop Meth Chunks (M_chunk)
+                #   Loop Gene (g)
+                #     results.append(mask(M_chunk) against g) -> This gives M_sub * 1.
+                #     So for one gene g, we have multiple meth sites.
+                #     Order in results list is: [M_sub_g1, M_sub_g2, ...]
+                #     Where M_sub_g1 are meth sites for g1.
+                #     So the primary index variation is Meth, then Gene?
+                #     No, "results.append(torch.cat((B, S, T, P), dim=1))" happens inside G loop.
+                #     So for G1, we add a block of M results.
+                #     So the dataframe index is (Gene, Meth).
+                #     `index_names = ['gt_id', 'mt_id']`.
+                #     Yes, index is (Gene, Meth).
+
+                # So we need to flatten (M, G, K) to (M*G, K) such that G varies slowest?
+                # No, if index is (G, M), we want G to be the outer block.
+                # B is (M, G, K).
+                # Permute to (G, M, K).
+                # Reshape to (G*M, K).
+                num_coeffs = B.shape[-1]
+                B = B.permute(1, 0, 2).reshape(-1, num_coeffs)
+                S = S.permute(1, 0, 2).reshape(-1, num_coeffs)
+                T = T.permute(1, 0, 2).reshape(-1, num_coeffs)
+                P = P.permute(1, 0, 2).reshape(-1, num_coeffs)
+
+                if region != 'all':
+                    # mask is (M, G).
+                    # Permute to (G, M).
+                    # Reshape to (G*M).
+                    region_mask = region_mask.permute(1, 0).reshape(-1)
+
+                    B = B[region_mask]
+                    S = S[region_mask]
+                    T = T[region_mask]
+                    P = P[region_mask]
+
+                    region_indices_list.append(region_mask) # Need to save for index generation
+
+                if methylation_only:
+                    # B is (N, K). Columns: Const, Meth, Covars...
+                    # Meth is index 1.
+                    B = B[:, 1:2]
+                    S = S[:, 1:2]
+                    T = T[:, 1:2]
+                    P = P[:, 1:2]
+
+                # P-value filtration
+                if p_thresh is not None:
+                    # P shape (N, K_out). Meth p-value is at index 0 (if meth_only) or 1 (if not).
+                    # Wait, if meth_only, P is (N, 1).
+                    # If not meth_only, P is (N, K). Const, Meth, ...
+                    # regression_full: p_indices = P[:, 0 if methylation_only else 1] <= p_thresh
+                    p_col = 0 if methylation_only else 1
+                    p_indices = P[:, p_col] <= p_thresh
+                    p_indices_list.append(p_indices)
+
+                    P = P[p_indices]
+                    if not p_only:
+                        B = B[p_indices]
+                        S = S[p_indices]
+                        T = T[p_indices]
+
+                if filtration:
+                    output_sizes.append(len(P))
+
+                if p_only:
+                    results.append(P)
+                else:
+                    results.append(torch.cat((B, S, T, P), dim=1))
+
+                # Save output if gene chunking is used
+                # In regression_full, saving happens inside the loop if gene_loci_per_chunk is set.
+                if gene_loci_per_chunk:
+                    # Construct indices
+                    # We need indices for the current gene chunk.
+                    # G_chunk names:
+                    gt_chunk_names = gt_site_names[gene_start_index:gene_end_index]
+
+                    # If region == 'all' and no p_thresh
+                    # We have (G_chunk * M_chunk) results.
+                    # M sites are same for all G in this chunk.
+
+                    # Generate full indices for the block. At this point, any filtration
+                    # has already been applied to the data; indexing is identical for
+                    # filtered and non-filtered cases.
+                    # Generate full indices for the block
+                    # gt_chunk_names (G_chunk)
+                    # mt_site_names (M_chunk)
+
+                    # Repeat G for each M
+                    gt_sites = numpy.repeat(gt_chunk_names, mt_count) # [g1, g1, ..., g2, g2, ...]
+                    mt_sites = numpy.tile(mt_site_names, chunk_len) # [m1, m2, ..., m1, m2, ...]
+
+                    # Apply region mask
+                    if region != 'all':
+                        # region_mask was (G, M) then flattened.
+                        # It corresponds to the order of gt_sites/mt_sites above?
+                        # B = B.permute(1, 0, 2).reshape(-1, ncols) -> (G, M, K) -> (G*M, K).
+                        # Yes.
+                        # region_mask is on CPU/GPU?
+                        # region_mask was tensor.
+                        # Need numpy mask.
+                        mask_np = region_indices_list[-1].cpu().numpy()
+                        del region_indices_list[:]
+
+                        gt_sites = gt_sites[mask_np]
+                        mt_sites = mt_sites[mask_np]
+                    else:
+                        mask_np = None # implied all True
+
+                    # Apply p-value mask
+                    if p_thresh is not None:
+                        p_mask_np = p_indices_list[-1].cpu().numpy()
+                        del p_indices_list[:]
+
+                        gt_sites = gt_sites[p_mask_np]
+                        mt_sites = mt_sites[p_mask_np]
+
+                    index_chunk = [gt_sites, mt_sites]
+
+                    # Create path and save
+                    gene_index_str = str(gene_chunk_index + 1) # This differs slightly from regression_full count which counts genes?
+                    # regression_full: gene_index_str = str(mc_logger.current_count + 1)
+                    # mc_logger.current_count increments when saving.
+                    # Here we can just use loop index + 1.
+                    meth_index_str = str(meth_chunk_index + 1)
+                    file_name = file_format.format(
+                        meth_chunk=meth_index_str, gene_chunk=gene_index_str
+                    )
+                    file_path = os.path.join(output_dir, file_name)
+
+                    out = pandas.DataFrame(
+                        torch.cat(results).cpu().numpy(),
+                        index=index_chunk,
+                        columns=columns,
+                    )
+                    out.index.set_names(index_names, inplace=True)
+
+                    # Save
+                    mc_logger.count(
+                        'Saving part {i}/{0}:',
+                        gene_chunk_count,
+                    )
+                    pool.apply_async(
+                        save_dataframe_part,
+                        (out, file_path, gene_chunk_index + 1),
+                        dict(mc_logger),
+                    )
+                    del results[:]
+
+                    # Force GC
+                    if allocated_memory:
+                         torch.cuda.empty_cache()
+
+            mc_logger.time('Looped over methylation loci in {l} seconds')
+            mc_logger.time('Calculated tecpg_mlr_lstsq in {t} seconds')
+
+            # If no gene chunking (gene_loci_per_chunk is None), save/return results
+            if gene_loci_per_chunk is None:
+                # We have one result in `results`.
+                # Generate indices.
+                gt_sites = numpy.repeat(gt_site_names, mt_count)
+                mt_sites = numpy.tile(mt_site_names, gt_count)
+
+                if region != 'all':
+                    mask_np = region_indices_list[-1].cpu().numpy()
+                    del region_indices_list[:]
+                    gt_sites = gt_sites[mask_np]
+                    mt_sites = mt_sites[mask_np]
+
+                if p_thresh is not None:
+                    p_mask_np = p_indices_list[-1].cpu().numpy()
+                    del p_indices_list[:]
+                    gt_sites = gt_sites[p_mask_np]
+                    mt_sites = mt_sites[p_mask_np]
+
+                index_chunk = [gt_sites, mt_sites]
+
+                out = pandas.DataFrame(
+                    torch.cat(results).cpu().numpy(),
+                    index=index_chunk,
+                    columns=columns,
+                )
+                out.index.set_names(index_names, inplace=True)
+
+                if meth_loci_per_chunk is not None:
+                    gene_index_str = '1'
+                    meth_index_str = str(meth_chunk_index + 1)
+                    file_name = file_format.format(
+                        meth_chunk=meth_index_str, gene_chunk=gene_index_str
+                    )
+                    file_path = os.path.join(output_dir, file_name)
+
+                    mc_logger.count(
+                        'Saving methylation chunk {0}/{1}:',
+                        meth_chunk_index + 1,
+                        meth_chunk_count,
+                    )
+                    pool.apply_async(
+                        save_dataframe_part,
+                        (out, file_path, meth_chunk_index + 1),
+                        dict(mc_logger),
+                    )
+                    del results[:]
+
+            logger.time(
+                'FINISHED METHYLATION CHUNK {0} IN {l} SECONDS',
+                meth_chunk_index + 1,
+            )
+
+        # Wait for chunks
+        if chunking:
+            logger.time('Waiting for chunks to save...')
+            pool.close()
+            pool.join()
+            logger.time('Finished waiting for chunks to save in {l} seconds')
+
+        logger.time(
+            'Finished calculating the multiple linear regression (lstsq) in {t} total'
+            ' seconds'
+        )
+
+        if not chunking:
+            return out

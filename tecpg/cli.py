@@ -29,6 +29,7 @@ from .pearson_full import (
     pearson_chunk_tensor,
     pearson_full_tensor,
 )
+from .processing import tecpg_mlr_lstsq
 from .regression_full import regression_full
 from .regression_single import regression_single
 from .test_data import generate_data
@@ -269,6 +270,16 @@ def corr(
 @click.option(
     '--p-only', '-P', is_flag=True, show_default=True, default=False, type=bool
 )
+@click.option(
+    '--mlr-method',
+    type=click.Choice(['manual', 'lstsq']),
+    default='manual',
+    show_default=True,
+    help=(
+        "The MLR computation method to use. 'manual' uses the original"
+        " optimized inversion; 'lstsq' uses torch.linalg.lstsq."
+    ),
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -281,6 +292,7 @@ def mlr(
     upstream: Optional[int],
     full_output: bool,
     p_only: bool,
+    mlr_method: str,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -298,10 +310,10 @@ def mlr(
     if region != 'all':
         annot_path = os.path.join(data['root_path'], data['annot_dir'])
         M_annot = pandas.read_csv(
-            os.path.join(annot_path, data['meth_annot']), sep=None
+            os.path.join(annot_path, data['meth_annot']), sep=None, engine='python'
         ).set_index('name')
         G_annot = pandas.read_csv(
-            os.path.join(annot_path, data['gene_annot']), sep=None
+            os.path.join(annot_path, data['gene_annot']), sep=None, engine='python'
         ).set_index('name')
 
     window_base = default_region_parameter(
@@ -341,7 +353,10 @@ def mlr(
     args.append(None if not chunking else output_path)  # output_dir
     args.extend([methylation_only, p_only])
 
-    output = regression_full(*args, **logger)
+    if mlr_method == 'lstsq':
+        output = tecpg_mlr_lstsq(*args, **logger)
+    else:
+        output = regression_full(*args, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)
 
