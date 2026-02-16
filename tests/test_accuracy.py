@@ -16,14 +16,16 @@ import tecpg
 from tecpg.test_data import generate_data
 from tecpg.regression_full import regression_full
 from tecpg.logger import Logger
+from tecpg.helper import logit_transform_pandas
 
 try:
     from tests.validation_utils import run_statsmodels_ols, compare_results, save_scatter_plot
 except ImportError:
     from validation_utils import run_statsmodels_ols, compare_results, save_scatter_plot
 
-def main():
-    print("Starting tecpg accuracy validation test...")
+def run_accuracy_test(logit_transform=False):
+    transform_name = "M-values" if logit_transform else "Beta-values"
+    print(f"\nStarting tecpg accuracy validation test ({transform_name})...")
 
     # 1. Generate Data
     sample_size = 100
@@ -46,6 +48,7 @@ def main():
         M_annot, G_annot,
         region='all',
         p_thresh=None, # Get all results to validate
+        logit_transform=logit_transform,
         logger=logger
     )
 
@@ -69,6 +72,9 @@ def main():
         # Get data for this pair
         m_series = M.loc[mt_id]
         g_series = G.loc[gt_id]
+
+        if logit_transform:
+            m_series = logit_transform_pandas(m_series)
 
         # Get tecpg result row
         # tecpg index is (gt_id, mt_id)
@@ -145,7 +151,8 @@ def main():
     print(f"Degrees of Freedom: {df_val}")
 
     # 6. Save Report
-    report_path = "validation_report.csv"
+    suffix = "_transformed" if logit_transform else ""
+    report_path = f"validation_report{suffix}.csv"
     results_df.to_csv(report_path, index=False)
     print(f"Detailed validation results saved to {report_path}")
 
@@ -153,17 +160,25 @@ def main():
     print("Generating validation plots...")
     save_scatter_plot(results_df['sm_est'], results_df['tecpg_est'],
                       'Statsmodels Estimate', 'Tecpg Estimate',
-                      'Methylation Estimate Comparison', 'accuracy_est_comparison.png')
+                      f'Methylation Estimate Comparison ({transform_name})', f'accuracy_est_comparison{suffix}.png')
     save_scatter_plot(results_df['sm_err'], results_df['tecpg_err'],
                       'Statsmodels Std Error', 'Tecpg Std Error',
-                      'Methylation Std Error Comparison', 'accuracy_err_comparison.png')
+                      f'Methylation Std Error Comparison ({transform_name})', f'accuracy_err_comparison{suffix}.png')
     save_scatter_plot(results_df['sm_t'], results_df['tecpg_t'],
                       'Statsmodels T-stat', 'Tecpg T-stat',
-                      'Methylation T-statistic Comparison', 'accuracy_t_comparison.png')
+                      f'Methylation T-statistic Comparison ({transform_name})', f'accuracy_t_comparison{suffix}.png')
     save_scatter_plot(results_df['sm_p'], results_df['tecpg_p'],
                       'Statsmodels P-value', 'Tecpg P-value',
-                      'Methylation P-value Comparison', 'accuracy_p_comparison.png')
+                      f'Methylation P-value Comparison ({transform_name})', f'accuracy_p_comparison{suffix}.png')
     print("Plots saved to tests/plots/")
+
+def main():
+    try:
+        run_accuracy_test(logit_transform=False)
+        run_accuracy_test(logit_transform=True)
+    except Exception as e:
+        print(f"\nTEST FAILED: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
