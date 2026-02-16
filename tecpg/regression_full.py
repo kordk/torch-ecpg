@@ -10,7 +10,7 @@ import torch
 from colorama import Fore as colors
 
 from .config import DTYPE, get_device
-from .helper import trim_dataframes
+from .helper import logit_transform_torch, trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
 from .test_data import generate_data
@@ -60,6 +60,7 @@ def regression_full(
     output_dir: Optional[str] = None,
     methylation_only: bool = True,
     p_only: bool = False,
+    logit_transform: bool = False,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
     *,
     logger: Logger = Logger(),
@@ -311,6 +312,10 @@ def regression_full(
             Mt: torch.Tensor = torch.tensor(
                 M_chunk.to_numpy(), device=device, dtype=dtype
             ).unsqueeze(2)
+
+            if logit_transform:
+                Mt = logit_transform_torch(Mt)
+
             ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
             X: torch.Tensor = torch.cat((ones, Mt, Ct), 2)
             del Mt, ones

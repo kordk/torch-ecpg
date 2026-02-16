@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, TypeVar
 import numpy as np
 import pandas
 import requests
+import torch
 
 from .logger import Logger
 
@@ -115,3 +116,25 @@ def default_region_parameter(
         )
         return None
     return region_parameter
+
+
+def logit_transform_torch(
+    tensor: torch.Tensor, epsilon: float = 1e-6
+) -> torch.Tensor:
+    """
+    Clips the tensor values to [epsilon, 1 - epsilon] and applies a
+    logit transformation: log2(x / (1 - x)).
+    """
+    tensor = tensor.clamp(epsilon, 1 - epsilon)
+    return torch.log2(tensor / (1 - tensor))
+
+
+def logit_transform_pandas(
+    df: pandas.DataFrame, epsilon: float = 1e-6
+) -> pandas.DataFrame:
+    """
+    Clips the dataframe values to [epsilon, 1 - epsilon] and applies a
+    logit transformation: log2(x / (1 - x)).
+    """
+    df = df.clip(epsilon, 1 - epsilon)
+    return np.log2(df / (1 - df))

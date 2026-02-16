@@ -280,6 +280,14 @@ def corr(
         " optimized inversion; 'lstsq' uses torch.linalg.lstsq."
     ),
 )
+@click.option(
+    '--logit-transform',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+    help='Whether to logit-transform M-values (log2(beta/(1-beta)))',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -293,6 +301,7 @@ def mlr(
     full_output: bool,
     p_only: bool,
     mlr_method: str,
+    logit_transform: bool,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -351,7 +360,7 @@ def mlr(
         ]
     )
     args.append(None if not chunking else output_path)  # output_dir
-    args.extend([methylation_only, p_only])
+    args.extend([methylation_only, p_only, logit_transform])
 
     if mlr_method == 'lstsq':
         output = tecpg_mlr_lstsq(*args, **logger)
@@ -393,6 +402,14 @@ def mlr(
 @click.option(
     '--no-p', is_flag=True, show_default=True, default=False, type=bool
 )
+@click.option(
+    '--logit-transform',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+    help='Whether to logit-transform M-values (log2(beta/(1-beta)))',
+)
 @click.pass_context
 def mlr_single(
     ctx: click.Context,
@@ -405,6 +422,7 @@ def mlr_single(
     no_err: bool,
     no_t: bool,
     no_p: bool,
+    logit_transform: bool,
 ) -> None:
     """
     Calculates the multiple linear regression.
@@ -462,6 +480,11 @@ def mlr_single(
     args.extend((methylation_only, 1))
     if regressions_per_chunk:
         args.append(output_path)
+    else:
+        args.append(None)
+
+    args.append(logit_transform)
+
     output = regression_single(*args, **logger)
     if not regressions_per_chunk:
         save_dataframes([output], output_path, [data['output_file']], **logger)
