@@ -120,7 +120,6 @@ def tecpg_mlr_lstsq(
     gt_site_names = numpy.array(G.index.values)
     df = nrows - ncols - 1
     logger.info('Running with {0} degrees of freedom', df)
-    dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
     normal_p = create_normal_p(device, dtype)
 
     if gene_loci_per_chunk is not None:
