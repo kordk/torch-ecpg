@@ -158,6 +158,10 @@ def regression_full(
         logger.error(error)
         raise ValueError(error)
 
+    # Initializes some constants
+    logger.info('Initializing regression variables')
+    device = get_device(**logger)
+
     # Prepare annotation tensors if region filtration is used
     if region != 'all':
         logger.info('Initializing region filtration')
@@ -183,10 +187,6 @@ def regression_full(
         G_chrom_t = torch.tensor(G_chrom, device=device, dtype=torch.int8)
         G_pos_t = torch.tensor(G_pos, device=device, dtype=torch.int32)
         G_strand_t = torch.tensor(G_strand, device=device, dtype=torch.int8)
-
-    # Initializes some constants
-    logger.info('Initializing regression variables')
-    device = get_device(**logger)
     dtype = DTYPE
     if meth_loci_per_chunk is not None:
         meth_chunk_count = math.ceil(len(M) / meth_loci_per_chunk)
