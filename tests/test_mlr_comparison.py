@@ -15,6 +15,11 @@ from tecpg.regression_full import regression_full
 from tecpg.processing import tecpg_mlr_lstsq
 from tecpg.logger import Logger
 
+try:
+    from tests.validation_utils import save_scatter_plot
+except ImportError:
+    from validation_utils import save_scatter_plot
+
 def summarize_comparison(df1, df2):
     """
     Prints a summary comparison between two dataframes.
@@ -154,6 +159,32 @@ def run_comparison_test(test_name, M, G, C, M_annot=None, G_annot=None, **kwargs
 
     # Compare values with tolerance
     summarize_comparison(res_manual, res_lstsq)
+
+    sanitized_name = test_name.replace(" ", "_").lower()
+    save_scatter_plot(
+        res_manual['mt_est'], res_lstsq['mt_est'],
+        'Manual Estimate', 'Lstsq Estimate',
+        f'Comparison ({test_name}) - Estimate',
+        f'comparison_{sanitized_name}_est.png'
+    )
+    save_scatter_plot(
+        res_manual['mt_err'], res_lstsq['mt_err'],
+        'Manual Std Error', 'Lstsq Std Error',
+        f'Comparison ({test_name}) - Std Error',
+        f'comparison_{sanitized_name}_err.png'
+    )
+    save_scatter_plot(
+        res_manual['mt_t'], res_lstsq['mt_t'],
+        'Manual T-stat', 'Lstsq T-stat',
+        f'Comparison ({test_name}) - T-statistic',
+        f'comparison_{sanitized_name}_t.png'
+    )
+    save_scatter_plot(
+        res_manual['mt_p'], res_lstsq['mt_p'],
+        'Manual P-value', 'Lstsq P-value',
+        f'Comparison ({test_name}) - P-value',
+        f'comparison_{sanitized_name}_p.png'
+    )
 
     try:
         pd.testing.assert_frame_equal(res_manual, res_lstsq, rtol=1e-3, atol=1e-3)

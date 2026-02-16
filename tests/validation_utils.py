@@ -2,6 +2,8 @@
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
+import matplotlib.pyplot as plt
+import os
 from typing import Tuple, Dict, Any, List
 
 def run_statsmodels_ols(
@@ -70,3 +72,44 @@ def compare_results(
         'diff_p': abs(tecpg_res['mt_p'] - sm_res['mt_p']),
         'rel_diff_est': abs(tecpg_res['mt_est'] - sm_res['mt_est']) / (abs(sm_res['mt_est']) + 1e-9),
     }
+
+def save_scatter_plot(
+    x: Any,
+    y: Any,
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    filename: str
+):
+    """
+    Generates a scatter plot with a y=x reference line and saves it.
+    """
+    output_dir = os.path.join(os.path.dirname(__file__), 'plots')
+    os.makedirs(output_dir, exist_ok=True)
+
+    plt.figure(figsize=(8, 8))
+    plt.scatter(x, y, alpha=0.5)
+
+    # Add y=x line
+    # Calculate limits based on data, handle cases where data might be constant or empty
+    if len(x) > 0 and len(y) > 0:
+        min_val = min(np.min(x), np.min(y))
+        max_val = max(np.max(x), np.max(y))
+        padding = (max_val - min_val) * 0.05
+        if padding == 0:
+            padding = 1.0 # Default padding if all values are same
+
+        lims = [min_val - padding, max_val + padding]
+        plt.plot(lims, lims, 'k--', alpha=0.75, zorder=0)
+        plt.xlim(lims)
+        plt.ylim(lims)
+
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath)
+    plt.close()
+    print(f"Saved plot to {filepath}")

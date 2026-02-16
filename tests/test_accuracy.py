@@ -18,9 +18,9 @@ from tecpg.regression_full import regression_full
 from tecpg.logger import Logger
 
 try:
-    from tests.validation_utils import run_statsmodels_ols, compare_results
+    from tests.validation_utils import run_statsmodels_ols, compare_results, save_scatter_plot
 except ImportError:
-    from validation_utils import run_statsmodels_ols, compare_results
+    from validation_utils import run_statsmodels_ols, compare_results, save_scatter_plot
 
 def main():
     print("Starting tecpg accuracy validation test...")
@@ -90,6 +90,12 @@ def main():
         diffs['mt_id'] = mt_id
         diffs['sm_p'] = sm_vals['mt_p']
         diffs['tecpg_p'] = tecpg_vals['mt_p']
+        diffs['sm_est'] = sm_vals['mt_est']
+        diffs['tecpg_est'] = tecpg_vals['mt_est']
+        diffs['sm_err'] = sm_vals['mt_err']
+        diffs['tecpg_err'] = tecpg_vals['mt_err']
+        diffs['sm_t'] = sm_vals['mt_t']
+        diffs['tecpg_t'] = tecpg_vals['mt_t']
 
         results.append(diffs)
 
@@ -142,6 +148,22 @@ def main():
     report_path = "validation_report.csv"
     results_df.to_csv(report_path, index=False)
     print(f"Detailed validation results saved to {report_path}")
+
+    # Generate Plots
+    print("Generating validation plots...")
+    save_scatter_plot(results_df['sm_est'], results_df['tecpg_est'],
+                      'Statsmodels Estimate', 'Tecpg Estimate',
+                      'Methylation Estimate Comparison', 'accuracy_est_comparison.png')
+    save_scatter_plot(results_df['sm_err'], results_df['tecpg_err'],
+                      'Statsmodels Std Error', 'Tecpg Std Error',
+                      'Methylation Std Error Comparison', 'accuracy_err_comparison.png')
+    save_scatter_plot(results_df['sm_t'], results_df['tecpg_t'],
+                      'Statsmodels T-stat', 'Tecpg T-stat',
+                      'Methylation T-statistic Comparison', 'accuracy_t_comparison.png')
+    save_scatter_plot(results_df['sm_p'], results_df['tecpg_p'],
+                      'Statsmodels P-value', 'Tecpg P-value',
+                      'Methylation P-value Comparison', 'accuracy_p_comparison.png')
+    print("Plots saved to tests/plots/")
 
 if __name__ == "__main__":
     main()
