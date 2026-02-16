@@ -31,7 +31,7 @@ echo "✅ Git branch 'dev' is checked out."
 
 # 3. Verify Library Version and Installation Status
 # Querying the installed package metadata directly via Python
-TECPG_VERSION=$(python3 -c "
+TECPG_VERSION=$(cd / && python3 -c "
 try:
     import importlib.metadata
     print(importlib.metadata.version('tecpg'))
