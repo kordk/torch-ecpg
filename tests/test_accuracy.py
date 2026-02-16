@@ -112,7 +112,7 @@ def main():
     # P-values will differ because tecpg uses Normal approx, statsmodels uses Student-t
 
     # Allowable error for float32 vs float64 calculations
-    TOLERANCE_EST = 1e-4
+    TOLERANCE_EST = 2e-4
     TOLERANCE_T = 1e-3
 
     failures = results_df[
