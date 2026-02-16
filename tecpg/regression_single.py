@@ -9,6 +9,7 @@ import pandas
 import torch
 
 from .config import get_device
+from .helper import logit_transform_pandas
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
 from .test_data import generate_data
@@ -28,6 +29,7 @@ def regression_single(
     methylation_only: bool = True,
     update_period: Optional[float] = 1,
     output_dir: Optional[str] = None,
+    logit_transform: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> pandas.DataFrame:
@@ -109,6 +111,10 @@ def regression_single(
         logger.info('Clearing output directory')
         initialize_dir(output_dir, **logger)
 
+    if logit_transform:
+        logger.info('Transforming M using logit function')
+        M = logit_transform_pandas(M)
+
     logger.start_timer(
         'info',
         'Running full regression in {0} mode with "{1}" region filtration.',
@@ -166,7 +172,7 @@ def regression_single(
     last_time = time.time()
     with Pool() if regressions_per_chunk else nullcontext() as pool:
         for (gene_site, G_row) in G.iterrows():
-            y = torch.tensor(G_row, dtype=torch.float32).to(device)
+            y = torch.tensor(G_row.to_numpy(), dtype=torch.float32).to(device)
             for (meth_site, M_row) in M.iterrows():
                 if region != 'all':
                     if (
