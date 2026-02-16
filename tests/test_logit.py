@@ -19,6 +19,10 @@ from tecpg.logger import Logger
 
 class TestLogitTransform(unittest.TestCase):
     def setUp(self):
+        # Set seed for reproducibility
+        np.random.seed(42)
+        torch.manual_seed(42)
+
         # Generate small dummy data
         self.sample_size = 50
         self.m_loci = 20
@@ -30,8 +34,11 @@ class TestLogitTransform(unittest.TestCase):
         self.logger.start_timer()
 
     def test_logit_transform_full(self):
-        # Manual transform
-        M_trans = logit_transform_pandas(self.M)
+        # Manual transform mimicking internal float32 precision
+        # regression_full converts M to float32 tensor BEFORE transform when using flag.
+        # So we must cast to float32 first to match precision.
+        M_f32 = self.M.astype('float32')
+        M_trans = logit_transform_pandas(M_f32)
 
         # Run regression_full with manual transform
         res_manual = regression_full(
@@ -68,8 +75,9 @@ class TestLogitTransform(unittest.TestCase):
         self.assertFalse(np.allclose(res_raw['mt_est'], res_flag['mt_est'], rtol=1e-3))
 
     def test_logit_transform_lstsq(self):
-        # Manual transform
-        M_trans = logit_transform_pandas(self.M)
+        # Manual transform mimicking internal float32 precision
+        M_f32 = self.M.astype('float32')
+        M_trans = logit_transform_pandas(M_f32)
 
         # Run lstsq with manual transform
         res_manual = tecpg_mlr_lstsq(
@@ -104,6 +112,7 @@ class TestLogitTransform(unittest.TestCase):
 
     def test_logit_transform_single(self):
         # Manual transform
+        # regression_single uses pandas for transform internally (float64), so manual transform on float64 M matches perfectly.
         M_trans = logit_transform_pandas(self.M)
 
         # Run single with manual transform
