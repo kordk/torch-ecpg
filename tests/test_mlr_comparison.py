@@ -15,6 +15,41 @@ from tecpg.regression_full import regression_full
 from tecpg.processing import tecpg_mlr_lstsq
 from tecpg.logger import Logger
 
+def summarize_comparison(df1, df2):
+    """
+    Prints a summary comparison between two dataframes.
+    """
+    print("\nComparison Summary:")
+    print("-" * 118)
+    print(f"{'Column':<20} | {'Max Abs Diff':<15} | {'Mean Abs Diff':<15} | {'Max Rel Diff':<15} | {'Mean Rel Diff':<15} | {'Correlation':<15}")
+    print("-" * 118)
+
+    if df1.empty:
+        print("DataFrames are empty.")
+        print("-" * 118)
+        return
+
+    diff = (df1 - df2).abs()
+    rel_diff = diff / (df1.abs() + 1e-9)
+
+    for col in df1.columns:
+        if not pd.api.types.is_numeric_dtype(df1[col]):
+            continue
+
+        max_abs = diff[col].max()
+        mean_abs = diff[col].mean()
+        max_rel = rel_diff[col].max()
+        mean_rel = rel_diff[col].mean()
+
+        try:
+            corr = df1[col].corr(df2[col])
+        except Exception:
+            corr = float('nan')
+
+        print(f"{col:<20} | {max_abs:<15.4e} | {mean_abs:<15.4e} | {max_rel:<15.4e} | {mean_rel:<15.4e} | {corr:<15.6f}")
+
+    print("-" * 118)
+
 def read_chunk_results(output_dir):
     files = glob.glob(os.path.join(output_dir, "*.csv"))
     dfs = []
@@ -118,6 +153,8 @@ def run_comparison_test(test_name, M, G, C, M_annot=None, G_annot=None, **kwargs
         raise AssertionError("Column mismatch")
 
     # Compare values with tolerance
+    summarize_comparison(res_manual, res_lstsq)
+
     try:
         pd.testing.assert_frame_equal(res_manual, res_lstsq, rtol=1e-3, atol=1e-3)
         print("Results are equal within tolerance (rtol=1e-3, atol=1e-3)!")
