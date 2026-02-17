@@ -258,7 +258,7 @@ def regression_full(
     inner_logger = mc_logger.alias()
 
     # Use the multiprocessing pool
-    with Pool() as pool, gpu_guardian(logger) as gpu_handle:
+    with gpu_guardian(logger) as gpu_handle, Pool() as pool:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in (

@@ -174,7 +174,7 @@ def regression_single(
     inner_logger.start_timer('info', 'Calculating chunks...')
     i = 0
     last_time = time.time()
-    with (Pool() if regressions_per_chunk else nullcontext()) as pool, gpu_guardian(logger) as gpu_handle:
+    with gpu_guardian(logger) as gpu_handle, Pool() if regressions_per_chunk else nullcontext() as pool:
         for (gene_site, G_row) in G.iterrows():
             throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
 
