@@ -1,4 +1,6 @@
 import os
+import psutil
+import torch
 import time
 from collections.abc import Mapping
 from datetime import datetime
@@ -139,7 +141,7 @@ class Logger(PassAsKwarg):
         self.get_time_func = time.perf_counter
         self.start_time = self.get_time_func()
         self.end_time = self.start_time
-        self.times: List[float] = []
+        self.times: List[float] = [self.start_time]
 
         self.timer_count: int = 0
         self.total_time: float = 0
@@ -318,6 +320,26 @@ class Logger(PassAsKwarg):
         iterations (including previous iterations).
         """
         return self.average_time * (n - self.timer_count)
+
+    def memory_check(self, function_name: str, *args, **kwargs) -> None:
+        """
+        Logs memory usage for RAM and GPU.
+        """
+        process = psutil.Process(os.getpid())
+        ram_usage = process.memory_info().rss / 1024 ** 2
+        if torch.cuda.is_available():
+            gpu_usage = torch.cuda.memory_allocated() / 1024 ** 2
+        else:
+            gpu_usage = 0
+
+        self.info(
+            '[{0}] RAM: {1:.2f} MB, GPU: {2:.2f} MB',
+            function_name,
+            ram_usage,
+            gpu_usage,
+            *args,
+            **kwargs,
+        )
 
     def save(
         self, log_dir: Optional[str] = None, file_name: Optional[str] = None
