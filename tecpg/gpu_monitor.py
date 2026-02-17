@@ -68,6 +68,18 @@ def get_gpu_temp(handle: object) -> int:
     except pynvml.NVMLError:
         return -1
 
+def report_thermal_status(handle: object, threshold: int, logger: Logger):
+    """Reports the current GPU temperature and thermal threshold."""
+    if handle is None:
+        logger.info("GPU Thermal Status: Monitor not active")
+        return
+
+    temp = get_gpu_temp(handle)
+    if temp == -1:
+        logger.warning("GPU Thermal Status: Error reading temperature (Threshold: {0}C)", threshold)
+    else:
+        logger.info("GPU Thermal Status: {0}C (Threshold: {1}C)", temp, threshold)
+
 def throttle_if_needed(handle: object, threshold: int, wait_time: int, logger: Logger):
     """Checks GPU temperature and sleeps if it exceeds the threshold."""
     if handle is None:

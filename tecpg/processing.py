@@ -10,7 +10,7 @@ import torch
 from colorama import Fore as colors
 
 from .config import DTYPE, get_device
-from .gpu_monitor import gpu_guardian, throttle_if_needed
+from .gpu_monitor import gpu_guardian, report_thermal_status, throttle_if_needed
 from .helper import logit_transform_torch, trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
@@ -188,9 +188,15 @@ def tecpg_mlr_lstsq(
         # methylation chunking
         for meth_chunk_index in range(meth_chunk_count):
             throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
+            report_thermal_status(gpu_handle, thermal_threshold, logger)
 
+            logger.memory_check('tecpg_mlr_lstsq')
             # Log methylation chunk index
-            logger.info('STARTING METHYLATION CHUNK {0}', meth_chunk_index + 1)
+            logger.info(
+                'STARTING METHYLATION CHUNK {0}/{1}',
+                meth_chunk_index + 1,
+                meth_chunk_count,
+            )
             mc_logger.info_template = (
                 '[CHUNK' + str(meth_chunk_index + 1) + '{modifier}] {message}'
             )
