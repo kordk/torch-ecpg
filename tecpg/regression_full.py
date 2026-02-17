@@ -10,7 +10,7 @@ import torch
 from colorama import Fore as colors
 
 from .config import DTYPE, get_device
-from .gpu_monitor import gpu_guardian, throttle_if_needed
+from .gpu_monitor import gpu_guardian, report_thermal_status, throttle_if_needed
 from .helper import logit_transform_torch, trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
@@ -194,6 +194,8 @@ def regression_full(
     dtype = DTYPE
     if meth_loci_per_chunk is not None:
         meth_chunk_count = math.ceil(len(M) / meth_loci_per_chunk)
+    else:
+        meth_chunk_count = 1
     nrows, ncols = C.shape[0], C.shape[1] + 1
     G_np = G.to_numpy()
     gt_count = len(G)
@@ -265,10 +267,15 @@ def regression_full(
             (0,) if meth_loci_per_chunk is None else range(meth_chunk_count)
         ):
             throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
+            report_thermal_status(gpu_handle, thermal_threshold, logger)
 
             logger.memory_check('regression_full')
             # Log methylation chunk index
-            logger.info('STARTING METHYLATION CHUNK {0}', meth_chunk_index + 1)
+            logger.info(
+                'STARTING METHYLATION CHUNK {0}/{1}',
+                meth_chunk_index + 1,
+                meth_chunk_count,
+            )
             mc_logger.info_template = (
                 '[CHUNK' + str(meth_chunk_index + 1) + '{modifier}] {message}'
             )
