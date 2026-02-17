@@ -121,6 +121,7 @@ def regression_single(
         ('methylation only' if methylation_only else 'full output'),
         region,
     )
+    logger.memory_check('regression_single')
 
     if output_dir is None and regressions_per_chunk:
         message = (
@@ -241,6 +242,7 @@ def regression_single(
                         regressions_per_chunk
                         and i % regressions_per_chunk == 0
                     ):
+                        logger.memory_check('regression_single')
                         file_name = str(logger.current_count + 1) + '.csv'
                         file_path = os.path.join(output_dir, file_name)
                         logger.count(

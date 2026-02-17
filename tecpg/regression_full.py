@@ -261,6 +261,7 @@ def regression_full(
         for meth_chunk_index in (
             (0,) if meth_loci_per_chunk is None else range(meth_chunk_count)
         ):
+            logger.memory_check('regression_full')
             # Log methylation chunk index
             logger.info('STARTING METHYLATION CHUNK {0}', meth_chunk_index + 1)
             mc_logger.info_template = (
@@ -325,23 +326,9 @@ def regression_full(
             XtXi_Xt = XtXi.bmm(Xt)
             del Xt, XtXi
 
-            # Display amount of total memory occupied by the constants
-            # for the current methylation chunk (if the device is CUDA
-            # enabled)
-            if allocated_memory := torch.cuda.memory_allocated():
-                device_properties: torch.cuda._CudaDeviceProperties = (
-                    torch.cuda.get_device_properties(0)
-                )
-                total_memory: int = device_properties.total_memory
+            mc_logger.memory_check('regression_full')
+            if allocated_memory := torch.cuda.memory_allocated() if torch.cuda.is_available() else 0:
                 torch.cuda.empty_cache()
-                mc_logger.info(
-                    (
-                        'CUDA device memory: {0} MB allocated by constants out'
-                        ' of {1} MB total'
-                    ),
-                    allocated_memory / 1_000_000,
-                    total_memory / 1_000_000,
-                )
 
             # Inner loop over each gene expression locus
             last_index = 0
@@ -484,16 +471,7 @@ def regression_full(
                     # CUDA memory notice
                     if index == gene_loci_per_chunk and allocated_memory:
                         torch.cuda.empty_cache()
-                        allocated_memory = torch.cuda.max_memory_allocated()
-                        mc_logger.info(
-                            (
-                                'CUDA device memory, chunk 1: {0} MB allocated'
-                                ' out of {1} MB total. If needed, increase'
-                                ' --loci-per-chunk accordingly'
-                            ),
-                            allocated_memory / 1_000_000,
-                            total_memory / 1_000_000,
-                        )
+                        mc_logger.memory_check('regression_full')
 
                     # Save output with multiprocessing pool
                     mc_logger.count(
