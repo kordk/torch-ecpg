@@ -327,7 +327,7 @@ def regression_full(
             ).unsqueeze(2)
 
             if logit_transform:
-                Mt = logit_transform_torch(Mt)
+                Mt = logit_transform_torch(Mt, logger=mc_logger)
 
             ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
             X: torch.Tensor = torch.cat((ones, Mt, Ct), 2)

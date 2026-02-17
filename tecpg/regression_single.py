@@ -116,7 +116,7 @@ def regression_single(
 
     if logit_transform:
         logger.info('Transforming M using logit function')
-        M = logit_transform_pandas(M)
+        M = logit_transform_pandas(M, logger=logger)
 
     logger.start_timer(
         'info',
