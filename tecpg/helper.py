@@ -119,22 +119,100 @@ def default_region_parameter(
 
 
 def logit_transform_torch(
-    tensor: torch.Tensor, epsilon: float = 1e-6
+    tensor: torch.Tensor, epsilon: float = 1e-6, *, logger: Logger = Logger()
 ) -> torch.Tensor:
     """
     Clips the tensor values to [epsilon, 1 - epsilon] and applies a
     logit transformation: log2(x / (1 - x)).
     """
+    logger.info('[Transformation] Applying Logit-Transform (Beta -> M-values)')
+
+    min_val = tensor.min().item()
+    max_val = tensor.max().item()
+    logger.info(
+        '[Transformation] Input Beta Range: [{0:.4f}, {1:.4f}]',
+        min_val,
+        max_val,
+    )
+
+    count_0 = (tensor == 0.0).sum().item()
+    count_1 = (tensor == 1.0).sum().item()
+    logger.info(
+        '[Transformation] Clamping Applied (epsilon={0}): {1:,} values at 0.0'
+        ' | {2:,} values at 1.0',
+        epsilon,
+        count_0,
+        count_1,
+    )
+
     tensor = tensor.clamp(epsilon, 1 - epsilon)
-    return torch.log2(tensor / (1 - tensor))
+    result = torch.log2(tensor / (1 - tensor))
+
+    out_min = result.min().item()
+    out_max = result.max().item()
+    out_mean = result.mean().item()
+    out_std = result.std().item()
+
+    logger.info(
+        '[Transformation] Output M-value Range: [{0:.4f}, {1:.4f}]',
+        out_min,
+        out_max,
+    )
+    logger.info(
+        '[Transformation] Output Distribution: Mean = {0:.4f} | SD = {1:.4f}',
+        out_mean,
+        out_std,
+    )
+    logger.info('[Transformation] Conversion successful. Proceeding to MLR.')
+
+    return result
 
 
 def logit_transform_pandas(
-    df: pandas.DataFrame, epsilon: float = 1e-6
+    df: pandas.DataFrame, epsilon: float = 1e-6, *, logger: Logger = Logger()
 ) -> pandas.DataFrame:
     """
     Clips the dataframe values to [epsilon, 1 - epsilon] and applies a
     logit transformation: log2(x / (1 - x)).
     """
+    logger.info('[Transformation] Applying Logit-Transform (Beta -> M-values)')
+
+    min_val = df.min().min()
+    max_val = df.max().max()
+    logger.info(
+        '[Transformation] Input Beta Range: [{0:.4f}, {1:.4f}]',
+        min_val,
+        max_val,
+    )
+
+    count_0 = (df == 0.0).sum().sum()
+    count_1 = (df == 1.0).sum().sum()
+    logger.info(
+        '[Transformation] Clamping Applied (epsilon={0}): {1:,} values at 0.0'
+        ' | {2:,} values at 1.0',
+        epsilon,
+        count_0,
+        count_1,
+    )
+
     df = df.clip(epsilon, 1 - epsilon)
-    return np.log2(df / (1 - df))
+    result = np.log2(df / (1 - df))
+
+    out_min = result.min().min()
+    out_max = result.max().max()
+    out_mean = result.mean().mean()
+    out_std = result.stack().std()
+
+    logger.info(
+        '[Transformation] Output M-value Range: [{0:.4f}, {1:.4f}]',
+        out_min,
+        out_max,
+    )
+    logger.info(
+        '[Transformation] Output Distribution: Mean = {0:.4f} | SD = {1:.4f}',
+        out_mean,
+        out_std,
+    )
+    logger.info('[Transformation] Conversion successful. Proceeding to MLR.')
+
+    return result
