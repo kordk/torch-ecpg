@@ -9,6 +9,7 @@ import pandas
 import torch
 
 from .config import get_device
+from .gpu_monitor import gpu_guardian, throttle_if_needed
 from .helper import logit_transform_pandas
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
@@ -30,6 +31,8 @@ def regression_single(
     update_period: Optional[float] = 1,
     output_dir: Optional[str] = None,
     logit_transform: bool = False,
+    thermal_threshold: int = 80,
+    thermal_wait: int = 30,
     *,
     logger: Logger = Logger(),
 ) -> pandas.DataFrame:
@@ -171,8 +174,10 @@ def regression_single(
     inner_logger.start_timer('info', 'Calculating chunks...')
     i = 0
     last_time = time.time()
-    with Pool() if regressions_per_chunk else nullcontext() as pool:
+    with gpu_guardian(logger) as gpu_handle, Pool() if regressions_per_chunk else nullcontext() as pool:
         for (gene_site, G_row) in G.iterrows():
+            throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
+
             y = torch.tensor(G_row.to_numpy(), dtype=torch.float32).to(device)
             for (meth_site, M_row) in M.iterrows():
                 if region != 'all':

@@ -10,6 +10,7 @@ import torch
 from colorama import Fore as colors
 
 from .config import DTYPE, get_device
+from .gpu_monitor import gpu_guardian, throttle_if_needed
 from .helper import logit_transform_torch, trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger
@@ -43,6 +44,8 @@ def tecpg_mlr_lstsq(
     methylation_only: bool = True,
     p_only: bool = False,
     logit_transform: bool = False,
+    thermal_threshold: int = 80,
+    thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
     *,
     logger: Logger = Logger(),
@@ -180,10 +183,12 @@ def tecpg_mlr_lstsq(
     inner_logger = mc_logger.alias()
 
     # Use the multiprocessing pool
-    with Pool() as pool:
+    with gpu_guardian(logger) as gpu_handle, Pool() as pool:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in range(meth_chunk_count):
+            throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
+
             # Log methylation chunk index
             logger.info('STARTING METHYLATION CHUNK {0}', meth_chunk_index + 1)
             mc_logger.info_template = (

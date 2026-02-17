@@ -288,6 +288,20 @@ def corr(
     type=bool,
     help='Whether to logit-transform M-values (log2(beta/(1-beta)))',
 )
+@click.option(
+    '--thermal-threshold',
+    show_default=True,
+    default=80,
+    type=int,
+    help='GPU temperature threshold for throttling (Celsius)',
+)
+@click.option(
+    '--thermal-wait',
+    show_default=True,
+    default=30,
+    type=int,
+    help='Seconds to wait when throttling',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -302,6 +316,8 @@ def mlr(
     p_only: bool,
     mlr_method: str,
     logit_transform: bool,
+    thermal_threshold: int,
+    thermal_wait: int,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -360,7 +376,7 @@ def mlr(
         ]
     )
     args.append(None if not chunking else output_path)  # output_dir
-    args.extend([methylation_only, p_only, logit_transform])
+    args.extend([methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait])
 
     if mlr_method == 'lstsq':
         output = tecpg_mlr_lstsq(*args, **logger)
@@ -410,6 +426,20 @@ def mlr(
     type=bool,
     help='Whether to logit-transform M-values (log2(beta/(1-beta)))',
 )
+@click.option(
+    '--thermal-threshold',
+    show_default=True,
+    default=80,
+    type=int,
+    help='GPU temperature threshold for throttling (Celsius)',
+)
+@click.option(
+    '--thermal-wait',
+    show_default=True,
+    default=30,
+    type=int,
+    help='Seconds to wait when throttling',
+)
 @click.pass_context
 def mlr_single(
     ctx: click.Context,
@@ -423,6 +453,8 @@ def mlr_single(
     no_t: bool,
     no_p: bool,
     logit_transform: bool,
+    thermal_threshold: int,
+    thermal_wait: int,
 ) -> None:
     """
     Calculates the multiple linear regression.
@@ -483,7 +515,7 @@ def mlr_single(
     else:
         args.append(None)
 
-    args.append(logit_transform)
+    args.extend([logit_transform, thermal_threshold, thermal_wait])
 
     output = regression_single(*args, **logger)
     if not regressions_per_chunk:
