@@ -201,7 +201,10 @@ def logit_transform_pandas(
     out_min = result.min().min()
     out_max = result.max().max()
     out_mean = result.mean().mean()
-    out_std = result.stack().std()
+    if isinstance(result, pandas.Series):
+        out_std = result.std()
+    else:
+        out_std = result.stack().std()
 
     logger.info(
         '[Transformation] Output M-value Range: [{0:.4f}, {1:.4f}]',

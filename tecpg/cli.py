@@ -383,6 +383,15 @@ def mlr(
         'thermal_wait': thermal_wait,
     }
 
+    logger.info(
+        'Running mlr with options: {0}',
+        {
+            k: v
+            for k, v in kwargs.items()
+            if k not in ['M', 'G', 'C', 'M_annot', 'G_annot']
+        },
+    )
+
     if mlr_method == 'lstsq':
         output = tecpg_mlr_lstsq(**kwargs, **logger)
     else:
@@ -530,6 +539,15 @@ def mlr_single(
         'thermal_threshold': thermal_threshold,
         'thermal_wait': thermal_wait,
     }
+
+    logger.info(
+        'Running mlr_single with options: {0}',
+        {
+            k: v
+            for k, v in kwargs.items()
+            if k not in ['M', 'G', 'C', 'M_annot', 'G_annot']
+        },
+    )
 
     output = regression_single(**kwargs, **logger)
     if not regressions_per_chunk:

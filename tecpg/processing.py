@@ -110,6 +110,14 @@ def tecpg_mlr_lstsq(
         G_strand_t = torch.tensor(G_strand, device=get_device(**logger), dtype=torch.int8)
 
     # Initializes some constants
+    logger.info(
+        'Running tecpg_mlr_lstsq with options: {0}',
+        {
+            k: v
+            for k, v in locals().items()
+            if k not in ['M', 'G', 'C', 'M_annot', 'G_annot', 'logger']
+        },
+    )
     logger.info('Initializing regression variables (lstsq)')
     device = get_device(**logger)
     dtype = DTYPE
