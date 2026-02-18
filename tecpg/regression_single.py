@@ -103,6 +103,15 @@ def regression_single(
         logger.error(error)
         raise ValueError(error)
 
+    logger.info(
+        'Running regression_single with options: {0}',
+        {
+            k: v
+            for k, v in locals().items()
+            if k not in ['M', 'G', 'C', 'M_annot', 'G_annot', 'logger']
+        },
+    )
+
     device = get_device(**logger)
     regressions = len(M.index) * len(G.index)
     filter_p = p_thresh is not None

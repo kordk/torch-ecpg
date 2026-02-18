@@ -163,6 +163,14 @@ def regression_full(
         raise ValueError(error)
 
     # Initializes some constants
+    logger.info(
+        'Running regression_full with options: {0}',
+        {
+            k: v
+            for k, v in locals().items()
+            if k not in ['M', 'G', 'C', 'M_annot', 'G_annot', 'logger']
+        },
+    )
     logger.info('Initializing regression variables')
     device = get_device(**logger)
 

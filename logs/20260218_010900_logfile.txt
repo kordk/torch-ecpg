@@ -1,0 +1,17 @@
+[37m[INFO] CUDA GPU detected. This device does not support CUDA.[0m
+[37m[INFO] Creating directory /app/data...[0m
+[37m[INFO] Saving 3 dataframes...[0m
+[37m[INFOTIMER] Saving 1/3: M.csv[0m
+[37m[INFOTIMER] Saved 1/3 in 0.025 seconds[0m
+[37m[INFOTIMER] Saving 2/3: G.csv[0m
+[37m[INFOTIMER] Saved 2/3 in 0.0223 seconds[0m
+[37m[INFOTIMER] Saving 3/3: C.csv[0m
+[37m[INFOTIMER] Saved 3/3 in 0.0014 seconds[0m
+[37m[INFOTIMER] Finished saving 3 dataframes in 0.0488 seconds.[0m
+[37m[INFO] Creating directory /app/annot...[0m
+[37m[INFO] Saving 2 dataframes...[0m
+[37m[INFOTIMER] Saving 1/2: M.bed6[0m
+[37m[INFOTIMER] Saved 1/2 in 0.0013 seconds[0m
+[37m[INFOTIMER] Saving 2/2: G.bed6[0m
+[37m[INFOTIMER] Saved 2/2 in 0.0012 seconds[0m
+[37m[INFOTIMER] Finished saving 2 dataframes in 0.0026 seconds.[0m
