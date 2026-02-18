@@ -267,6 +267,8 @@ def tecpg_mlr_lstsq(
             X: torch.Tensor = torch.cat((ones, Mt, Ct), 2) # (M, S, K)
             del Mt, ones
 
+            mc_logger.memory_check('tecpg_mlr_lstsq - peak')
+
             # Pre-calculate diagonal of (X^T X)^-1 for Standard Error using QR decomposition
             # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
             # We need the diagonal elements.
@@ -550,7 +552,7 @@ def tecpg_mlr_lstsq(
 
                     # Save
                     mc_logger.count(
-                        'Saving part {i}/{0}:',
+                        'Saving part {i}/{0}',
                         gene_chunk_count,
                     )
                     pool.apply_async(
@@ -604,7 +606,7 @@ def tecpg_mlr_lstsq(
                     file_path = os.path.join(output_dir, file_name)
 
                     mc_logger.count(
-                        'Saving methylation chunk {0}/{1}:',
+                        'Saving methylation chunk {0}/{1}',
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )

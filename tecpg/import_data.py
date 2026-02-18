@@ -99,7 +99,6 @@ def save_dataframe_part(
         first = os.stat(file_path).st_size == 0
 
     mode = 'w' if first else 'a'
-    print(dataframe.dtypes)
     dataframe.to_csv(
         file_path,
         float_format=logger.carry_data.get(
@@ -108,8 +107,3 @@ def save_dataframe_part(
         mode=mode,
         header=first,
     )
-
-    if chunk_number is None:
-        logger.count_check('Done saving part {i}')
-    else:
-        logger.count_check('Done saving part {0}', chunk_number)
