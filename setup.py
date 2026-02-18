@@ -16,7 +16,7 @@ with open(requirements_path, 'r') as file:
 
 setup(
     name='tecpg',
-    version='1.2.0-dev',  # See tecpg/tecpg/__init__.py
+    version='1.2.1-dev',  # See tecpg/tecpg/__init__.py
     description='Python eCpG mapper with CLI using pytorch',
     long_description=long_description,  # See tecpg/README.md
     python_requires='>=3.10',
