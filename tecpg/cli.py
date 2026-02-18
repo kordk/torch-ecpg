@@ -362,26 +362,31 @@ def mlr(
 
     methylation_only = not full_output
 
-    args = [M, G, C]
-    args.extend((None, None) if region == 'all' else (M_annot, G_annot))
-    args.extend(
-        [
-            region,
-            window_base,
-            downstream,
-            upstream,
-            gene_loci_per_chunk,
-            meth_loci_per_chunk,
-            p_thresh,
-        ]
-    )
-    args.append(None if not chunking else output_path)  # output_dir
-    args.extend([methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait])
+    kwargs = {
+        'M': M,
+        'G': G,
+        'C': C,
+        'M_annot': M_annot if region != 'all' else None,
+        'G_annot': G_annot if region != 'all' else None,
+        'region': region,
+        'window_base': window_base,
+        'downstream': downstream,
+        'upstream': upstream,
+        'gene_loci_per_chunk': gene_loci_per_chunk,
+        'meth_loci_per_chunk': meth_loci_per_chunk,
+        'p_thresh': p_thresh,
+        'output_dir': output_path if chunking else None,
+        'methylation_only': methylation_only,
+        'p_only': p_only,
+        'logit_transform': logit_transform,
+        'thermal_threshold': thermal_threshold,
+        'thermal_wait': thermal_wait,
+    }
 
     if mlr_method == 'lstsq':
-        output = tecpg_mlr_lstsq(*args, **logger)
+        output = tecpg_mlr_lstsq(**kwargs, **logger)
     else:
-        output = regression_full(*args, **logger)
+        output = regression_full(**kwargs, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)
 
@@ -507,17 +512,26 @@ def mlr_single(
             )
             window = DEFAULT_DISTAL_UPSTREAM
 
-    args = [M, G, C, include, regressions_per_chunk, p_thresh, region, window]
-    args.extend((None, None) if region == 'all' else (M_annot, G_annot))
-    args.extend((methylation_only, 1))
-    if regressions_per_chunk:
-        args.append(output_path)
-    else:
-        args.append(None)
+    kwargs = {
+        'M': M,
+        'G': G,
+        'C': C,
+        'include': include,
+        'regressions_per_chunk': regressions_per_chunk,
+        'p_thresh': p_thresh,
+        'region': region,
+        'window': window,
+        'M_annot': M_annot if region != 'all' else None,
+        'G_annot': G_annot if region != 'all' else None,
+        'methylation_only': methylation_only,
+        'update_period': 1,
+        'output_dir': output_path if regressions_per_chunk else None,
+        'logit_transform': logit_transform,
+        'thermal_threshold': thermal_threshold,
+        'thermal_wait': thermal_wait,
+    }
 
-    args.extend([logit_transform, thermal_threshold, thermal_wait])
-
-    output = regression_single(*args, **logger)
+    output = regression_single(**kwargs, **logger)
     if not regressions_per_chunk:
         save_dataframes([output], output_path, [data['output_file']], **logger)
 
