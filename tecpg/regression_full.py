@@ -340,6 +340,7 @@ def regression_full(
             ones = torch.ones((mt_count, nrows, 1), device=device, dtype=dtype)
             X: torch.Tensor = torch.cat((ones, Mt, Ct), 2)
             del Mt, ones
+            mc_logger.memory_check('regression_full - peak')
             Xt = X.mT
             XtXi = Xt.bmm(X).inverse()
             XtXi_diag_sqrt = torch.diagonal(XtXi, dim1=1, dim2=2).sqrt()
@@ -495,7 +496,7 @@ def regression_full(
 
                     # Save output with multiprocessing pool
                     mc_logger.count(
-                        'Saving part {i}/{0}:',
+                        'Saving part {i}/{0}',
                         chunk_count,
                     )
                     pool.apply_async(
@@ -576,7 +577,7 @@ def regression_full(
 
                     # Save methylation chunk
                     mc_logger.count(
-                        'Saving methylation chunk {0}/{1}:',
+                        'Saving methylation chunk {0}/{1}',
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )

@@ -240,7 +240,7 @@ def pearson_chunk_save_tensor(
                 chunks_elapsed = 1
                 file_name = str(logger.current_count + 1) + '.csv'
                 file_path = os.path.join(output_dir, file_name)
-                logger.count('Saving part {i}/{0}: ', save_chunk_count)
+                logger.count('Saving part {i}/{0}', save_chunk_count)
                 if flatten:
                     corr_pd = corr_pd.stack()
                     corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
@@ -278,7 +278,7 @@ def pearson_chunk_save_tensor(
 
         file_name = str(logger.current_count + 1) + '.csv'
         file_path = os.path.join(output_dir, file_name)
-        logger.count('Saving part {i}/{0}: ', save_chunk_count)
+        logger.count('Saving part {i}/{0}', save_chunk_count)
         if flatten:
             corr_pd = corr_pd.stack()
             corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)

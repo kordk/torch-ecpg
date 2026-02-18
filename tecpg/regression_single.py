@@ -261,8 +261,7 @@ def regression_single(
                         file_path = os.path.join(output_dir, file_name)
                         logger.count(
                             'Saving part {i}'
-                            + ('' if filter_p else '/{0}')
-                            + ': ',
+                            + ('' if filter_p else '/{0}'),
                             regressions // regressions_per_chunk,
                         )
                         pool.apply_async(
@@ -296,7 +295,7 @@ def regression_single(
             file_name = str(logger.current_count + 1) + '.csv'
             file_path = os.path.join(output_dir, file_name)
             logger.count(
-                'Saving part {i}' + ('' if filter_p else '/{0}') + ': ',
+                'Saving part {i}' + ('' if filter_p else '/{0}'),
                 regressions // regressions_per_chunk,
             )
             pool.apply_async(
