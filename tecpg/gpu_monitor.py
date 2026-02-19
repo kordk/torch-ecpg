@@ -43,7 +43,33 @@ def init_gpu_monitor(logger: Logger) -> object:
             else:
                 handle = pynvml.nvmlDeviceGetHandleByIndex(current_device)
         else:
-            handle = pynvml.nvmlDeviceGetHandleByIndex(current_device)
+            # If CUDA_VISIBLE_DEVICES is not set, we cannot assume PyTorch device index matches
+            # NVML device index (e.g., PyTorch might prioritize faster GPUs).
+            # We attempt to match by device name.
+            try:
+                torch_name = torch.cuda.get_device_name(current_device)
+
+                matched_handle = None
+
+                for i in range(device_count):
+                    h = pynvml.nvmlDeviceGetHandleByIndex(i)
+                    nvml_name = pynvml.nvmlDeviceGetName(h)
+                    if isinstance(nvml_name, bytes):
+                        nvml_name = nvml_name.decode('utf-8')
+
+                    if nvml_name == torch_name:
+                        matched_handle = h
+                        break
+
+                if matched_handle:
+                    handle = matched_handle
+                else:
+                    logger.warning(f"Could not find NVML device matching PyTorch device name '{torch_name}'. Falling back to index {current_device}.")
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(current_device)
+
+            except Exception as e:
+                logger.warning(f"Error during device name matching: {e}. Falling back to index {current_device}.")
+                handle = pynvml.nvmlDeviceGetHandleByIndex(current_device)
 
         name = pynvml.nvmlDeviceGetName(handle)
         if isinstance(name, bytes):
