@@ -226,7 +226,8 @@ def corr(
     logger: Logger = ctx.obj['logger']
 
     data_path = os.path.join(data['root_path'], data['input_dir'])
-    dataframes = read_dataframes(data_path, **logger)
+    file_names = [data['meth_file'], data['gene_file']]
+    dataframes = read_dataframes(data_path, file_names=file_names, **logger)
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
 
@@ -327,7 +328,8 @@ def mlr(
     data_path = os.path.join(data['root_path'], data['input_dir'])
     output_path = os.path.join(data['root_path'], data['output_dir'])
 
-    dataframes = read_dataframes(data_path, **logger)
+    file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
+    dataframes = read_dataframes(data_path, file_names=file_names, **logger)
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
@@ -482,7 +484,8 @@ def mlr_single(
     data_path = os.path.join(data['root_path'], data['input_dir'])
     output_path = os.path.join(data['root_path'], data['output_dir'])
 
-    dataframes = read_dataframes(data_path, **logger)
+    file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
+    dataframes = read_dataframes(data_path, file_names=file_names, **logger)
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
@@ -784,7 +787,12 @@ def chunks(
             'Data size not complete. Inferring from data in working directory.'
         )
         data_path = os.path.join(data['root_path'], data['input_dir'])
-        dataframes = read_dataframes(data_path, **logger)
+        file_names = [
+            data['meth_file'],
+            data['gene_file'],
+            data['covar_file'],
+        ]
+        dataframes = read_dataframes(data_path, file_names=file_names, **logger)
         M = dataframes[data['meth_file']]
         G = dataframes[data['gene_file']]
         C = dataframes[data['covar_file']]
