@@ -10,6 +10,18 @@ try:
 except ImportError:
     HAS_PYNVML = False
 
+def _normalize_uuid(uuid) -> str:
+    """Helper to normalize UUID strings for comparison."""
+    if isinstance(uuid, bytes):
+        uuid = uuid.decode('utf-8')
+    return str(uuid).replace('GPU-', '').replace('MIG-', '').strip().lower()
+
+def _normalize_name(name) -> str:
+    """Helper to normalize device name strings for comparison."""
+    if isinstance(name, bytes):
+        name = name.decode('utf-8')
+    return str(name).strip().lower()
+
 def init_gpu_monitor(logger: Logger) -> object:
     """Initializes the GPU monitoring handle. Returns None if unavailable."""
     if not HAS_PYNVML:
@@ -34,11 +46,7 @@ def init_gpu_monitor(logger: Logger) -> object:
             props = torch.cuda.get_device_properties(current_device_idx)
             if hasattr(props, 'uuid'):
                 target_uuid = props.uuid
-                # PyTorch might return UUID with 'GPU-' prefix or not.
-                # pynvml expects standard UUID string.
-                # Typically UUIDs look like "GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-        except Exception as e:
-            # logger.debug(f"Could not get UUID from torch properties: {e}")
+        except Exception:
             pass
 
         # 2. Fallback: Parse CUDA_VISIBLE_DEVICES if UUID not found in properties
@@ -59,83 +67,76 @@ def init_gpu_monitor(logger: Logger) -> object:
                         except ValueError:
                             # Could be a UUID without prefix? rare.
                             target_uuid = token
-            else:
-                # No env var, and no UUID from props.
-                # This is the tricky case where PyTorch index != NVML index potentially.
-                # But without UUID, we can't do much better than index or name matching.
-                pass
 
-        # 3. If we have a target UUID, try to get handle by UUID
-        if not handle and target_uuid:
-            try:
-                # Ensure it's a string
-                uuid_str = str(target_uuid)
-                # pynvml.nvmlDeviceGetHandleByUUID expects a string (str in Py3)
-                # Some old versions might behave differently, but generally it takes str.
-                handle = pynvml.nvmlDeviceGetHandleByUUID(uuid_str)
-            except pynvml.NVMLError as e:
-                # Try adding or removing "GPU-" prefix if failed
-                try:
-                    if uuid_str.startswith("GPU-"):
-                        alt_uuid = uuid_str[4:]
-                    else:
-                        alt_uuid = "GPU-" + uuid_str
-                    handle = pynvml.nvmlDeviceGetHandleByUUID(alt_uuid)
-                except pynvml.NVMLError:
-                    logger.warning(f"Could not find NVML device with UUID {target_uuid}. Error: {e}")
-
-        # 4. If we still don't have a handle (no UUID found or UUID lookup failed)
+        # 3. Robust Search: Iterate all NVML devices to match UUID or Name
         if not handle:
-             # Fallback to Name Matching (for distinct GPUs) or Index Matching
+            norm_target_uuid = _normalize_uuid(target_uuid) if target_uuid else None
+
             try:
                 torch_name = torch.cuda.get_device_name(current_device_idx)
-                matched_handle = None
+                norm_torch_name = _normalize_name(torch_name)
+            except Exception:
+                torch_name = "Unknown"
+                norm_torch_name = None
 
-                # Check for name match
-                # Warning: If multiple GPUs have the same name, this might pick the wrong one
-                # if indices are also swapped. But it's better than nothing.
-                candidates = []
-                for i in range(device_count):
+            uuid_match = None
+            name_candidates = []
+
+            for i in range(device_count):
+                try:
                     h = pynvml.nvmlDeviceGetHandleByIndex(i)
-                    nvml_name = pynvml.nvmlDeviceGetName(h)
-                    if isinstance(nvml_name, bytes):
-                        nvml_name = nvml_name.decode('utf-8')
-                    if nvml_name == torch_name:
-                        candidates.append(h)
 
-                if len(candidates) == 1:
-                    matched_handle = candidates[0]
-                elif len(candidates) > 1:
-                    # Ambiguous name match. If CUDA_VISIBLE_DEVICES is unset,
-                    # we might assume PyTorch index maps to one of these?
-                    # But we don't know which one.
-                    # Fallback to direct index mapping if indices are within range?
-                    # Or just pick the one with matching index if available?
-                     logger.warning(f"Multiple GPUs match name '{torch_name}'. Using index-based fallback.")
-                     pass
+                    # UUID Check
+                    if norm_target_uuid:
+                        try:
+                            dev_uuid = pynvml.nvmlDeviceGetUUID(h)
+                            if _normalize_uuid(dev_uuid) == norm_target_uuid:
+                                uuid_match = h
+                                break # Exact UUID match is definitive
+                        except pynvml.NVMLError:
+                            pass
 
-                if matched_handle:
-                    handle = matched_handle
-                else:
-                    # Final fallback: Direct Index
-                    handle = pynvml.nvmlDeviceGetHandleByIndex(current_device_idx)
+                    # Name Check
+                    if norm_torch_name:
+                        try:
+                            dev_name = pynvml.nvmlDeviceGetName(h)
+                            if _normalize_name(dev_name) == norm_torch_name:
+                                name_candidates.append(h)
+                        except pynvml.NVMLError:
+                            pass
 
-            except Exception as e:
-                logger.warning(f"Error during device matching: {e}. Falling back to index {current_device_idx}.")
+                except pynvml.NVMLError as e:
+                    logger.warning(f"Error inspecting NVML device {i}: {e}")
+
+            if uuid_match:
+                handle = uuid_match
+            elif len(name_candidates) == 1:
+                handle = name_candidates[0]
+            elif len(name_candidates) > 1:
+                # Ambiguous name match.
+                logger.warning(f"Multiple GPUs match name '{torch_name}'. Using index-based fallback.")
+
+        # 4. Final Fallback: Direct Index
+        if not handle:
+             try:
                 handle = pynvml.nvmlDeviceGetHandleByIndex(current_device_idx)
+             except pynvml.NVMLError as e:
+                logger.warning(f"Failed to get handle by index {current_device_idx}: {e}")
 
         # Final Verification / Logging
-        name = pynvml.nvmlDeviceGetName(handle)
-        if isinstance(name, bytes):
-            name = name.decode('utf-8')
+        if handle:
+            try:
+                name = pynvml.nvmlDeviceGetName(handle)
+                if isinstance(name, bytes): name = name.decode('utf-8')
 
-        try:
-            uuid = pynvml.nvmlDeviceGetUUID(handle)
-            if isinstance(uuid, bytes):
-                uuid = uuid.decode('utf-8')
-            logger.info(f"Initialized GPU monitoring for device: {name} (UUID: {uuid})")
-        except:
-             logger.info(f"Initialized GPU monitoring for device: {name}")
+                try:
+                    uuid = pynvml.nvmlDeviceGetUUID(handle)
+                    if isinstance(uuid, bytes): uuid = uuid.decode('utf-8')
+                    logger.info(f"Initialized GPU monitoring for device: {name} (UUID: {uuid})")
+                except:
+                    logger.info(f"Initialized GPU monitoring for device: {name}")
+            except:
+                logger.info(f"Initialized GPU monitoring.")
 
         return handle
 
