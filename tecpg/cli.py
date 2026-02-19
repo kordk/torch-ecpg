@@ -8,6 +8,7 @@ import pandas
 import psutil
 import torch
 
+from . import __version__
 from .config import (
     DEFAULT_CIS_DOWNSTREAM,
     DEFAULT_CIS_UPSTREAM,
@@ -41,6 +42,7 @@ from .tool import (
 
 
 @click.group()
+@click.version_option(version=__version__, message='tecpg version %(version)s')
 @click.option(
     '-r',
     '--root-path',
@@ -186,6 +188,7 @@ def cli(
 
     log_path = None if no_log_file else os.path.join(root_path, log_dir)
     logger = Logger(verbosity, debug, log_path)
+    logger.info('tecpg version {0}', __version__)
     using_gpu(**logger)
     if cpu_threads:
         torch.set_num_threads(cpu_threads)

@@ -14,9 +14,20 @@ requirements_path = os.path.join(dir_path, requirements_file)
 with open(requirements_path, 'r') as file:
     requirements = [line.removesuffix('\n') for line in file.readlines()]
 
+version_file = 'tecpg/__init__.py'
+version_path = os.path.join(dir_path, version_file)
+with open(version_path, 'r') as file:
+    # Assuming the file contains a line like: __version__ = '1.2.6-dev'
+    for line in file:
+        if line.startswith('__version__'):
+            version = line.split('=')[1].strip().strip("'").strip('"')
+            break
+    else:
+        raise RuntimeError("Unable to find version string in tecpg/__init__.py")
+
 setup(
     name='tecpg',
-    version='1.2.6-dev',  # See tecpg/tecpg/__init__.py
+    version=version,
     description='Python eCpG mapper with CLI using pytorch',
     long_description=long_description,  # See tecpg/README.md
     python_requires='>=3.10',
