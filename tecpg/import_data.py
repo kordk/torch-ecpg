@@ -53,7 +53,11 @@ def save_dataframes(
 
 
 def read_dataframes(
-    input_dir: str, get_func: Callable = read_csv, *, logger: Logger = Logger()
+    input_dir: str,
+    get_func: Callable = read_csv,
+    file_names: Optional[List[str]] = None,
+    *,
+    logger: Logger = Logger(),
 ) -> Dict[str, pandas.DataFrame]:
     """
     Gets all available csv files from input_dir and gets them using
@@ -62,6 +66,28 @@ def read_dataframes(
     dataframe. The entire function returns a dictionary of file names
     and their corresponding dataframes.
     """
+    if file_names:
+        n = len(file_names)
+        logger.start_timer('info', 'Reading {0} dataframes...', n)
+        out = {}
+        for file_name in file_names:
+            logger.time('Reading {i}/{0}: {1}', n, file_name)
+            if os.path.isfile(file_name):
+                file_path = file_name
+            elif os.path.isfile(os.path.join(input_dir, file_name)):
+                file_path = os.path.join(input_dir, file_name)
+            else:
+                raise ValueError(
+                    f'File {file_name} not found in {os.getcwd()} or'
+                    f' {input_dir}'
+                )
+
+            out[file_name] = get_func(file_path, **logger)
+            logger.time_check('Read {i}/{0} in {l} seconds', n)
+
+        logger.time_check('Finished reading {0} dataframes in {t} seconds.', n)
+        return out
+
     if not os.path.isdir(input_dir):
         raise ValueError(f'{input_dir=} is not a valid directory')
 
