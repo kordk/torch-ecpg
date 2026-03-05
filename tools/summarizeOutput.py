@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import scipy.stats as stats
 
 # Worker function must be top-level for multiprocessing
-def process_chunk(chunk, sample_prob):
+def process_chunk(chunk, sample_prob, df):
     """
     Process a chunk of the dataframe.
     Returns:
@@ -24,23 +24,22 @@ def process_chunk(chunk, sample_prob):
     unique_mt = set(chunk['mt_id'].dropna().unique()) if 'mt_id' in chunk.columns else set()
     row_count = len(chunk)
 
-    # Histogram
-    # We look for a column ending in '_p' or exactly 'p'
-    p_col = None
+    # Calculate high-precision p-values from t-statistics
+    t_col = None
     for col in chunk.columns:
-        if col.endswith('_p') or col == 'p':
-            p_col = col
+        if col.endswith('_t') or col == 't':
+            t_col = col
             break
 
-    if p_col:
-        # Drop NaNs for histogram
-        p_values = chunk[p_col].dropna().values
-        # Ensure values are within [0, 1] for histogram logic, though usually they are.
-        # np.histogram handles range.
-        hist_counts, _ = np.histogram(p_values, bins=100, range=(0, 1))
-    else:
-        hist_counts = np.zeros(100, dtype=int)
-        p_values = np.array([])
+    if not t_col:
+        raise ValueError("Error: t-statistic column (e.g., mt_t) missing in chunk. Cannot compute high-precision p-values.")
+
+    t_stats = chunk[t_col].dropna().astype(np.float64).values
+    p_values = stats.t.sf(np.abs(t_stats), np.float64(df)) * 2.0
+
+    # Ensure values are within [0, 1] for histogram logic, though usually they are.
+    # np.histogram handles range.
+    hist_counts, _ = np.histogram(p_values, bins=100, range=(0, 1))
 
     # Sampling
     if sample_prob >= 1.0:
@@ -54,12 +53,8 @@ def process_chunk(chunk, sample_prob):
     else:
         sample = pd.DataFrame()
 
-    # Extract only p-values for FDR threshold discovery to save memory
-    p_values_array = np.array([], dtype=np.float64)
-    if p_col:
-        p_values_array = chunk[p_col].dropna().astype(np.float64).values
-
-    return unique_gt, unique_mt, row_count, hist_counts, p_values_array
+    # The returned p_values are already extracted into a flat array of float64 for FDR discovery
+    return unique_gt, unique_mt, row_count, hist_counts, p_values
 
 def estimate_lines(filename):
     """Estimate or count lines in the file."""
@@ -168,7 +163,7 @@ Outputs and Metrics Calculated:
     print("Processing chunks...")
     try:
         for i, chunk in enumerate(reader):
-            res = pool.apply_async(process_chunk, (chunk, sample_prob))
+            res = pool.apply_async(process_chunk, (chunk, sample_prob, args.df))
             results.append(res)
             # Periodic status update
             if (i + 1) % 100 == 0:
