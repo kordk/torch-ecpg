@@ -43,7 +43,7 @@ class TestRecalculatePValues(unittest.TestCase):
         # Using sys.executable ensures we use the same python interpreter
         cmd = [
             sys.executable,
-            'tecpg/tools/recalculate_pvalues.py',
+            'tools/recalculate_pvalues.py',
             self.input_file,
             '--n-patients', str(n_patients),
             '--n-covariates', str(n_covariates),
@@ -92,7 +92,7 @@ class TestRecalculatePValues(unittest.TestCase):
         # Run the script without --output-file
         cmd = [
             sys.executable,
-            'tecpg/tools/recalculate_pvalues.py',
+            'tools/recalculate_pvalues.py',
             self.input_file,
             '--n-patients', str(n_patients),
             '--n-covariates', str(n_covariates)

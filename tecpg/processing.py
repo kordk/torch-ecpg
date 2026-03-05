@@ -190,7 +190,7 @@ def tecpg_mlr_lstsq(
     do_reservoir = reservoir_count is not None and reservoir_count > 0
     if do_reservoir:
         expected_items = (
-            int(meth_count * gene_count)
+            len(M) * len(G)
             if region == 'all'
             else "unknown (region filtration applied)"
         )
