@@ -54,17 +54,12 @@ def process_chunk(chunk, sample_prob):
     else:
         sample = pd.DataFrame()
 
-    # Return only necessary columns for lambda calculation to save memory during transfer
-    if not sample.empty and p_col:
-        # We only need p-value for lambda.
-        # But maybe user wants other columns?
-        # "checking if the median chi2 statistic is much higher than expected" implies only p-values needed.
-        # But to be safe, let's keep all columns or at least the p-value column.
-        # Keeping all columns allows for debugging if needed.
-        # Given 1M rows, 10 columns -> 10M cells -> 100MB. Acceptable.
-        pass
+    # Extract only p-values for FDR threshold discovery to save memory
+    p_values_array = np.array([], dtype=np.float64)
+    if p_col:
+        p_values_array = chunk[p_col].dropna().astype(np.float64).values
 
-    return unique_gt, unique_mt, row_count, hist_counts, sample
+    return unique_gt, unique_mt, row_count, hist_counts, p_values_array
 
 def estimate_lines(filename):
     """Estimate or count lines in the file."""
@@ -122,20 +117,28 @@ Outputs and Metrics Calculated:
         description=description_text,
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("input_file", help="Path to the input CSV file.")
+    parser.add_argument("--main-file", required=True, help="Path to the main filtered output CSV file.")
+    parser.add_argument("--reservoir-file", required=True, help="Path to the diagnostic reservoir CSV file.")
+    parser.add_argument("--total-tests", type=int, required=True, help="Total number of tests performed (e.g. 13462597186) for FDR adjustment.")
+    parser.add_argument("--df", type=float, required=True, help="Degrees of freedom for t-statistic to p-value conversion.")
     parser.add_argument("--chunk-size", type=int, default=100000, help="Rows per chunk for processing.")
     parser.add_argument("--cores", type=int, default=max(1, multiprocessing.cpu_count() - 1), help="Number of cores to use.")
     args = parser.parse_args()
 
-    input_file = args.input_file
-    if not os.path.exists(input_file):
-        print(f"Error: File {input_file} not found.")
+    main_file = args.main_file
+    reservoir_file = args.reservoir_file
+
+    if not os.path.exists(main_file):
+        print(f"Error: Main file {main_file} not found.")
+        sys.exit(1)
+    if not os.path.exists(reservoir_file):
+        print(f"Error: Reservoir file {reservoir_file} not found.")
         sys.exit(1)
 
-    print(f"Analyzing {input_file}...")
+    print(f"Analyzing main file {main_file} and reservoir file {reservoir_file}...")
 
     # Estimate total rows for sampling
-    total_rows_est = estimate_lines(input_file)
+    total_rows_est = estimate_lines(main_file)
     # Adjust for header
     total_rows_est = max(0, total_rows_est - 1)
 
@@ -157,7 +160,7 @@ Outputs and Metrics Calculated:
     # Read CSV in chunks
     # We assume 'gt_id', 'mt_id' are present.
     try:
-        reader = pd.read_csv(input_file, chunksize=args.chunk_size)
+        reader = pd.read_csv(main_file, chunksize=args.chunk_size)
     except Exception as e:
         print(f"Error reading CSV: {e}")
         sys.exit(1)
@@ -185,17 +188,17 @@ Outputs and Metrics Calculated:
     final_mt = set()
     total_pairs = 0
     final_hist = np.zeros(100, dtype=int)
-    sampled_dfs = []
+    all_p_values = []
 
     for res in results:
         try:
-            gt_set, mt_set, count, hist, sample_df = res.get()
+            gt_set, mt_set, count, hist, p_vals = res.get()
             final_gt.update(gt_set)
             final_mt.update(mt_set)
             total_pairs += count
             final_hist += hist
-            if not sample_df.empty:
-                sampled_dfs.append(sample_df)
+            if len(p_vals) > 0:
+                all_p_values.append(p_vals)
         except Exception as e:
             print(f"Error retrieving result from worker: {e}")
 
@@ -207,48 +210,103 @@ Outputs and Metrics Calculated:
     print(f"Unique genes: {len(final_gt)}")
     print(f"Unique CpGs: {len(final_mt)}")
 
-    # Genomic Inflation Factor
-    if sampled_dfs:
-        full_sample = pd.concat(sampled_dfs)
-        # Downsample to exactly target_sample if larger
-        if len(full_sample) > target_sample:
-            full_sample = full_sample.sample(n=target_sample, random_state=42)
-
-        # Find p-value column
-        p_col = None
-        for col in full_sample.columns:
-            if col.endswith('_p') or col == 'p':
-                p_col = col
+    # Process Reservoir File
+    print("\nProcessing reservoir file...")
+    try:
+        res_df = pd.read_csv(reservoir_file)
+        # Find t-stat column
+        t_col = None
+        for col in res_df.columns:
+            if col.endswith('_t') or col == 't':
+                t_col = col
                 break
 
-        if p_col:
-            p_values = full_sample[p_col].dropna()
+        if t_col:
+            # Convert t-statistics to p-values using float64
+            t_stats = res_df[t_col].dropna().astype(np.float64).values
+            df_val = np.float64(args.df)
 
-            # Convert to numpy array
-            p_values = p_values.values
+            # 2-tailed p-value from t-stat: 2 * sf(abs(t))
+            res_p_values = stats.t.sf(np.abs(t_stats), df_val) * 2.0
 
-            # Calculate chi2 from p-values using Inverse Survival Function (isf)
-            # This is more accurate for small p-values than ppf(1-p)
-            chi2_obs = stats.chi2.isf(p_values, 1)
-
-            # Handle potential infinities if p=0.
-            # Inf is valid for median calculation (it's just a very large number).
-            # But if all are inf, median is inf.
-
+            # Lambda calculation
+            # Use isf for more accurate conversion of small p-values to chi2
+            chi2_obs = stats.chi2.isf(res_p_values, 1)
             median_chi2_obs = np.median(chi2_obs)
-
-            # Expected median chi2 for 1 df
             expected_median_chi2 = stats.chi2.ppf(0.5, 1) # ~0.4549
-
             lambda_gc = median_chi2_obs / expected_median_chi2
 
-            print(f"Genomic Inflation Factor (lambda): {lambda_gc:.4f}")
+            print(f"Genomic Inflation Factor (lambda): {lambda_gc:.4f} (calculated from {len(res_p_values)} reservoir samples)")
             if lambda_gc > 1.1:
-                print("WARNING: lambda > 1.1, your model is inflated.")
+                print("WARNING: lambda > 1.1, your model may be inflated.")
+
+            # QQ Plot Generation
+            print("Generating QQ Plot...")
+            sorted_p = np.sort(res_p_values)
+            expected_p = (np.arange(1, len(sorted_p) + 1) - 0.5) / len(sorted_p)
+
+            # Convert to -log10, add small epsilon to avoid log(0) if any p_value exactly 0
+            eps = np.finfo(np.float64).tiny
+            obs_log_p = -np.log10(np.clip(sorted_p, eps, 1.0))
+            exp_log_p = -np.log10(np.clip(expected_p, eps, 1.0))
+
+            plt.figure(figsize=(8, 8))
+            plt.scatter(exp_log_p, obs_log_p, c='black', s=5, alpha=0.5, rasterized=True)
+
+            # Add y=x line
+            max_val = max(np.max(exp_log_p), np.max(obs_log_p))
+            plt.plot([0, max_val], [0, max_val], color='red', linestyle='--')
+
+            plt.title("QQ Plot (from Reservoir Samples)")
+            plt.xlabel("Expected -$log_{10}(p)$")
+            plt.ylabel("Observed -$log_{10}(p)$")
+
+            qq_plot_file = "qq_plot.png"
+            plt.savefig(qq_plot_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"QQ Plot saved to {qq_plot_file}")
+
         else:
-            print("Could not find p-value column for lambda calculation.")
+            print("Warning: Could not find t-statistic column in reservoir file. Skipping lambda and QQ plot.")
+    except Exception as e:
+        print(f"Error processing reservoir file: {e}")
+
+    # Process FDR threshold discovery
+    print("\nCalculating FDR threshold (Benjamini-Hochberg)...")
+    if all_p_values:
+        combined_p_values = np.concatenate(all_p_values)
+        total_p_count = len(combined_p_values)
+        print(f"Sorting {total_p_count} p-values from main file...")
+        combined_p_values.sort()
+
+        # BH threshold calculation
+        total_tests = args.total_tests
+
+        # Optimize threshold discovery by finding the maximum index i where p(i) <= (i / total_tests) * 0.05
+        ranks = np.arange(1, total_p_count + 1)
+        bh_limits = (ranks / total_tests) * 0.05
+
+        # valid_mask is True where p_value <= bh_limit
+        valid_mask = combined_p_values <= bh_limits
+
+        # We find the *last* index where valid_mask is True. Since p-values are sorted ascending
+        # and limit is increasing, this is standard BH procedure.
+        # np.nonzero(valid_mask)[0] returns indices of True values. We take the max if it exists.
+        valid_indices = np.nonzero(valid_mask)[0]
+
+        if len(valid_indices) > 0:
+            max_idx = valid_indices[-1]
+            p_max_fdr = combined_p_values[max_idx]
+            sig_count = max_idx + 1 # 0-indexed
+            print(f"FDR < 0.05 Threshold found!")
+            print(f"Maximum P-value satisfying FDR (p_max_fdr): {p_max_fdr:.3e}")
+            print(f"Number of pairs remaining significant at FDR < 0.05: {sig_count:,}")
+        else:
+            print("No pairs remain significant at FDR < 0.05.")
+
+        del combined_p_values
     else:
-        print("No data sampled for lambda calculation.")
+        print("No p-values found in the main file for FDR adjustment.")
 
     # Histogram
     try:
