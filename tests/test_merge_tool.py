@@ -8,7 +8,7 @@ import numpy as np
 
 # Adjust path to import the tool if needed, but we will run it as a subprocess
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOL_PATH = os.path.join(REPO_ROOT, 'tecpg', 'tools', 'mergeOutputs.py')
+TOOL_PATH = os.path.join(REPO_ROOT, 'tools', 'mergeOutputs.py')
 
 class TestMergeTool(unittest.TestCase):
     def setUp(self):
