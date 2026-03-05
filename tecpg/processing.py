@@ -347,15 +347,18 @@ def tecpg_mlr_lstsq(
                 # We want B to match M_chunk dim.
                 # So expand Y to (M_chunk, S, G_chunk).
                 Y_expanded = Y.unsqueeze(0).expand(mt_count, -1, -1)
+                inner_logger.memory_check('tecpg_mlr_lstsq - target expanded')
 
                 # Coefficients B
                 lstsq_result = torch.linalg.lstsq(X, Y_expanded)
+                inner_logger.memory_check('tecpg_mlr_lstsq - lstsq result')
                 B = lstsq_result.solution # (M_chunk, K, G_chunk)
 
                 # Calculate Residuals E = Y - X B
                 # X: (M, S, K). B: (M, K, G).
                 # X @ B -> (M, S, G).
                 E = Y_expanded - X.matmul(B)
+                inner_logger.memory_check('tecpg_mlr_lstsq - residuals')
 
                 # RSS = sum(E^2, dim=1) -> (M, G)
                 RSS = E.pow(2).sum(dim=1)
@@ -392,6 +395,7 @@ def tecpg_mlr_lstsq(
                 S = S.permute(0, 2, 1)
                 T = B / S
                 P = normal_p(T)
+                inner_logger.memory_check('tecpg_mlr_lstsq - pvals')
 
                 # Now we have tensors of shape (M, G, K).
                 # We need to flatten to (M*G, K) to apply filters efficiently?
