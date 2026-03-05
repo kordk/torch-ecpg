@@ -328,18 +328,31 @@ class Logger(PassAsKwarg):
         process = psutil.Process(os.getpid())
         ram_usage = process.memory_info().rss / 1024 ** 2
         if torch.cuda.is_available():
-            gpu_usage = torch.cuda.memory_allocated() / 1024 ** 2
+            gpu_allocated = torch.cuda.memory_allocated() / 1024 ** 2
+            gpu_reserved = torch.cuda.memory_reserved() / 1024 ** 2
         else:
-            gpu_usage = 0
+            gpu_allocated = 0
+            gpu_reserved = 0
 
-        self.info(
-            '[{0}] RAM: {1:.2f} MB, GPU: {2:.2f} MB',
-            function_name,
-            ram_usage,
-            gpu_usage,
-            *args,
-            **kwargs,
-        )
+        if torch.cuda.is_available():
+            self.info(
+                '[{0}] RAM: {1:.2f} MB, GPU: {2:.2f} MB Allocated, {3:.2f} MB Reserved',
+                function_name,
+                ram_usage,
+                gpu_allocated,
+                gpu_reserved,
+                *args,
+                **kwargs,
+            )
+        else:
+            self.info(
+                '[{0}] RAM: {1:.2f} MB, GPU: {2:.2f} MB',
+                function_name,
+                ram_usage,
+                gpu_allocated,
+                *args,
+                **kwargs,
+            )
 
     def save(
         self, log_dir: Optional[str] = None, file_name: Optional[str] = None
