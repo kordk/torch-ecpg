@@ -306,6 +306,12 @@ def corr(
     type=int,
     help='Seconds to wait when throttling',
 )
+@click.option(
+    '--reservoir-count',
+    show_default=True,
+    type=int,
+    help='Number of tests to retain in the reservoir buffer (only for lstsq method)',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -322,6 +328,7 @@ def mlr(
     logit_transform: bool,
     thermal_threshold: int,
     thermal_wait: int,
+    reservoir_count: Optional[int],
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -398,8 +405,16 @@ def mlr(
     )
 
     if mlr_method == 'lstsq':
+        if reservoir_count is None:
+            total_comparisons = len(M) * len(G)
+            reservoir_count = min(1_000_000, max(1, int(0.01 * total_comparisons)))
+        kwargs['reservoir_count'] = reservoir_count
+        # Inject output_dir into logger carry_data for reservoir saver
+        logger.carry_data['output_dir'] = output_path
         output = tecpg_mlr_lstsq(**kwargs, **logger)
     else:
+        if reservoir_count is not None:
+            logger.warning('--reservoir-count is only supported for mlr-method lstsq')
         output = regression_full(**kwargs, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)

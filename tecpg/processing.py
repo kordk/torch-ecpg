@@ -47,6 +47,7 @@ def tecpg_mlr_lstsq(
     thermal_threshold: int = 80,
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
+    reservoir_count: Optional[int] = None,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -184,6 +185,11 @@ def tecpg_mlr_lstsq(
             filtration = False
     else:
         p_indices_list = []
+
+    # Variables for Reservoir Sampling
+    do_reservoir = reservoir_count is not None and reservoir_count > 0
+    reservoir_buffer = [] # Store tuple of (results_tensor, gt_sites, mt_sites)
+    reservoir_processed = 0
 
     # Create methylation chunk (mc_) and chunk saving (inner_) logger
     mc_logger = logger.alias()
@@ -458,6 +464,101 @@ def tecpg_mlr_lstsq(
                     T = T[:, 1:2]
                     P = P[:, 1:2]
 
+                if p_only:
+                    current_results = P
+                else:
+                    current_results = torch.cat((B, S, T, P), dim=1)
+
+                if do_reservoir:
+                    # Collect batch results for reservoir sampling BEFORE p-value filtration
+                    batch_size = len(current_results)
+                    if batch_size > 0:
+                        # Construct indices for reservoir
+                        gt_chunk_names_res = gt_site_names[gene_start_index:gene_end_index]
+                        gt_sites_res = numpy.repeat(gt_chunk_names_res, mt_count)
+                        mt_sites_res = numpy.tile(mt_site_names, chunk_len)
+
+                        if region != 'all':
+                            # region_mask was applied, we need the numpy mask
+                            mask_np_res = region_indices_list[-1].cpu().numpy()
+                            gt_sites_res = gt_sites_res[mask_np_res]
+                            mt_sites_res = mt_sites_res[mask_np_res]
+
+                        # Generate random rolls for reservoir
+                        rolls = torch.rand(batch_size, device=device)
+                        # Probability P for each item j in batch is reservoir_count / (reservoir_processed + j + 1)
+                        # To do this correctly:
+                        # P_j = reservoir_count / (reservoir_processed + j + 1)
+                        # If roll < P_j, we keep it. Where does it go? Random index in [0, reservoir_count - 1]
+
+                        if reservoir_processed + batch_size <= reservoir_count:
+                            # If buffer is not full, just append everything
+                            reservoir_buffer.append((current_results.clone(), gt_sites_res, mt_sites_res))
+                            reservoir_processed += batch_size
+                        else:
+                            # Vectorized Reservoir Sampling
+                            # Generate indices j for the batch (1-based relative to processed)
+                            j_indices = torch.arange(1, batch_size + 1, device=device)
+                            total_processed_j = reservoir_processed + j_indices
+
+                            # Items with index <= reservoir_count ALWAYS get kept (if any)
+                            # However, we handle the 'buffer not full initially' gracefully
+
+                            keep_probs = reservoir_count / total_processed_j
+                            keep_mask = rolls < keep_probs
+
+                            # For the items before reservoir_count, we MUST keep them
+                            if reservoir_processed < reservoir_count:
+                                initial_keep_count = reservoir_count - reservoir_processed
+                                keep_mask[:initial_keep_count] = True
+
+                            kept_indices = torch.nonzero(keep_mask).squeeze(1)
+
+                            if len(kept_indices) > 0:
+                                kept_results = current_results[kept_indices]
+                                kept_gt = gt_sites_res[kept_indices.cpu().numpy()]
+                                kept_mt = mt_sites_res[kept_indices.cpu().numpy()]
+
+                                # Where to place them in the buffer?
+                                # For each kept item, if its total index <= reservoir_count, we append it
+                                # If its total index > reservoir_count, it replaces a random element [0, reservoir_count-1]
+                                replace_indices = torch.randint(0, reservoir_count, (len(kept_indices),), device=device)
+
+                                # Process the kept items
+                                for idx, kept_idx in enumerate(kept_indices):
+                                    total_idx = reservoir_processed + kept_idx.item() + 1
+                                    if total_idx <= reservoir_count:
+                                        # Buffer is not full, we just append
+                                        reservoir_buffer.append((kept_results[idx:idx+1].clone(), kept_gt[idx:idx+1], kept_mt[idx:idx+1]))
+                                    else:
+                                        # Buffer is full, replace an existing element
+                                        target_idx = replace_indices[idx].item()
+
+                                        # Since reservoir_buffer is a list of tensors of varying sizes,
+                                        # replacing by index requires finding which tensor/element it belongs to.
+                                        # This can be slow. To optimize, if the buffer gets complex, we flatten it.
+                                        # Instead of full flattening, we'll store individual replacements in a list
+                                        # and flatten later, or we can flatten the reservoir buffer once it reaches capacity.
+
+                                        # Flatten buffer if not already flattened
+                                        if isinstance(reservoir_buffer, list):
+                                            if sum(len(x[1]) for x in reservoir_buffer) > 0:
+                                                res_res_cat = torch.cat([x[0] for x in reservoir_buffer])
+                                                res_gt_cat = numpy.concatenate([x[1] for x in reservoir_buffer])
+                                                res_mt_cat = numpy.concatenate([x[2] for x in reservoir_buffer])
+                                                reservoir_buffer = (res_res_cat, res_gt_cat, res_mt_cat)
+                                            else:
+                                                # Handle empty buffer weirdness
+                                                pass
+
+                                        if isinstance(reservoir_buffer, tuple):
+                                            res_res_cat, res_gt_cat, res_mt_cat = reservoir_buffer
+                                            res_res_cat[target_idx] = kept_results[idx]
+                                            res_gt_cat[target_idx] = kept_gt[idx]
+                                            res_mt_cat[target_idx] = kept_mt[idx]
+
+                            reservoir_processed += batch_size
+
                 # P-value filtration
                 if p_thresh is not None:
                     # P shape (N, K_out). Meth p-value is at index 0 (if meth_only) or 1 (if not).
@@ -480,7 +581,7 @@ def tecpg_mlr_lstsq(
                 if p_only:
                     results.append(P)
                 else:
-                    results.append(torch.cat((B, S, T, P), dim=1))
+                    results.append(current_results[p_indices] if p_thresh is not None else current_results)
 
                 # Save output if gene chunking is used
                 # In regression_full, saving happens inside the loop if gene_loci_per_chunk is set.
@@ -628,6 +729,38 @@ def tecpg_mlr_lstsq(
             pool.close()
             pool.join()
             logger.time('Finished waiting for chunks to save in {l} seconds')
+
+        if do_reservoir and reservoir_processed > 0:
+            logger.info('Saving reservoir sample ({0} rows)', min(reservoir_processed, reservoir_count))
+            if isinstance(reservoir_buffer, list):
+                res_res_cat = torch.cat([x[0] for x in reservoir_buffer])
+                res_gt_cat = numpy.concatenate([x[1] for x in reservoir_buffer])
+                res_mt_cat = numpy.concatenate([x[2] for x in reservoir_buffer])
+            else:
+                res_res_cat, res_gt_cat, res_mt_cat = reservoir_buffer
+
+            index_chunk = [res_gt_cat, res_mt_cat]
+            out_reservoir = pandas.DataFrame(
+                res_res_cat.cpu().numpy(),
+                index=index_chunk,
+                columns=columns,
+            )
+            out_reservoir.index.set_names(index_names, inplace=True)
+
+            # Use output_dir from logger carry_data if not explicitly passed
+            carry_output = logger.carry_data.get('output_dir', None)
+            res_output_dir = output_dir if output_dir is not None else (carry_output if carry_output else os.getcwd())
+
+            # Ensure output directory exists before writing
+            if not os.path.exists(res_output_dir):
+                try:
+                    os.makedirs(res_output_dir, exist_ok=True)
+                except OSError:
+                    pass
+
+            res_file_path = os.path.join(res_output_dir, 'sample_reservoir.csv')
+            out_reservoir.to_csv(res_file_path)
+            logger.time('Finished saving reservoir sample to {0}', res_file_path)
 
         logger.time(
             'Finished calculating the multiple linear regression (lstsq) in {t} total'
