@@ -188,6 +188,16 @@ def tecpg_mlr_lstsq(
 
     # Variables for Reservoir Sampling
     do_reservoir = reservoir_count is not None and reservoir_count > 0
+    if do_reservoir:
+        expected_items = (
+            int(meth_count * gene_count)
+            if region == 'all'
+            else "unknown (region filtration applied)"
+        )
+        logger.info(
+            f"Initializing reservoir sampling. Will retain up to {reservoir_count} "
+            f"results out of an expected {expected_items} total items."
+        )
     reservoir_buffer = [] # Store tuple of (results_tensor, gt_sites, mt_sites)
     reservoir_processed = 0
 
@@ -746,6 +756,17 @@ def tecpg_mlr_lstsq(
                 columns=columns,
             )
             out_reservoir.index.set_names(index_names, inplace=True)
+
+            # Additional logging for reservoir processing status
+            logger.info(f"Reservoir sampling completed. Processed {reservoir_processed} total items. "
+                        f"Target reservoir count was {reservoir_count}.")
+
+            # Determine memory usage of the resulting DataFrame
+            mem_usage_bytes = out_reservoir.memory_usage(deep=True).sum()
+            mem_usage_mb = mem_usage_bytes / (1024 ** 2)
+
+            logger.info(f"Reservoir DataFrame shape: {out_reservoir.shape} (rows, columns). "
+                        f"Memory footprint: {mem_usage_mb:.2f} MB.")
 
             # Use output_dir from logger carry_data if not explicitly passed
             carry_output = logger.carry_data.get('output_dir', None)
