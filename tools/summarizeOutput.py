@@ -100,7 +100,28 @@ def estimate_lines(filename):
     return 0
 
 def main():
-    parser = argparse.ArgumentParser(description="Summarize tecpg output CSV.")
+    description_text = """
+Summarize tecpg output CSV.
+
+This script processes large output CSV files from tecpg in a memory-efficient
+manner by reading the data in chunks and using multiprocessing.
+
+Outputs and Metrics Calculated:
+  - Total mapping pairs (eCpGs): The total number of valid rows processed.
+  - Unique genes: The total number of unique gene IDs (gt_id) found.
+  - Unique CpGs: The total number of unique CpG site IDs (mt_id) found.
+  - Genomic Inflation Factor (lambda): An estimate of test statistic inflation
+    calculated using a reservoir sampling approach (~1 million rows).
+    A lambda value significantly greater than 1.0 (e.g., > 1.1) may indicate
+    population stratification or other systematic biases in the data.
+  - P-value Histogram: A histogram image (p_value_histogram.png) plotting the
+    distribution of p-values across all processed chunks, grouped into 100 bins.
+"""
+
+    parser = argparse.ArgumentParser(
+        description=description_text,
+        formatter_class=argparse.RawTextHelpFormatter
+    )
     parser.add_argument("input_file", help="Path to the input CSV file.")
     parser.add_argument("--chunk-size", type=int, default=100000, help="Rows per chunk for processing.")
     parser.add_argument("--cores", type=int, default=max(1, multiprocessing.cpu_count() - 1), help="Number of cores to use.")
