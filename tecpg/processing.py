@@ -48,6 +48,9 @@ def tecpg_mlr_lstsq(
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
     reservoir_count: Optional[int] = None,
+    subsample_mt_count: Optional[int] = None,
+    subsample_g_count: Optional[int] = None,
+    seed: int = 42,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -109,6 +112,43 @@ def tecpg_mlr_lstsq(
         G_chrom_t = torch.tensor(G_chrom, device=get_device(**logger), dtype=torch.int8)
         G_pos_t = torch.tensor(G_pos, device=get_device(**logger), dtype=torch.int32)
         G_strand_t = torch.tensor(G_strand, device=get_device(**logger), dtype=torch.int8)
+
+    # Subsampling logic
+    if subsample_mt_count is not None or subsample_g_count is not None:
+        logger.info('Initializing random subsampling with seed {0}', seed)
+        rng = numpy.random.default_rng(seed)
+
+        if subsample_mt_count is not None:
+            if subsample_mt_count > len(M):
+                logger.warning('Requested mt_count {0} > available {1}. Defaulting to full dataset.', subsample_mt_count, len(M))
+            else:
+                indices = rng.choice(len(M), size=subsample_mt_count, replace=False)
+                indices.sort()
+                M = M.iloc[indices]
+                if M_annot is not None:
+                    M_annot = M_annot.iloc[indices]
+                    M_chrom = M_annot.to_numpy().T[0].astype(int)
+                    M_pos = M_annot.to_numpy().T[1].astype(int)
+
+        if subsample_g_count is not None:
+            if subsample_g_count > len(G):
+                logger.warning('Requested g_count {0} > available {1}. Defaulting to full dataset.', subsample_g_count, len(G))
+            else:
+                indices = rng.choice(len(G), size=subsample_g_count, replace=False)
+                indices.sort()
+                G = G.iloc[indices]
+                if G_annot is not None:
+                    G_annot = G_annot.iloc[indices]
+                    G_chrom = G_annot.to_numpy().T[0].astype(int)
+                    G_pos = G_annot.to_numpy().T[1].astype(int)
+                    G_strand = G_annot.to_numpy().T[2].astype(int)
+                    G_chrom_t = torch.tensor(G_chrom, device=get_device(**logger), dtype=torch.int8)
+                    G_pos_t = torch.tensor(G_pos, device=get_device(**logger), dtype=torch.int32)
+                    G_strand_t = torch.tensor(G_strand, device=get_device(**logger), dtype=torch.int8)
+
+        logger.info("Subsampling active: Testing {0} CpGs x {1} Genes = {2} total tests", len(M), len(G), len(M) * len(G))
+    elif region != 'all':
+        logger.info("After region filtering: Testing {0} CpGs x {1} Genes = {2} total tests", len(M), len(G), len(M) * len(G))
 
     # Initializes some constants
     logger.info(

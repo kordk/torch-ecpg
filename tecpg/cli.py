@@ -312,6 +312,25 @@ def corr(
     type=int,
     help='Number of tests to retain in the reservoir buffer (only for lstsq method)',
 )
+@click.option(
+    '--subsample-mt-count',
+    show_default=True,
+    type=int,
+    help='Number of methylation loci (CpGs) to randomly select',
+)
+@click.option(
+    '--subsample-g-count',
+    show_default=True,
+    type=int,
+    help='Number of gene expression loci to randomly select',
+)
+@click.option(
+    '--seed',
+    show_default=True,
+    default=42,
+    type=int,
+    help='Seed for random subsampling',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -329,6 +348,9 @@ def mlr(
     thermal_threshold: int,
     thermal_wait: int,
     reservoir_count: Optional[int],
+    subsample_mt_count: Optional[int],
+    subsample_g_count: Optional[int],
+    seed: int,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -393,6 +415,9 @@ def mlr(
         'logit_transform': logit_transform,
         'thermal_threshold': thermal_threshold,
         'thermal_wait': thermal_wait,
+        'subsample_mt_count': subsample_mt_count,
+        'subsample_g_count': subsample_g_count,
+        'seed': seed,
     }
 
     logger.info(
