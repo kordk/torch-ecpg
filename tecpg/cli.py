@@ -312,6 +312,27 @@ def corr(
     type=int,
     help='Number of tests to retain in the reservoir buffer (only for lstsq method)',
 )
+@click.option(
+    '--compute-ig',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help='Compute analytical Integrated Gradients (fast path, only for lstsq method)',
+)
+@click.option(
+    '--compute-ig-deep',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help='Compute Integrated Gradients using Captum (slow path, only for lstsq method)',
+)
+@click.option(
+    '--ig-baseline',
+    type=click.Choice(['mean', 'zero']),
+    default='mean',
+    show_default=True,
+    help='Baseline method for Integrated Gradients',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -329,6 +350,9 @@ def mlr(
     thermal_threshold: int,
     thermal_wait: int,
     reservoir_count: Optional[int],
+    compute_ig: bool,
+    compute_ig_deep: bool,
+    ig_baseline: str,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -394,6 +418,13 @@ def mlr(
         'thermal_threshold': thermal_threshold,
         'thermal_wait': thermal_wait,
     }
+
+    if mlr_method == 'lstsq':
+        kwargs['compute_ig'] = compute_ig
+        kwargs['compute_ig_deep'] = compute_ig_deep
+        kwargs['ig_baseline'] = ig_baseline
+    elif compute_ig or compute_ig_deep:
+        logger.warning('Integrated Gradients (--compute-ig/--compute-ig-deep) are only supported for mlr-method lstsq')
 
     logger.info(
         'Running mlr with options: {0}',

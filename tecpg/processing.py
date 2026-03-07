@@ -48,6 +48,9 @@ def tecpg_mlr_lstsq(
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
     reservoir_count: Optional[int] = None,
+    compute_ig: bool = False,
+    compute_ig_deep: bool = False,
+    ig_baseline: str = 'mean',
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -158,6 +161,8 @@ def tecpg_mlr_lstsq(
             else (['const', 'mt'] + C.columns.to_list())
         )
         suffixes = ['_est', '_err', '_t', '_p']
+        if compute_ig or compute_ig_deep:
+            suffixes.append('_ig')
         columns = [
             column + suffix for suffix in suffixes for column in categories
         ]
@@ -200,6 +205,25 @@ def tecpg_mlr_lstsq(
         )
     reservoir_buffer = [] # Store tuple of (results_tensor, gt_sites, mt_sites)
     reservoir_processed = 0
+
+    if compute_ig_deep:
+        try:
+            from captum.attr import IntegratedGradients
+        except ImportError:
+            error = 'captum is required for compute_ig_deep. Install it with pip install captum.'
+            logger.error(error)
+            raise ImportError(error)
+
+        class LstsqWrapper(torch.nn.Module):
+            def __init__(self, w, b):
+                super().__init__()
+                self.w = w
+                self.b = b
+
+            def forward(self, x):
+                return x.matmul(self.w) + self.b
+
+        logger.warning('Deep interpretation (compute_ig_deep) is computationally intensive and will only be performed on significant hits.')
 
     # Create methylation chunk (mc_) and chunk saving (inner_) logger
     mc_logger = logger.alias()
@@ -284,6 +308,12 @@ def tecpg_mlr_lstsq(
             del Mt, ones
 
             mc_logger.memory_check('tecpg_mlr_lstsq - peak')
+
+            if compute_ig or compute_ig_deep:
+                if ig_baseline == 'mean':
+                    X_baseline = X.mean(dim=1, keepdim=True) # (M, 1, K)
+                elif ig_baseline == 'zero':
+                    X_baseline = torch.zeros_like(X[:, 0:1, :]) # (M, 1, K)
 
             # Pre-calculate diagonal of (X^T X)^-1 for Standard Error using QR decomposition
             # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
@@ -397,6 +427,21 @@ def tecpg_mlr_lstsq(
                 P = normal_p(T)
                 inner_logger.memory_check('tecpg_mlr_lstsq - pvals')
 
+                if compute_ig and not compute_ig_deep:
+                    # Analytical IG path (Optimized)
+                    # IG = (X - X_baseline) * w
+                    # X: (M, S, K), X_baseline: (M, 1, K)
+                    # w (B): (M, G, K)
+                    # We want mean absolute IG across S samples.
+                    # Mathematically: mean_S(|(X - X_baseline) * w|) = mean_S(|X - X_baseline|) * |w|
+                    # This avoids expanding to (M, S, G, K) and saves massive amounts of memory.
+                    diff_X = X - X_baseline # (M, S, K)
+                    mean_abs_diff_X = diff_X.abs().mean(dim=1) # (M, K)
+
+                    # Multiply by |w|: (M, 1, K) * (M, G, K) -> (M, G, K)
+                    IG = mean_abs_diff_X.unsqueeze(1) * B.abs() # (M, G, K)
+                    inner_logger.memory_check('tecpg_mlr_lstsq - ig')
+
                 # Now we have tensors of shape (M, G, K).
                 # We need to flatten to (M*G, K) to apply filters efficiently?
                 # Or apply masks on the (M, G) grid.
@@ -456,6 +501,8 @@ def tecpg_mlr_lstsq(
                 S = S.permute(1, 0, 2).reshape(-1, num_coeffs)
                 T = T.permute(1, 0, 2).reshape(-1, num_coeffs)
                 P = P.permute(1, 0, 2).reshape(-1, num_coeffs)
+                if compute_ig and not compute_ig_deep:
+                    IG = IG.permute(1, 0, 2).reshape(-1, num_coeffs)
 
                 if region != 'all':
                     # mask is (M, G).
@@ -467,6 +514,8 @@ def tecpg_mlr_lstsq(
                     S = S[region_mask]
                     T = T[region_mask]
                     P = P[region_mask]
+                    if compute_ig and not compute_ig_deep:
+                        IG = IG[region_mask]
 
                     region_indices_list.append(region_mask) # Need to save for index generation
 
@@ -477,11 +526,19 @@ def tecpg_mlr_lstsq(
                     S = S[:, 1:2]
                     T = T[:, 1:2]
                     P = P[:, 1:2]
+                    if compute_ig and not compute_ig_deep:
+                        IG = IG[:, 1:2]
 
                 if p_only:
                     current_results = P
                 else:
-                    current_results = torch.cat((B, S, T, P), dim=1)
+                    if compute_ig and not compute_ig_deep:
+                        current_results = torch.cat((B, S, T, P, IG), dim=1)
+                    elif compute_ig_deep:
+                        # Placeholder for IG_deep until we compute it after filtration
+                        current_results = torch.cat((B, S, T, P, torch.zeros_like(B)), dim=1)
+                    else:
+                        current_results = torch.cat((B, S, T, P), dim=1)
 
                 if do_reservoir:
                     # Collect batch results for reservoir sampling BEFORE p-value filtration
@@ -592,10 +649,85 @@ def tecpg_mlr_lstsq(
                 if filtration:
                     output_sizes.append(len(P))
 
+                if p_thresh is not None:
+                    final_results = current_results[p_indices]
+                else:
+                    final_results = current_results
+
+                if compute_ig_deep and not p_only:
+                    # Compute deep IG for significant hits.
+                    # Use explicit index mapping arrays to avoid modulo math confusion.
+                    # The block is flattened from (G, M) nested loops (G outer, M inner).
+                    # So elements are ordered like (g0, m0), (g0, m1), ... (g1, m0), (g1, m1).
+
+                    m_idx_map = torch.arange(mt_count, device=device).repeat(chunk_len)
+                    g_idx_map = torch.arange(chunk_len, device=device).repeat_interleave(mt_count)
+
+                    full_mask = torch.ones(chunk_len * mt_count, dtype=torch.bool, device=device)
+                    if region != 'all':
+                        full_mask = region_indices_list[-1]
+                    if p_thresh is not None:
+                        # Update full_mask with p_indices which corresponds to non-zero elements
+                        temp = torch.zeros_like(full_mask)
+                        temp[full_mask] = p_indices
+                        full_mask = temp
+
+                    sig_indices = torch.nonzero(full_mask).squeeze(1) # (N_sig,)
+
+                    ig_deep_results = torch.zeros(len(sig_indices), B.shape[1], device=device, dtype=dtype)
+
+                    if len(sig_indices) > 0:
+                        inner_logger.info(f"Computing deep IG for {len(sig_indices)} significant hits in this chunk...")
+                        for idx, flat_idx in enumerate(sig_indices):
+                            m_idx = m_idx_map[flat_idx]
+                            g_idx = g_idx_map[flat_idx]
+
+                            # Get weights for this specific pair
+                            # X: (M, S, K) -> X[m_idx]: (S, K)
+                            # B original: (M, K, G) -> lstsq_result.solution
+                            # Wait, we permuted B earlier to (M, G, K). Let's fetch from the permuted B before flattening?
+                            # We didn't keep it. Let's get from the flattened B.
+                            # The flattened B before p_thresh but after region filtration:
+                            # Actually, it's easier to just use the `B` matrix we already have (which might be filtered by region but not p_thresh).
+                            # No, let's just get the weights from `final_results`.
+                            # final_results has [B, S, T, P, IG_placeholder].
+                            # Each has K columns.
+                            # So weights w are final_results[idx, 0:num_coeffs_out]
+                            num_coeffs_out = B.shape[1]
+                            w = final_results[idx, 0:num_coeffs_out]
+
+                            # However, X has K features. B might have K features (methylation_only=False) or 1 feature (methylation_only=True).
+                            # If methylation_only=True, we only have the weight for methylation!
+                            # But the forward pass needs all K weights!
+                            # So we MUST get the original K weights for the forward pass.
+                            # lstsq_result.solution is (M, K, G)
+                            w_full = lstsq_result.solution[m_idx, :, g_idx] # (K,)
+
+                            x_input = X[m_idx] # (S, K)
+                            x_base = X_baseline[m_idx] # (1, K)
+
+                            model = LstsqWrapper(w_full, torch.tensor(0.0, device=device, dtype=dtype)) # intercept doesn't affect gradient
+                            ig = IntegratedGradients(model)
+
+                            # Compute attribution
+                            attributions = ig.attribute(x_input, baselines=x_base.expand_as(x_input), n_steps=50) # (S, K)
+                            # Mean absolute attribution across S
+                            mean_abs_attr = attributions.abs().mean(dim=0) # (K,)
+
+                            if methylation_only:
+                                ig_deep_results[idx] = mean_abs_attr[1:2]
+                            else:
+                                ig_deep_results[idx] = mean_abs_attr
+
+                        # Replace placeholder in final_results
+                        num_coeffs_out = B.shape[1]
+                        final_results[:, -num_coeffs_out:] = ig_deep_results
+                    inner_logger.memory_check('tecpg_mlr_lstsq - deep ig')
+
                 if p_only:
                     results.append(P)
                 else:
-                    results.append(current_results[p_indices] if p_thresh is not None else current_results)
+                    results.append(final_results)
 
                 # Save output if gene chunking is used
                 # In regression_full, saving happens inside the loop if gene_loci_per_chunk is set.
