@@ -656,12 +656,18 @@ def tecpg_mlr_lstsq(
 
                 if compute_ig_deep and not p_only:
                     # Compute deep IG for significant hits.
-                    # Use explicit index mapping arrays to avoid modulo math confusion.
-                    # The block is flattened from (G, M) nested loops (G outer, M inner).
-                    # So elements are ordered like (g0, m0), (g0, m1), ... (g1, m0), (g1, m1).
+                    # The block was permuted to (G, M, K) and flattened, so the memory layout is
+                    # Gene outer loop, Methylation inner loop.
+                    # Use meshgrid to explicitly generate correctly-aligned flat 1D index maps
+                    # for mapping the flat indices back to their original 2D (g_idx, m_idx) coordinates.
 
-                    m_idx_map = torch.arange(mt_count, device=device).repeat(chunk_len)
-                    g_idx_map = torch.arange(chunk_len, device=device).repeat_interleave(mt_count)
+                    g_idx_grid, m_idx_grid = torch.meshgrid(
+                        torch.arange(chunk_len, device=device),
+                        torch.arange(mt_count, device=device),
+                        indexing='ij'
+                    )
+                    g_idx_map = g_idx_grid.flatten()
+                    m_idx_map = m_idx_grid.flatten()
 
                     full_mask = torch.ones(chunk_len * mt_count, dtype=torch.bool, device=device)
                     if region != 'all':
