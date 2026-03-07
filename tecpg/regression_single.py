@@ -176,7 +176,12 @@ def regression_single(
     logger.time('Set up output dataframe')
 
     df = nrows - ncols - 1
-    logger.info('Running with {0} degrees of freedom', df)
+    logger.info(
+        'Statistical Power Audit: df = {0} (calculated as {1} subjects - {2} covariates - 1 methylation - 1 intercept)',
+        df,
+        nrows,
+        C.shape[1],
+    )
     log_prob = torch.distributions.studentT.StudentT(df).log_prob
 
     inner_logger = logger.alias()

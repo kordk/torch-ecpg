@@ -172,7 +172,12 @@ def tecpg_mlr_lstsq(
     gt_count = len(G)
     gt_site_names = numpy.array(G.index.values)
     df = nrows - ncols - 1
-    logger.info('Running with {0} degrees of freedom', df)
+    logger.info(
+        'Statistical Power Audit: df = {0} (calculated as {1} subjects - {2} covariates - 1 methylation - 1 intercept)',
+        df,
+        nrows,
+        C.shape[1],
+    )
     normal_p = create_normal_p(device, dtype)
 
     if gene_loci_per_chunk is not None:
