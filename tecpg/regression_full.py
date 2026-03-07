@@ -209,7 +209,12 @@ def regression_full(
     gt_count = len(G)
     gt_site_names = numpy.array(G.index.values)
     df = nrows - ncols - 1
-    logger.info('Running with {0} degrees of freedom', df)
+    logger.info(
+        'Statistical Power Audit: df = {0} (calculated as {1} subjects - {2} covariates - 1 methylation - 1 intercept)',
+        df,
+        nrows,
+        C.shape[1],
+    )
     dft_sqrt = torch.tensor(df, device=device, dtype=dtype).sqrt()
     # prob = create_studentt_p(df, device, dtype)
     normal_p = create_normal_p(device, dtype)
