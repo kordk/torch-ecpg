@@ -332,6 +332,14 @@ def corr(
     type=int,
     help='Seed for random subsampling',
 )
+@click.option(
+    '--permute-label-test',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+    help='Whether to perform a permutation (Negative Control) test by shuffling subject IDs in G (only for lstsq method)',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -352,6 +360,7 @@ def mlr(
     subsample_mt_count: Optional[int],
     subsample_g_count: Optional[int],
     seed: int,
+    permute_label_test: bool,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -419,6 +428,7 @@ def mlr(
         'subsample_mt_count': subsample_mt_count,
         'subsample_g_count': subsample_g_count,
         'seed': seed,
+        'permute_label_test': permute_label_test,
     }
 
     logger.info(
@@ -441,6 +451,9 @@ def mlr(
     else:
         if reservoir_count is not None:
             logger.warning('--reservoir-count is only supported for mlr-method lstsq')
+        if permute_label_test:
+            logger.warning('--permute-label-test is only supported for mlr-method lstsq')
+        kwargs.pop('permute_label_test', None)
         output = regression_full(**kwargs, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)
