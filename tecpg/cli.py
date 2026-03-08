@@ -22,6 +22,7 @@ from .config import (
     using_gpu,
 )
 from .gtp import save_gtp_data
+from .mesa import save_mesa_data
 from .helper import default_region_parameter, initialize_dir
 from .import_data import read_dataframes, save_dataframes
 from .logger import Logger
@@ -709,6 +710,55 @@ def gtp(ctx: click.Context, gtp_dir: Any, full_covar: bool) -> None:
 
     logger.save()
 
+
+
+@_data.command()
+@click.option(
+    '-m',
+    '--mesa-dir',
+    show_default=True,
+    default='MESA',
+    type=click.Path(file_okay=False),
+)
+@click.option(
+    '-y',
+    '--yes',
+    is_flag=True,
+    callback=abort_if_false,
+    expose_value=False,
+    prompt='Are you sure you want to overwrite the data directory?',
+)
+@click.option(
+    '--full-covar',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    type=bool,
+)
+@click.pass_context
+def mesa(ctx: click.Context, mesa_dir: Any, full_covar: bool) -> None:
+    """
+    Downloads and extracts MESA data.
+
+    Downloads the methylation, gene expression, and covariate data from
+    MESA study. Stores the raw data in mesa-dir. The raw data is
+    extracted and processes before being saved in the data directory.
+    """
+    logger: Logger = ctx.obj['logger']
+
+    mesa_path = os.path.join(data['root_path'], mesa_dir)
+    data_path = os.path.join(data['root_path'], data['input_dir'])
+    file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
+    simplify_covar = not full_covar
+    save_mesa_data(
+        mesa_path,
+        data_path,
+        file_names,
+        simplify_covar=simplify_covar,
+        **logger,
+    )
+
+    logger.save()
 
 @cli.command()
 @click.argument(
