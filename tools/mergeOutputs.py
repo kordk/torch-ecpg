@@ -10,6 +10,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 
 def natural_keys(text):
@@ -94,6 +96,18 @@ def main():
         help="File pattern to match (default: '*.csv')."
     )
     parser.add_argument(
+        "--format",
+        choices=["csv", "parquet"],
+        default="csv",
+        help="Output file format (default: 'csv')."
+    )
+    parser.add_argument(
+        "--compression",
+        choices=["snappy", "zstd"],
+        default="snappy",
+        help="Compression algorithm for parquet format (default: 'snappy')."
+    )
+    parser.add_argument(
         "--processes",
         type=int,
         default=multiprocessing.cpu_count(),
@@ -105,6 +119,11 @@ def main():
     input_dir = args.input_dir
     output_file = args.output_file
     pattern = args.pattern
+    out_format = args.format
+    compression = args.compression
+
+    if out_format == "csv" and compression != "snappy":
+        print("Warning: --compression argument is ignored when --format is csv.", file=sys.stderr)
 
     if not os.path.isdir(input_dir):
         print(f"Error: Input directory '{input_dir}' does not exist.", file=sys.stderr)
@@ -147,12 +166,31 @@ def main():
 
             # Start merging files
             print("Starting merge process...")
-            with open(output_file, 'wb') as f_out:
+            if out_format == "csv":
+                with open(output_file, 'wb') as f_out:
+                    for i, filepath in enumerate(files):
+                        merge_file_content(filepath, f_out, i == 0)
+
+                        if (i + 1) % 10 == 0 or (i + 1) == len(files):
+                            print(f"Merged {i + 1}/{len(files)} files...", end='\r')
+            elif out_format == "parquet":
+                writer = None
                 for i, filepath in enumerate(files):
-                    merge_file_content(filepath, f_out, i == 0)
+                    # Read the CSV chunk
+                    df = pd.read_csv(filepath)
+                    table = pa.Table.from_pandas(df)
+
+                    if i == 0:
+                        # Initialize writer with the schema of the first file
+                        writer = pq.ParquetWriter(output_file, table.schema, compression=compression)
+
+                    writer.write_table(table)
 
                     if (i + 1) % 10 == 0 or (i + 1) == len(files):
                         print(f"Merged {i + 1}/{len(files)} files...", end='\r')
+
+                if writer:
+                    writer.close()
 
             print(f"\nMerge complete. Waiting for statistics calculation...")
 
