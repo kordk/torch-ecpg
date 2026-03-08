@@ -51,6 +51,7 @@ def tecpg_mlr_lstsq(
     subsample_mt_count: Optional[int] = None,
     subsample_g_count: Optional[int] = None,
     seed: int = 42,
+    permute_label_test: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -169,6 +170,13 @@ def tecpg_mlr_lstsq(
 
     nrows, ncols = C.shape[0], C.shape[1] + 1
     G_np = G.to_numpy()
+
+    if permute_label_test:
+        logger.info('Permuting label test active: Shuffling subject IDs in G to create negative control')
+        rng_permute = numpy.random.default_rng(seed)
+        permutation = rng_permute.permutation(len(G.columns))
+        G_np = G_np[:, permutation]
+
     gt_count = len(G)
     gt_site_names = numpy.array(G.index.values)
     df = nrows - ncols - 1
