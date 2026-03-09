@@ -32,6 +32,17 @@ PROMOTER_DOWNSTREAM_DISTANCE = 2500
 
 logger = logging.getLogger(__name__)
 
+def _normalize_chrom(chrom_str):
+    """Normalize chromosome string by stripping 'chr' prefix for consistent comparison."""
+    s = str(chrom_str).strip()
+    if s.lower().startswith("chr"):
+        return s[3:]
+    return s
+
+def _strip_id_version(identifier):
+    """Strip version suffix from Ensembl-style IDs (e.g., ENSG00000000003.15_3 -> ENSG00000000003)."""
+    return identifier.split('.')[0]
+
 #### Read in the annotation file to a dictionary (supports BED6 and GFF) #######################################
 def readAnnotationFileToDict(my_annotFile):
     my_lociH = {}
@@ -61,39 +72,48 @@ def readAnnotationFileToDict(my_annotFile):
             num_cols = len(dataA)
 
             if num_cols >= 9:
-                # GFF format
-                # Extract Geneid from attributes column
+                # GFF/GTF format
+                # Extract gene ID from attributes column
+                # Supports featureCounts flat format (Geneid) and standard GTF (gene_id)
                 attributes = dataA[8]
                 gene_id = None
                 for attr in attributes.split(";"):
                     attr = attr.strip()
                     if attr.startswith("Geneid "):
-                        # e.g., Geneid "ENSG00000000003"
-                        gene_id = attr[len("Geneid "):].strip('"')
+                        # featureCounts flat format: Geneid "ENSG00000000003"
+                        gene_id = attr[len("Geneid "):].strip('"').strip()
+                        break
+                    elif attr.startswith("gene_id "):
+                        # Standard GTF format: gene_id "ENSG00000000003"
+                        gene_id = attr[len("gene_id "):].strip('"').strip()
+                        break
+                    elif attr.startswith("gene_id="):
+                        # GFF3 format: gene_id=ENSG00000000003
+                        gene_id = attr[len("gene_id="):].strip('"').strip()
                         break
 
                 if not gene_id:
-                    logger.error(f"[readAnnotationFileToDict] Missing Geneid in GFF line: {line.strip()}")
+                    logger.error(f"[readAnnotationFileToDict] Missing gene ID in GFF/GTF line: {line.strip()}")
                     sys.exit(1)
 
-                my_name = gene_id
+                my_name = _strip_id_version(gene_id)
 
                 # GFF is 1-based, inclusive. BED is 0-based, half-open
                 chromStart = int(dataA[3]) - 1
                 chromEnd = int(dataA[4])
 
                 my_lociH[my_name] = {}
-                my_lociH[my_name]["chrom"]      = str(dataA[0])
+                my_lociH[my_name]["chrom"]      = _normalize_chrom(dataA[0])
                 my_lociH[my_name]["chromStart"] = chromStart
                 my_lociH[my_name]["chromEnd"]   = chromEnd
                 my_lociH[my_name]["strand"]     = str(dataA[6])
 
             elif num_cols >= 6:
                 # BED6 format
-                my_name = dataA[3]
+                my_name = _strip_id_version(dataA[3])
                 my_lociH[my_name] = {}
 
-                my_lociH[my_name]["chrom"]      = str(dataA[0])
+                my_lociH[my_name]["chrom"]      = _normalize_chrom(dataA[0])
                 my_lociH[my_name]["chromStart"] = int(dataA[1])
                 my_lociH[my_name]["chromEnd"]   = int(dataA[2])
                 my_lociH[my_name]["strand"]     = str(dataA[5])
@@ -186,8 +206,8 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"[assignRegion] line: {row.to_dict()}")
 
-            gt_id = str(row['gt_id'])
-            mt_id = str(row['mt_id'])
+            gt_id = _strip_id_version(str(row['gt_id']))
+            mt_id = _strip_id_version(str(row['mt_id']))
             mt_p = row[pval_col]
 
             if pd.isna(mt_p):
@@ -342,8 +362,8 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             ## check for DISTAL - negative strand
             if gH[gt_id]["strand"] == "-":
                 cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
-                regionRef_pos = geneStart_pos + DISTAL_OFFSET
+                tss = max(gH[gt_id]["chromStart"], gH[gt_id]["chromEnd"])
+                regionRef_pos = tss + DISTAL_OFFSET
                 if regionRef_pos < cpg_pos:
                     cpgA = {
                         'mt_id': mt_id,
@@ -363,10 +383,9 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             ## check for CIS - negative strand
             if gH[gt_id]["strand"] == "-":
                 cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
-                regionRef_pos = geneStart_pos
-                regionUpStreamRange = regionRef_pos + CIS_OFFSET
-                if (geneStart_pos < cpg_pos ) and (cpg_pos < regionUpStreamRange):
+                tss = max(gH[gt_id]["chromStart"], gH[gt_id]["chromEnd"])
+                regionUpStreamRange = tss + CIS_UPSTREAM_DISTANCE
+                if (tss < cpg_pos) and (cpg_pos < regionUpStreamRange):
                     cpgA = {
                         'mt_id': mt_id,
                         'mt_chrom': mH[mt_id]["chrom"],
@@ -385,10 +404,10 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             ## check for PROMOTER - negative strand
             if gH[gt_id]["strand"] == "-":
                 cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
-                regionRef_pos = geneStart_pos + PROMOTER_OFFSET
-                regionDnStreamRange = regionRef_pos - PROMOTER_DOWNSTREAM_DISTANCE
-                regionUpStreamRange = regionRef_pos + PROMOTER_UPSTREAM_DISTANCE
+                tss = max(gH[gt_id]["chromStart"], gH[gt_id]["chromEnd"])
+                regionRef_pos = tss + PROMOTER_OFFSET
+                regionDnStreamRange = regionRef_pos - PROMOTER_UPSTREAM_DISTANCE
+                regionUpStreamRange = regionRef_pos + PROMOTER_DOWNSTREAM_DISTANCE
                 if (regionDnStreamRange < cpg_pos) and (cpg_pos < regionUpStreamRange):
                     cpgA = {
                         'mt_id': mt_id,
@@ -408,9 +427,9 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             ## check for GENE BODY - negative strand
             if gH[gt_id]["strand"] == "-":
                 cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
-                geneEnd_pos = gH[gt_id]["chromEnd"]
-                if (geneEnd_pos < cpg_pos) and (cpg_pos < geneStart_pos):
+                gene_low = min(gH[gt_id]["chromStart"], gH[gt_id]["chromEnd"])
+                gene_high = max(gH[gt_id]["chromStart"], gH[gt_id]["chromEnd"])
+                if (gene_low < cpg_pos) and (cpg_pos < gene_high):
                     cpgA = {
                         'mt_id': mt_id,
                         'mt_chrom': mH[mt_id]["chrom"],
