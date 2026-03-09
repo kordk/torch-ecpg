@@ -11,3 +11,4 @@ torch>=1.13.1
 statsmodels
 nvidia-ml-py
 pyarrow
+captum
