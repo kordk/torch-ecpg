@@ -32,39 +32,83 @@ PROMOTER_DOWNSTREAM_DISTANCE = 2500
 
 logger = logging.getLogger(__name__)
 
-#### Read in the bed6 annotation to a dictionary #######################################
-def readBed6AnnotatioFileToDict(my_bed6AnnotFile):
+#### Read in the annotation file to a dictionary (supports BED6 and GFF) #######################################
+def readAnnotationFileToDict(my_annotFile):
     my_lociH = {}
 
-    with open(my_bed6AnnotFile, "r") as bedFP:
+    with open(my_annotFile, "r") as fp:
         ng = 0 ## number of genes/loci processed
         nskip = 0 ## number of loci with missing data
-        for line in bedFP:
-            logger.debug(f"[readBed6AnnotatioFileToDict] line: {line.strip()}")
-            dataA = line.strip('\n').split('\t')
-            if dataA[0] == "chrom":
-                continue    ## skip header line
+        for line in fp:
+            if line.startswith("#"):
+                continue
 
-            my_name = dataA[3]
-            my_lociH[my_name] = {}
+            logger.debug(f"[readAnnotationFileToDict] line: {line.strip()}")
+            dataA = line.strip('\n').split('\t')
+
+            # Skip empty lines
+            if not dataA or (len(dataA) == 1 and dataA[0] == ""):
+                continue
+
+            # Check if this is a header line for BED file
+            if dataA[0] == "chrom":
+                continue
 
             if dataA[0] == "NA":
                 nskip += 1
                 continue
 
-            my_lociH[my_name]["chrom"]      = str(dataA[0]) # {1:22, X, Y}
-            my_lociH[my_name]["chromStart"] = int(dataA[1])
-            my_lociH[my_name]["chromEnd"]   = int(dataA[2])
-            my_lociH[my_name]["strand"]     = str(dataA[5])
+            num_cols = len(dataA)
+
+            if num_cols >= 9:
+                # GFF format
+                # Extract Geneid from attributes column
+                attributes = dataA[8]
+                gene_id = None
+                for attr in attributes.split(";"):
+                    attr = attr.strip()
+                    if attr.startswith("Geneid "):
+                        # e.g., Geneid "ENSG00000000003"
+                        gene_id = attr[len("Geneid "):].strip('"')
+                        break
+
+                if not gene_id:
+                    logger.error(f"[readAnnotationFileToDict] Missing Geneid in GFF line: {line.strip()}")
+                    sys.exit(1)
+
+                my_name = gene_id
+
+                # GFF is 1-based, inclusive. BED is 0-based, half-open
+                chromStart = int(dataA[3]) - 1
+                chromEnd = int(dataA[4])
+
+                my_lociH[my_name] = {}
+                my_lociH[my_name]["chrom"]      = str(dataA[0])
+                my_lociH[my_name]["chromStart"] = chromStart
+                my_lociH[my_name]["chromEnd"]   = chromEnd
+                my_lociH[my_name]["strand"]     = str(dataA[6])
+
+            elif num_cols >= 6:
+                # BED6 format
+                my_name = dataA[3]
+                my_lociH[my_name] = {}
+
+                my_lociH[my_name]["chrom"]      = str(dataA[0])
+                my_lociH[my_name]["chromStart"] = int(dataA[1])
+                my_lociH[my_name]["chromEnd"]   = int(dataA[2])
+                my_lociH[my_name]["strand"]     = str(dataA[5])
+            else:
+                logger.warning(f"[readAnnotationFileToDict] Unsupported number of columns ({num_cols}) in line: {line.strip()}")
+                continue
 
             if logger.isEnabledFor(logging.DEBUG):
                 if my_name == "cg13191808":
-                    logger.debug(f"[readBed6AnnotatioFileToDict] cg13191808: {my_lociH[my_name]}")
+                    logger.debug(f"[readAnnotationFileToDict] cg13191808: {my_lociH[my_name]}")
 
             ng += 1
 
-    logger.info(f"[readBed6AnnotatioFileToDict] Skipped (NA) {nskip} loci from {my_bed6AnnotFile}")
-    logger.info(f"[readBed6AnnotatioFileToDict] Processed {len(my_lociH)} loci from {my_bed6AnnotFile}")
+    logger.info(f"[readAnnotationFileToDict] Skipped (NA) {nskip} loci from {my_annotFile}")
+    logger.info(f"[readAnnotationFileToDict] Processed {len(my_lociH)} loci from {my_annotFile}")
     return my_lociH
 
 #### Read through file and report on p-values #######################################
@@ -445,10 +489,10 @@ def main():
 
 
     ## Read in the gene annotation file to a dictionary
-    geneH = readBed6AnnotatioFileToDict(geneAnnotFile)
+    geneH = readAnnotationFileToDict(geneAnnotFile)
 
     ## Read in the methylation annotation file to a dictionary
-    methylH = readBed6AnnotatioFileToDict(methylAnnotFile)
+    methylH = readAnnotationFileToDict(methylAnnotFile)
 
     ## Determine which p-value column to use
     try:
