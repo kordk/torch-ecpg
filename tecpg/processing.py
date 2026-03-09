@@ -259,6 +259,8 @@ def tecpg_mlr_lstsq(
     mc_logger.info_color = colors.GREEN
     inner_logger = mc_logger.alias()
 
+    methylation_loop_start_time = time.time()
+
     # Use the multiprocessing pool
     with gpu_guardian(logger) as gpu_handle, Pool() as pool:
         # Loop for methylation chunks or ran once with index 0 if no
@@ -785,9 +787,18 @@ def tecpg_mlr_lstsq(
                     )
                     del results[:]
 
+            completed_chunks = meth_chunk_index + 1
+            remaining_chunks = meth_chunk_count - completed_chunks
+            elapsed_time = time.time() - methylation_loop_start_time
+            average_time = elapsed_time / completed_chunks
+            estimated_remaining_seconds = average_time * remaining_chunks
+            estimated_remaining_hours = estimated_remaining_seconds / 3600
+
             logger.time(
-                'FINISHED METHYLATION CHUNK {0} IN {l} SECONDS',
-                meth_chunk_index + 1,
+                'FINISHED METHYLATION CHUNK {0} IN {l} SECONDS. ESTIMATED TIME REMAINING: {1:.2f} SECONDS ({2:.2f} HOURS)',
+                completed_chunks,
+                estimated_remaining_seconds,
+                estimated_remaining_hours,
             )
 
         # Wait for chunks
