@@ -52,6 +52,9 @@ def tecpg_mlr_lstsq(
     subsample_g_count: Optional[int] = None,
     seed: int = 42,
     permute_label_test: bool = False,
+    compute_ig: bool = False,
+    compute_ig_deep: bool = False,
+    ig_baseline: str = 'mean',
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -197,23 +200,32 @@ def tecpg_mlr_lstsq(
         logger.info('Initializing output directory')
         initialize_dir(output_dir, **logger)
 
+    if ig_baseline not in ['mean', 'zero']:
+        error = f"Unsupported ig_baseline '{ig_baseline}'. Must be 'mean' or 'zero'."
+        logger.error(error)
+        raise ValueError(error)
+
     # Determines the column names for the output dataframe
     index_names = ['gt_id', 'mt_id']
+    categories = (
+        ['mt']
+        if methylation_only
+        else (['const', 'mt'] + C.columns.to_list())
+    )
     if p_only:
-        if methylation_only:
-            columns = ['mt_p']
-        else:
-            columns = ['const_p', 'mt_p'] + [val + '_p' for val in C.columns]
+        columns = [column + '_p' for column in categories]
     else:
-        categories = (
-            ['mt']
-            if methylation_only
-            else (['const', 'mt'] + C.columns.to_list())
-        )
         suffixes = ['_est', '_err', '_t', '_p']
         columns = [
             column + suffix for suffix in suffixes for column in categories
         ]
+
+    # Add _ig columns if IG is computed
+    if compute_ig or compute_ig_deep:
+        # Note: Intercept gets excluded from IG outputs
+        categories_for_ig = ['mt'] if methylation_only else ['mt'] + C.columns.to_list()
+        ig_columns = [col + '_ig' for col in categories_for_ig]
+        columns.extend(ig_columns)
 
     # Create covariate tensor
     if meth_loci_per_chunk is None:
@@ -340,6 +352,19 @@ def tecpg_mlr_lstsq(
 
             mc_logger.memory_check('tecpg_mlr_lstsq - peak')
 
+            if compute_ig or compute_ig_deep:
+                if ig_baseline == 'mean':
+                    X_baseline = X.mean(dim=1, keepdim=True)
+                else:
+                    X_baseline = torch.zeros_like(X[:, 0:1, :])
+
+            if compute_ig:
+                X_diff_mean = (X - X_baseline).abs().mean(dim=1)  # Shape: (M, K)
+                if methylation_only:
+                    X_diff_mean = X_diff_mean[:, 1:]
+                else:
+                    X_diff_mean = X_diff_mean[:, 1:]
+
             # Pre-calculate diagonal of (X^T X)^-1 for Standard Error using QR decomposition
             # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
             # We need the diagonal elements.
@@ -453,6 +478,13 @@ def tecpg_mlr_lstsq(
                 inner_logger.memory_check('tecpg_mlr_lstsq - pvals')
 
                 # Now we have tensors of shape (M, G, K).
+
+                if compute_ig:
+                    # B shape: (M, G, K). X_diff_mean shape: (M, K-1)
+                    # We compute Analytical IG = X_diff_mean * |W|
+                    # Skip the intercept index 0 of B
+                    IG_analytical = X_diff_mean.unsqueeze(1) * B[:, :, 1:].abs()  # Shape: (M, G, K-1)
+
                 # We need to flatten to (M*G, K) to apply filters efficiently?
                 # Or apply masks on the (M, G) grid.
 
@@ -512,6 +544,9 @@ def tecpg_mlr_lstsq(
                 T = T.permute(1, 0, 2).reshape(-1, num_coeffs)
                 P = P.permute(1, 0, 2).reshape(-1, num_coeffs)
 
+                if compute_ig:
+                    IG_analytical = IG_analytical.permute(1, 0, 2).reshape(-1, num_coeffs - 1)
+
                 if region != 'all':
                     # mask is (M, G).
                     # Permute to (G, M).
@@ -523,7 +558,13 @@ def tecpg_mlr_lstsq(
                     T = T[region_mask]
                     P = P[region_mask]
 
+                    if compute_ig:
+                        IG_analytical = IG_analytical[region_mask]
+
                     region_indices_list.append(region_mask) # Need to save for index generation
+
+                # Save the full B for Deep IG if needed
+                B_full = B if compute_ig_deep else None
 
                 if methylation_only:
                     # B is (N, K). Columns: Const, Meth, Covars...
@@ -532,11 +573,16 @@ def tecpg_mlr_lstsq(
                     S = S[:, 1:2]
                     T = T[:, 1:2]
                     P = P[:, 1:2]
+                    if compute_ig:
+                        IG_analytical = IG_analytical[:, 0:1] # Meth is index 0 of IG
 
                 if p_only:
                     current_results = P
                 else:
                     current_results = torch.cat((B, S, T, P), dim=1)
+
+                if compute_ig:
+                    current_results = torch.cat((current_results, IG_analytical), dim=1)
 
                 if do_reservoir:
                     # Collect batch results for reservoir sampling BEFORE p-value filtration
@@ -647,10 +693,83 @@ def tecpg_mlr_lstsq(
                 if filtration:
                     output_sizes.append(len(P))
 
+                chunk_results = current_results[p_indices] if p_thresh is not None else current_results
+
+                if compute_ig_deep and p_thresh is not None:
+                    from captum.attr import IntegratedGradients
+
+                    class LstsqWrapper(torch.nn.Module):
+                        def __init__(self, w):
+                            super().__init__()
+                            self.w = w
+
+                        def forward(self, x):
+                            # x shape: (S, K), w shape: (K,)
+                            # outputs: (S, 1)
+                            return x.matmul(self.w).unsqueeze(1)
+
+                    deep_ig_scores = []
+                    # p_indices is a boolean mask of shape (N_after_region,)
+                    # we need the indices where it is true
+                    valid_flat_indices = torch.nonzero(p_indices).squeeze(1)
+
+                    if len(valid_flat_indices) > 0:
+                        # Full W for significant hits
+                        B_full_filtered = B_full[p_indices] # shape: (N_sig, K)
+
+                        # If region is not 'all', p_indices applies to the remaining hits
+                        # We need the original (M, G) flat index to get m_idx
+                        if region != 'all':
+                            # region_mask is boolean of shape (M*G,)
+                            # Get the original indices before region mask
+                            region_flat_indices = torch.nonzero(region_mask).squeeze(1)
+                            original_flat_indices = region_flat_indices[valid_flat_indices]
+                        else:
+                            original_flat_indices = valid_flat_indices
+
+                        for i, orig_flat_idx in enumerate(original_flat_indices):
+                            w = B_full_filtered[i]  # Shape: (K,)
+
+                            # Unravel the flat index to get the Methylation index (m_idx)
+                            # B was shaped (G*M, K) because we did permute(1, 0, 2) on (M, G, K)
+                            # Wait, we did:
+                            # B = B.permute(1, 0, 2).reshape(-1, num_coeffs)  -> (G, M, K)
+                            # So row-major means outer loop is G, inner is M.
+                            # So index = g_idx * M_count + m_idx
+                            # Therefore:
+                            # m_idx = orig_flat_idx % mt_count
+                            m_idx = orig_flat_idx % mt_count
+
+                            x_hit = X[m_idx]                 # Shape: (S, K)
+                            x_baseline_hit = X_baseline[m_idx] # Shape: (1, K)
+
+                            wrapper = LstsqWrapper(w)
+                            ig = IntegratedGradients(wrapper)
+
+                            attributions = ig.attribute(inputs=x_hit, baselines=x_baseline_hit, target=0, n_steps=50)
+
+                            # hit_saliency vector: (K,)
+                            hit_saliency = attributions.abs().mean(dim=0)
+
+                            # Remove the intercept (index 0)
+                            hit_saliency = hit_saliency[1:]
+                            if methylation_only:
+                                hit_saliency = hit_saliency[0:1] # only the meth column
+
+                            deep_ig_scores.append(hit_saliency)
+
+                        deep_ig_tensor = torch.stack(deep_ig_scores)
+                        chunk_results = torch.cat((chunk_results, deep_ig_tensor), dim=1)
+                    else:
+                        # No significant hits, but we need to match the columns
+                        num_ig_cols = 1 if methylation_only else C.shape[1]  # intercept removed
+                        empty_ig = torch.empty((0, num_ig_cols), device=device, dtype=dtype)
+                        chunk_results = torch.cat((chunk_results, empty_ig), dim=1)
+
                 if p_only:
                     results.append(P)
                 else:
-                    results.append(current_results[p_indices] if p_thresh is not None else current_results)
+                    results.append(chunk_results)
 
                 # Save output if gene chunking is used
                 # In regression_full, saving happens inside the loop if gene_loci_per_chunk is set.

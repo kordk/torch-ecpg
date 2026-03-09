@@ -340,6 +340,22 @@ def corr(
     type=bool,
     help='Whether to perform a permutation (Negative Control) test by shuffling subject IDs in G (only for lstsq method)',
 )
+@click.option(
+    '--compute-ig',
+    is_flag=True,
+    help='Compute fast analytical IG scores.',
+)
+@click.option(
+    '--compute-ig-deep',
+    is_flag=True,
+    help='Compute deep Captum-based IG scores (Slow).',
+)
+@click.option(
+    '--ig-baseline',
+    type=click.Choice(['mean', 'zero'], case_sensitive=False),
+    default='mean',
+    help='Baseline for IG attribution (default: mean).',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -361,6 +377,9 @@ def mlr(
     subsample_g_count: Optional[int],
     seed: int,
     permute_label_test: bool,
+    compute_ig: bool,
+    compute_ig_deep: bool,
+    ig_baseline: str,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -404,6 +423,16 @@ def mlr(
         {'cis': DEFAULT_CIS_UPSTREAM, 'distal': DEFAULT_DISTAL_UPSTREAM},
     )
 
+    if compute_ig and compute_ig_deep:
+        error = 'Cannot use both --compute-ig and --compute-ig-deep simultaneously.'
+        logger.error(error)
+        raise click.UsageError(error)
+
+    if compute_ig_deep and p_thresh is None:
+        error = '--compute-ig-deep requires a --p-thresh to be set to avoid computational collapse.'
+        logger.error(error)
+        raise click.UsageError(error)
+
     methylation_only = not full_output
 
     kwargs = {
@@ -429,6 +458,9 @@ def mlr(
         'subsample_g_count': subsample_g_count,
         'seed': seed,
         'permute_label_test': permute_label_test,
+        'compute_ig': compute_ig,
+        'compute_ig_deep': compute_ig_deep,
+        'ig_baseline': ig_baseline,
     }
 
     logger.info(
@@ -454,6 +486,11 @@ def mlr(
         if permute_label_test:
             logger.warning('--permute-label-test is only supported for mlr-method lstsq')
         kwargs.pop('permute_label_test', None)
+        if compute_ig or compute_ig_deep:
+            logger.warning('Integrated Gradients (--compute-ig/--compute-ig-deep) are only supported for mlr-method lstsq. They will be ignored.')
+        kwargs.pop('compute_ig', None)
+        kwargs.pop('compute_ig_deep', None)
+        kwargs.pop('ig_baseline', None)
         output = regression_full(**kwargs, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)
@@ -513,6 +550,22 @@ def mlr(
     type=int,
     help='Seconds to wait when throttling',
 )
+@click.option(
+    '--compute-ig',
+    is_flag=True,
+    help='Compute fast analytical IG scores.',
+)
+@click.option(
+    '--compute-ig-deep',
+    is_flag=True,
+    help='Compute deep Captum-based IG scores (Slow).',
+)
+@click.option(
+    '--ig-baseline',
+    type=click.Choice(['mean', 'zero'], case_sensitive=False),
+    default='mean',
+    help='Baseline for IG attribution (default: mean).',
+)
 @click.pass_context
 def mlr_single(
     ctx: click.Context,
@@ -528,6 +581,9 @@ def mlr_single(
     logit_transform: bool,
     thermal_threshold: int,
     thermal_wait: int,
+    compute_ig: bool,
+    compute_ig_deep: bool,
+    ig_baseline: str,
 ) -> None:
     """
     Calculates the multiple linear regression.
@@ -580,6 +636,9 @@ def mlr_single(
                 DEFAULT_DISTAL_UPSTREAM,
             )
             window = DEFAULT_DISTAL_UPSTREAM
+
+    if compute_ig or compute_ig_deep:
+        logger.warning('Integrated Gradients (--compute-ig/--compute-ig-deep) are only supported for mlr-method lstsq via mlr command. They will be ignored in mlr_single.')
 
     kwargs = {
         'M': M,
