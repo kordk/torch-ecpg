@@ -150,6 +150,7 @@ def main():
     total_mappings = 0
     all_genes = set()
     all_cpgs = set()
+    empty_files_count = 0
 
     # We will run stats calculation in parallel
     # And file merging sequentially in the main thread
@@ -168,8 +169,19 @@ def main():
             print("Starting merge process...")
             if out_format == "csv":
                 with open(output_file, 'wb') as f_out:
+                    first_file_written = False
                     for i, filepath in enumerate(files):
-                        merge_file_content(filepath, f_out, i == 0)
+                        # Check if file is empty (only header)
+                        is_empty = False
+                        with open(filepath, 'rb') as f_check:
+                            header = f_check.readline()
+                            if not f_check.read(1):  # No data after header
+                                empty_files_count += 1
+                                is_empty = True
+
+                        if not is_empty:
+                            merge_file_content(filepath, f_out, not first_file_written)
+                            first_file_written = True
 
                         if (i + 1) % 10 == 0 or (i + 1) == len(files):
                             print(f"Merged {i + 1}/{len(files)} files...", end='\r')
@@ -178,19 +190,25 @@ def main():
                 for i, filepath in enumerate(files):
                     # Read the CSV chunk
                     df = pd.read_csv(filepath)
-                    table = pa.Table.from_pandas(df)
 
-                    if i == 0:
-                        # Initialize writer with the schema of the first file
-                        writer = pq.ParquetWriter(output_file, table.schema, compression=compression)
+                    if df.empty:
+                        empty_files_count += 1
+                    else:
+                        table = pa.Table.from_pandas(df)
 
-                    writer.write_table(table)
+                        if writer is None:
+                            # Initialize writer with the schema of the first non-empty file
+                            writer = pq.ParquetWriter(output_file, table.schema, compression=compression)
+
+                        writer.write_table(table)
 
                     if (i + 1) % 10 == 0 or (i + 1) == len(files):
                         print(f"Merged {i + 1}/{len(files)} files...", end='\r')
 
                 if writer:
                     writer.close()
+                else:
+                    print("Warning: All processed files were empty. No parquet file was generated.", file=sys.stderr)
 
             print(f"\nMerge complete. Waiting for statistics calculation...")
 
@@ -224,8 +242,23 @@ def main():
     print(f"Total Mappings (rows): {total_mappings}")
     print(f"Unique Genes (gt_id): {len(all_genes)}")
     print(f"Unique CpGs (mt_id): {len(all_cpgs)}")
+    print(f"Empty files skipped: {empty_files_count}")
     print(f"Time elapsed: {elapsed_time:.2f} seconds")
-    print(f"Output saved to: {output_file}")
+
+    if os.path.exists(output_file):
+        file_size_bytes = os.path.getsize(output_file)
+        if file_size_bytes >= 1024**3:
+            file_size_str = f"{file_size_bytes / (1024**3):.2f} GB"
+        elif file_size_bytes >= 1024**2:
+            file_size_str = f"{file_size_bytes / (1024**2):.2f} MB"
+        elif file_size_bytes >= 1024:
+            file_size_str = f"{file_size_bytes / 1024:.2f} KB"
+        else:
+            file_size_str = f"{file_size_bytes} bytes"
+
+        print(f"Output saved to: {output_file} ({file_size_str})")
+    else:
+        print(f"Output saved to: {output_file}")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
