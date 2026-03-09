@@ -40,7 +40,14 @@ def _normalize_chrom(chrom_str):
     return s
 
 def _strip_id_version(identifier):
-    """Strip version suffix from Ensembl-style IDs (e.g., ENSG00000000003.15_3 -> ENSG00000000003)."""
+    """Strip version suffix from Ensembl-style IDs.
+
+    Ensembl IDs follow the format BASE.VERSION[_PAR], e.g.:
+      ENSG00000000003.15     -> ENSG00000000003
+      ENSG00000240929.15_3   -> ENSG00000240929
+    Splitting on '.' and taking the first element handles both cases.
+    IDs without a dot (e.g., cg13191808) are returned unchanged.
+    """
     return identifier.split('.')[0]
 
 #### Read in the annotation file to a dictionary (supports BED6 and GFF) #######################################
@@ -362,6 +369,8 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             ## check for DISTAL - negative strand
             if gH[gt_id]["strand"] == "-":
                 cpg_pos = mH[mt_id]["chromStart"]
+                # For - strand, TSS is at the higher coordinate end of the gene.
+                # max() handles both standard coords (start < end) and reversed conventions.
                 tss = max(gH[gt_id]["chromStart"], gH[gt_id]["chromEnd"])
                 regionRef_pos = tss + DISTAL_OFFSET
                 if regionRef_pos < cpg_pos:
@@ -406,8 +415,8 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
                 cpg_pos = mH[mt_id]["chromStart"]
                 tss = max(gH[gt_id]["chromStart"], gH[gt_id]["chromEnd"])
                 regionRef_pos = tss + PROMOTER_OFFSET
-                regionDnStreamRange = regionRef_pos - PROMOTER_UPSTREAM_DISTANCE
-                regionUpStreamRange = regionRef_pos + PROMOTER_DOWNSTREAM_DISTANCE
+                regionDnStreamRange = regionRef_pos - PROMOTER_DOWNSTREAM_DISTANCE
+                regionUpStreamRange = regionRef_pos + PROMOTER_UPSTREAM_DISTANCE
                 if (regionDnStreamRange < cpg_pos) and (cpg_pos < regionUpStreamRange):
                     cpgA = {
                         'mt_id': mt_id,
