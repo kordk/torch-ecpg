@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Optional, List, Dict
 import logging
+from scipy import stats
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -229,6 +230,113 @@ class Plotter:
         logger.info(f"Saved Region Breakdown to {out_path}")
 
 
+def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
+    logger.info(f"Generating Comparative Scatter Plot for {cpg_id} vs {gene_id}...")
+
+    try:
+        from sklearn.linear_model import LinearRegression
+    except ImportError:
+        logger.error("scikit-learn is required for adjusted scatter plots. Please install it.")
+        return
+
+    if cpg_id not in M.index:
+        logger.error(f"CpG ID {cpg_id} not found in methylation matrix.")
+        return
+    if gene_id not in G.index:
+        logger.error(f"Gene ID {gene_id} not found in gene expression matrix.")
+        return
+
+    # Extract series and align
+    meth_vals = M.loc[cpg_id]
+    gene_vals = G.loc[gene_id]
+
+    # Ensure subjects align
+    common_subjects = meth_vals.index.intersection(gene_vals.index).intersection(C.index)
+    if len(common_subjects) == 0:
+        logger.error("No common subjects found between matrices.")
+        return
+
+    meth_vals = meth_vals[common_subjects]
+    gene_vals = gene_vals[common_subjects]
+    C_aligned = C.loc[common_subjects]
+
+    # Drop NAs
+    valid_mask = ~meth_vals.isna() & ~gene_vals.isna() & ~C_aligned.isna().any(axis=1)
+    meth_vals = meth_vals[valid_mask]
+    gene_vals = gene_vals[valid_mask]
+    C_aligned = C_aligned[valid_mask]
+
+    if len(meth_vals) == 0:
+        logger.error("No valid data points after dropping NAs.")
+        return
+
+    # Fit models to get residuals
+    X = C_aligned.values
+
+    model_meth = LinearRegression()
+    model_meth.fit(X, meth_vals.values)
+    meth_residuals = meth_vals.values - model_meth.predict(X)
+
+    model_gene = LinearRegression()
+    model_gene.fit(X, gene_vals.values)
+    gene_residuals = gene_vals.values - model_gene.predict(X)
+
+    # Setup the side-by-side plot
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8), sharey=False)
+
+    # --- Panel A: Unadjusted ---
+    ax_raw = axes[0]
+    sns.regplot(x=meth_vals.values, y=gene_vals.values, scatter_kws={'alpha':0.5}, line_kws={'color': 'red'}, ax=ax_raw)
+
+    # Calculate unadjusted stats
+    slope_raw, intercept_raw, r_value_raw, p_value_raw, std_err_raw = stats.linregress(meth_vals.values, gene_vals.values)
+
+    # Annotate unadjusted plot
+    ax_raw.annotate(f"R = {r_value_raw:.3f}\nP = {p_value_raw:.2e}", xy=(0.05, 0.90), xycoords='axes fraction',
+                    fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+
+    ax_raw.set_xlabel('Raw DNA Methylation (Beta)')
+    ax_raw.set_ylabel('Raw Log2 Gene Expression')
+    ax_raw.set_title(f'Unadjusted eQTM Association\n{cpg_id} vs {gene_id}')
+    ax_raw.grid(True, alpha=0.3)
+
+    # --- Panel B: Adjusted ---
+    ax_adj = axes[1]
+
+    # Plot residuals
+    ax_adj.scatter(meth_residuals, gene_residuals, alpha=0.5)
+
+    # Calculate partial correlation (r-value) for residuals
+    r_value_adj, _ = stats.pearsonr(meth_residuals, gene_residuals)
+
+    # Use mt_est slope from parquet and parquet's p-value
+    mt_est = row['mt_est']
+    pq_p_val = row[p_col]
+
+    # Draw line through origin using mt_est slope
+    x_vals = np.array([meth_residuals.min(), meth_residuals.max()])
+    y_vals = mt_est * x_vals
+    ax_adj.plot(x_vals, y_vals, color='red', label=f'mt_est slope: {mt_est:.3f}')
+
+    # Annotate adjusted plot
+    ax_adj.annotate(f"R = {r_value_adj:.3f}\nP = {pq_p_val:.2e}", xy=(0.05, 0.90), xycoords='axes fraction',
+                    fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+    ax_adj.legend(loc='lower right')
+
+    ax_adj.set_xlabel('Covariate-Adjusted DNA Methylation')
+    ax_adj.set_ylabel('Covariate-Adjusted Log2 Gene Expression')
+    ax_adj.set_title(f'Adjusted eQTM Association (Residuals)\n{cpg_id} vs {gene_id} ({region})')
+    ax_adj.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    safe_region = region.replace(" ", "_").replace("/", "_")
+    out_path = os.path.join(output_dir, f'comparative_scatter_{safe_region}_{cpg_id}_{gene_id}.png')
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Saved Comparative Scatter Plot to {out_path}")
+
+
 def plot_adjusted_eqtm(cpg_id: str, gene_id: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
     logger.info(f"Generating Adjusted Scatter Plot for {cpg_id} vs {gene_id}...")
 
@@ -313,6 +421,7 @@ def main():
     parser.add_argument("--manhattan", action="store_true", help="Generate Manhattan Plot")
     parser.add_argument("--region-breakdown", action="store_true", help="Generate Region Breakdown Plot")
     parser.add_argument("--scatter", action="store_true", help="Generate Scatter Plots for top hits")
+    parser.add_argument("--comparative-scatter", action="store_true", help="Generate Comparative (Unadjusted vs Adjusted) Scatter Plots for top hits")
     parser.add_argument("--all", action="store_true", help="Generate all plots (default if none specified)")
 
     # Tecpg paths for scatter plots
@@ -323,7 +432,7 @@ def main():
     args = parser.parse_args()
 
     # If no specific plot is requested, do all
-    if not (args.volcano or args.manhattan or args.region_breakdown or args.scatter):
+    if not (args.volcano or args.manhattan or args.region_breakdown or args.scatter or args.comparative_scatter):
         args.all = True
 
     plotter = Plotter(args.parquet_file, args.out_dir)
@@ -338,7 +447,7 @@ def main():
     if args.all or args.region_breakdown:
         plotter.plot_region_breakdown()
 
-    if args.all or args.scatter:
+    if args.all or args.scatter or args.comparative_scatter:
         logger.info("Preparing to generate scatter plots for top hits per region...")
 
         if 'fdr' not in plotter.df.columns and plotter.p_col not in plotter.df.columns:
@@ -380,7 +489,11 @@ def main():
             for _, row in top_hits.iterrows():
                 cpg_id = row['mt_id']
                 gene_id = row['gt_id']
-                plot_adjusted_eqtm(cpg_id, gene_id, M_df, G_df, C_df, args.out_dir, region)
+
+                if args.all or args.comparative_scatter:
+                    plot_comparative_eqtm(cpg_id, gene_id, row, plotter.p_col, M_df, G_df, C_df, args.out_dir, region)
+                elif args.scatter:
+                    plot_adjusted_eqtm(cpg_id, gene_id, M_df, G_df, C_df, args.out_dir, region)
 
 if __name__ == "__main__":
     main()
