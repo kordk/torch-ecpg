@@ -62,7 +62,11 @@ def readAnnotationFileToDict(my_annotFile):
 
             if num_cols >= 9:
                 # GFF format
-                # Extract Geneid from attributes column
+                # Only process 'gene' features to get full boundaries
+                if dataA[2] != "gene":
+                    continue
+
+                # Extract Geneid or gene_id from attributes column
                 attributes = dataA[8]
                 gene_id = None
                 for attr in attributes.split(";"):
@@ -71,12 +75,16 @@ def readAnnotationFileToDict(my_annotFile):
                         # e.g., Geneid "ENSG00000000003"
                         gene_id = attr[len("Geneid "):].strip('"')
                         break
+                    elif attr.startswith("gene_id "):
+                        # e.g., gene_id "ENSG00000223972.4"
+                        gene_id = attr[len("gene_id "):].strip('"')
+                        break
 
                 if not gene_id:
-                    logger.error(f"[readAnnotationFileToDict] Missing Geneid in GFF line: {line.strip()}")
+                    logger.error(f"[readAnnotationFileToDict] Missing Geneid or gene_id in GFF line: {line.strip()}")
                     sys.exit(1)
 
-                my_name = gene_id
+                my_name = gene_id.split('.')[0]
 
                 # GFF is 1-based, inclusive. BED is 0-based, half-open
                 chromStart = int(dataA[3]) - 1
