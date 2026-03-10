@@ -7,6 +7,7 @@ import os
 import sys
 import argparse
 import logging
+import itertools
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -484,28 +485,20 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
     logger.info("[verify_alignment] Starting alignment verification...")
 
     # 1. Chromosome Nomenclature Test
-    gene_chroms = [str(info["chrom"]) for key, info in list(geneH.items())[:50]]
-    methyl_chroms = [str(info["chrom"]) for key, info in list(methylH.items())[:50]]
+    # Note: readAnnotationFileToDict already normalizes via _normalize_chrom(),
+    # so chroms should already be stripped. This check acts as a safety net.
+    gene_chroms = [str(info["chrom"]) for _, info in itertools.islice(geneH.items(), 50)]
+    methyl_chroms = [str(info["chrom"]) for _, info in itertools.islice(methylH.items(), 50)]
 
     gene_has_chr = any(c.startswith("chr") for c in gene_chroms)
     methyl_has_chr = any(c.startswith("chr") for c in methyl_chroms)
 
-    if gene_has_chr != methyl_has_chr:
-        logger.critical("[CRITICAL WARNING] Chromosome nomenclature mismatch detected between gene and methylation annotations. One uses 'chr' prefix and the other does not.")
-        if gene_has_chr:
-            logger.info("[verify_alignment] Normalizing methylation annotations to include 'chr' prefix.")
-            for key, info in methylH.items():
-                if not str(info["chrom"]).startswith("chr"):
-                    info["chrom"] = "chr" + str(info["chrom"])
-        else:
-            logger.info("[verify_alignment] Normalizing methylation annotations to strip 'chr' prefix.")
-            for key, info in methylH.items():
-                if str(info["chrom"]).startswith("chr"):
-                    info["chrom"] = str(info["chrom"])[3:]
-            logger.info("[verify_alignment] Normalizing gene annotations to strip 'chr' prefix.")
-            for key, info in geneH.items():
-                if str(info["chrom"]).startswith("chr"):
-                    info["chrom"] = str(info["chrom"])[3:]
+    if gene_has_chr or methyl_has_chr:
+        logger.warning("[verify_alignment] Detected 'chr' prefix in annotation data. Normalizing...")
+        for key, info in methylH.items():
+            info["chrom"] = _normalize_chrom(info["chrom"])
+        for key, info in geneH.items():
+            info["chrom"] = _normalize_chrom(info["chrom"])
 
     # Read first chunk of parquet file to check Ensembl ID and top 10 associations
     try:
@@ -527,15 +520,15 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
         sys.exit(1)
 
     # 2. Ensembl ID Suffix Check
-    first_few_genes = df['gt_id'].dropna().head(50).astype(str).tolist()
-    versioned_in_geneH = any('.' in k for k in list(geneH.keys())[:100])
-    versionless_in_parquet = first_few_genes and not any('.' in g for g in first_few_genes)
+    # Note: readAnnotationFileToDict already strips versions via _strip_id_version().
+    # This check acts as a safety net for any remaining versioned IDs.
+    versioned_in_geneH = any('.' in k for k in itertools.islice(geneH.keys(), 100))
 
-    if versioned_in_geneH and versionless_in_parquet:
-        logger.info("[verify_alignment] Ensembl ID version mismatch detected. GTF uses versioned IDs while Parquet uses versionless. Normalizing GTF IDs by stripping version (.split('.')[0]).")
+    if versioned_in_geneH:
+        logger.warning("[verify_alignment] Detected versioned Ensembl IDs in gene annotations. Normalizing via _strip_id_version().")
         new_geneH = {}
         for key, value in geneH.items():
-            new_key = key.split('.')[0]
+            new_key = _strip_id_version(key)
             # Avoid overwriting if multiple transcripts map to same versionless gene
             if new_key not in new_geneH:
                 new_geneH[new_key] = value
@@ -570,8 +563,8 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
     top_10 = df_sorted.head(10)
 
     for index, row in top_10.iterrows():
-        gt_id = str(row['gt_id'])
-        mt_id = str(row['mt_id'])
+        gt_id = _strip_id_version(str(row['gt_id']))
+        mt_id = _strip_id_version(str(row['mt_id']))
 
         cpg_chr, cpg_pos = "N/A", "N/A"
         gene_chr, gene_start, gene_end = "N/A", "N/A", "N/A"
@@ -585,7 +578,7 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
             gene_start = geneH[gt_id]["chromStart"]
             gene_end = geneH[gt_id]["chromEnd"]
 
-        logger.info(f"[verify_alignment] Pair Sample -> cpg_id: {mt_id}, cpg_chr: {cpg_chr}, cpg_pos: {cpg_pos} | gene_id: {gt_id}, gene_chr: {gene_chr}, gene_start: {gene_start}")
+        logger.info(f"[verify_alignment] Pair Sample -> cpg_id: {mt_id}, cpg_chr: {cpg_chr}, cpg_pos: {cpg_pos} | gene_id: {gt_id}, gene_chr: {gene_chr}, gene_start: {gene_start}, gene_end: {gene_end}")
 
     logger.info("[verify_alignment] Alignment verification complete.")
 
@@ -633,7 +626,7 @@ def main():
     ## Read in the methylation annotation file to a dictionary
     methylH = readAnnotationFileToDict(methylAnnotFile)
 
-        ## Verify alignment before processing
+    ## Verify alignment before processing
     verify_alignment(geneH, methylH, ecpgDataFile)
 
     ## Determine which p-value column to use

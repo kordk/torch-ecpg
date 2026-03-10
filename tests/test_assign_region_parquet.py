@@ -16,6 +16,7 @@ from assignRegionToEcpg_parquet import (
     _strip_id_version,
     readAnnotationFileToDict,
     assignRegion,
+    verify_alignment,
 )
 
 
@@ -485,6 +486,102 @@ class TestAssignRegion(unittest.TestCase):
         regions = result['region'].tolist()
         self.assertIn("GENEBODY", regions)
         self.assertNotIn("TRANS", regions)
+
+
+class TestVerifyAlignment(unittest.TestCase):
+    """Test the verify_alignment safety-net function from dev branch."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir)
+
+    def _make_parquet(self, data, filename="input.parquet"):
+        df = pd.DataFrame(data)
+        filepath = os.path.join(self.test_dir, filename)
+        df.to_parquet(filepath, index=False)
+        return filepath
+
+    def test_safety_net_chr_normalization(self):
+        """verify_alignment should normalize any remaining chr prefixes as safety net."""
+        gH = {
+            "ENSG001": {"chrom": "chr1", "chromStart": 100000, "chromEnd": 200000, "strand": "+"}
+        }
+        mH = {
+            "cg001": {"chrom": "1", "chromStart": 150000, "chromEnd": 150001, "strand": "+"}
+        }
+        parquet_file = self._make_parquet({
+            'gt_id': ['ENSG001'],
+            'mt_id': ['cg001'],
+            'mt_p': [1e-8]
+        })
+
+        verify_alignment(gH, mH, parquet_file)
+
+        # After verify_alignment, chr prefix should be stripped
+        self.assertEqual(gH["ENSG001"]["chrom"], "1")
+        self.assertEqual(mH["cg001"]["chrom"], "1")
+
+    def test_safety_net_id_version_stripping(self):
+        """verify_alignment should strip any remaining versioned IDs as safety net."""
+        gH = {
+            "ENSG001.5": {"chrom": "1", "chromStart": 100000, "chromEnd": 200000, "strand": "+"}
+        }
+        mH = {
+            "cg001": {"chrom": "1", "chromStart": 150000, "chromEnd": 150001, "strand": "+"}
+        }
+        parquet_file = self._make_parquet({
+            'gt_id': ['ENSG001'],
+            'mt_id': ['cg001'],
+            'mt_p': [1e-8]
+        })
+
+        verify_alignment(gH, mH, parquet_file)
+
+        # After verify_alignment, versioned ID should be stripped
+        self.assertIn("ENSG001", gH)
+        self.assertNotIn("ENSG001.5", gH)
+
+    def test_int_type_enforcement(self):
+        """verify_alignment should enforce integer types for coordinates."""
+        gH = {
+            "ENSG001": {"chrom": "1", "chromStart": "100000", "chromEnd": "200000", "strand": "+"}
+        }
+        mH = {
+            "cg001": {"chrom": "1", "chromStart": "150000", "chromEnd": 150001, "strand": "+"}
+        }
+        parquet_file = self._make_parquet({
+            'gt_id': ['ENSG001'],
+            'mt_id': ['cg001'],
+            'mt_p': [1e-8]
+        })
+
+        verify_alignment(gH, mH, parquet_file)
+
+        self.assertIsInstance(gH["ENSG001"]["chromStart"], int)
+        self.assertIsInstance(gH["ENSG001"]["chromEnd"], int)
+        self.assertIsInstance(mH["cg001"]["chromStart"], int)
+
+    def test_already_normalized_data_passes(self):
+        """verify_alignment should work fine when data is already normalized."""
+        gH = {
+            "ENSG001": {"chrom": "1", "chromStart": 100000, "chromEnd": 200000, "strand": "+"}
+        }
+        mH = {
+            "cg001": {"chrom": "1", "chromStart": 150000, "chromEnd": 150001, "strand": "+"}
+        }
+        parquet_file = self._make_parquet({
+            'gt_id': ['ENSG001'],
+            'mt_id': ['cg001'],
+            'mt_p': [1e-8]
+        })
+
+        # Should not raise any errors
+        verify_alignment(gH, mH, parquet_file)
+
+        self.assertEqual(gH["ENSG001"]["chrom"], "1")
+        self.assertEqual(mH["cg001"]["chrom"], "1")
 
 
 if __name__ == '__main__':
