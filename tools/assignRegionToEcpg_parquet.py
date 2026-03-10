@@ -174,19 +174,23 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
     parquet_file = pq.ParquetFile(my_ecpgDataFile)
     writer = None
 
-    schema = pa.schema([
-        ('mt_id', pa.string()),
-        ('mt_chrom', pa.string()),
-        ('mt_chromStart', pa.int64()),
-        ('mt_strand', pa.string()),
-        ('gt_id', pa.string()),
-        ('gt_chrom', pa.string()),
-        ('gt_chromStart', pa.int64()),
-        ('gt_strand', pa.string()),
-        ('region', pa.string())
-    ])
+    input_schema = parquet_file.schema.to_arrow_schema()
 
-    for batch in parquet_file.iter_batches(batch_size=chunk_size, columns=['gt_id', 'mt_id', pval_col]):
+    # Create new fields for the annotation columns
+    new_fields = [
+        pa.field('mt_chrom', pa.string()),
+        pa.field('mt_chromStart', pa.int64()),
+        pa.field('mt_strand', pa.string()),
+        pa.field('gt_chrom', pa.string()),
+        pa.field('gt_chromStart', pa.int64()),
+        pa.field('gt_strand', pa.string()),
+        pa.field('region', pa.string())
+    ]
+
+    # Append the new fields to the input schema
+    schema = pa.schema(list(input_schema) + new_fields)
+
+    for batch in parquet_file.iter_batches(batch_size=chunk_size):
         df = batch.to_pandas()
         my_eqtmA = []
 
@@ -198,58 +202,69 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             mt_id = str(row['mt_id'])
             mt_p = row[pval_col]
 
-            if pd.isna(mt_p):
-                logger.info(f"[assignRegion] P-value missing. Excluding loci {gt_id} {mt_id} {mt_p}")
-                npskip += 1
-                continue
+            # Start with the original row as a dict
+            base_row = row.to_dict()
 
             nlp += 1
 
-            if mt_p > 0.000001:
-                logger.info(f"[assignRegion] P-value too large. Excluding loci {gt_id} {mt_id} {mt_p}")
-                ne += 1
-                npvalx += 1
-                continue
+            # Determine if we have annotation info
+            has_mt_annot = mt_id in mH and "chrom" in mH[mt_id]
+            has_gt_annot = gt_id in gH and "chrom" in gH[gt_id]
 
-            if mt_id not in mH:
-                logger.info(f"[assignRegion] Annotation missing - methylation: {nlp} {mt_id}")
-                ne += 1
+            if not has_mt_annot:
+                if mt_id not in mH:
+                    logger.info(f"[assignRegion] Annotation missing - methylation: {nlp} {mt_id}")
+                else:
+                    logger.info(f"[assignRegion] Annotation missing - methylation [chrom]: {nlp} {mt_id}")
                 nemt += 1
+            if not has_gt_annot:
+                if gt_id not in gH:
+                    logger.info(f"[assignRegion] Annotation missing - gene expression: {nlp} {gt_id}")
+                else:
+                    logger.info(f"[assignRegion] Annotation missing - gene expression [chrom]: {nlp} {gt_id}")
+                negx += 1
+
+            if not has_mt_annot or not has_gt_annot:
+                # Missing annotation -> just append the row with nulls for the new columns
+                cpgA = dict(base_row)
+                cpgA.update({
+                    'mt_chrom': None,
+                    'mt_chromStart': None,
+                    'mt_strand': None,
+                    'gt_chrom': None,
+                    'gt_chromStart': None,
+                    'gt_strand': None,
+                    'region': None
+                })
+                my_eqtmA.append(cpgA)
+                ne += 1
                 continue
 
-            if gt_id not in gH:
-                logger.info(f"[assignRegion] Annotation missing - gene expression: {nlp} {gt_id}")
-                ne += 1
-                negx += 1
-                continue
+            # We have annotations
+            mt_chrom = mH[mt_id]["chrom"]
+            mt_chromStart = mH[mt_id]["chromStart"]
+            mt_strand = mH[mt_id]["strand"]
+
+            gt_chrom = gH[gt_id]["chrom"]
+            gt_chromStart = gH[gt_id]["chromStart"]
+            gt_strand = gH[gt_id]["strand"]
+
+            annot_base = {
+                'mt_chrom': mt_chrom,
+                'mt_chromStart': mt_chromStart,
+                'mt_strand': mt_strand,
+                'gt_chrom': gt_chrom,
+                'gt_chromStart': gt_chromStart,
+                'gt_strand': gt_strand
+            }
 
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[assignRegion] {nlp} mt: {mt_id} {mH[mt_id]['chrom']} gx: {gt_id} {gH[gt_id]['chrom']}")
+                logger.debug(f"[assignRegion] {nlp} mt: {mt_id} {mt_chrom} gx: {gt_id} {gt_chrom}")
 
-            if "chrom" not in mH[mt_id]:
-                logger.info(f"[assignRegion] Annotation missing - methylation [chrom]: {nlp} {mt_id}")
-                ne += 1
-                nemt += 1
-                continue
-
-            if "chrom" not in gH[gt_id]:
-                logger.info(f"[assignRegion] Annotation missing - gene expression [chrom]: {nlp} {gt_id}")
-                ne += 1
-                negx += 1
-                continue
-
-            if mH[mt_id]["chrom"] != gH[gt_id]["chrom"]:
-                cpgA = {
-                    'mt_id': mt_id,
-                    'mt_chrom': mH[mt_id]["chrom"],
-                    'mt_chromStart': mH[mt_id]["chromStart"],
-                    'mt_strand': mH[mt_id]["strand"],
-                    'gt_id': gt_id,
-                    'gt_chrom': gH[gt_id]["chrom"],
-                    'gt_chromStart': gH[gt_id]["chromStart"],
-                    'gt_strand': gH[gt_id]["strand"],
-                    'region': "TRANS"
-                }
+            if mt_chrom != gt_chrom:
+                cpgA = dict(base_row)
+                cpgA.update(annot_base)
+                cpgA['region'] = "TRANS"
                 my_typeCountH["trans"] += 1
 
                 if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
@@ -260,186 +275,146 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
 
                 continue   ## Move on to the next. CpGs cannot be TRANS && another region
 
+            # Keep track of regions assigned for this pair
+            assigned_regions = 0
+
             ## check for DISTAL - positive strand
-            if gH[gt_id]["strand"] == "+":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "+":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 regionRef_pos = geneStart_pos - DISTAL_OFFSET
                 if cpg_pos < regionRef_pos:
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "DISTAL"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "DISTAL"
                     my_typeCountH["distal"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
 
             ## check for CIS - positive strand
-            if gH[gt_id]["strand"] == "+":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "+":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 regionRef_pos = geneStart_pos - CIS_OFFSET
                 regionUpStreamRange = geneStart_pos - CIS_UPSTREAM_DISTANCE
                 if (regionUpStreamRange < cpg_pos) and (cpg_pos < geneStart_pos):
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "CIS"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "CIS"
                     my_typeCountH["cis"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
 
             ## check for PROMOTER - positive strand
-            if gH[gt_id]["strand"] == "+":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "+":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 regionRef_pos = geneStart_pos - PROMOTER_OFFSET
                 regionUpStreamRange = regionRef_pos - PROMOTER_UPSTREAM_DISTANCE
                 regionDnStreamRange = regionRef_pos + PROMOTER_DOWNSTREAM_DISTANCE
                 if (regionUpStreamRange < cpg_pos) and (cpg_pos < regionDnStreamRange):
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "PROMOTER"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "PROMOTER"
                     my_typeCountH["promoter"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
 
             ## check for GENE BODY - positive strand
-            if gH[gt_id]["strand"] == "+":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "+":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 geneEnd_pos = gH[gt_id]["chromEnd"]
                 if (geneStart_pos < cpg_pos) and (cpg_pos < geneEnd_pos):
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "GENEBODY"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "GENEBODY"
                     my_typeCountH["genebody"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
 
             ## check for DISTAL - negative strand
-            if gH[gt_id]["strand"] == "-":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "-":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 regionRef_pos = geneStart_pos + DISTAL_OFFSET
                 if regionRef_pos < cpg_pos:
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "DISTAL"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "DISTAL"
                     my_typeCountH["distal"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
 
             ## check for CIS - negative strand
-            if gH[gt_id]["strand"] == "-":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "-":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 regionRef_pos = geneStart_pos
                 regionUpStreamRange = regionRef_pos + CIS_OFFSET
                 if (geneStart_pos < cpg_pos ) and (cpg_pos < regionUpStreamRange):
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "CIS"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "CIS"
                     my_typeCountH["cis"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
 
             ## check for PROMOTER - negative strand
-            if gH[gt_id]["strand"] == "-":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "-":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 regionRef_pos = geneStart_pos + PROMOTER_OFFSET
                 regionDnStreamRange = regionRef_pos - PROMOTER_DOWNSTREAM_DISTANCE
                 regionUpStreamRange = regionRef_pos + PROMOTER_UPSTREAM_DISTANCE
                 if (regionDnStreamRange < cpg_pos) and (cpg_pos < regionUpStreamRange):
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "PROMOTER"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "PROMOTER"
                     my_typeCountH["promoter"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
 
             ## check for GENE BODY - negative strand
-            if gH[gt_id]["strand"] == "-":
-                cpg_pos = mH[mt_id]["chromStart"]
-                geneStart_pos = gH[gt_id]["chromStart"]
+            if gt_strand == "-":
+                cpg_pos = mt_chromStart
+                geneStart_pos = gt_chromStart
                 geneEnd_pos = gH[gt_id]["chromEnd"]
                 if (geneEnd_pos < cpg_pos) and (cpg_pos < geneStart_pos):
-                    cpgA = {
-                        'mt_id': mt_id,
-                        'mt_chrom': mH[mt_id]["chrom"],
-                        'mt_chromStart': mH[mt_id]["chromStart"],
-                        'mt_strand': mH[mt_id]["strand"],
-                        'gt_id': gt_id,
-                        'gt_chrom': gH[gt_id]["chrom"],
-                        'gt_chromStart': gH[gt_id]["chromStart"],
-                        'gt_strand': gH[gt_id]["strand"],
-                        'region': "GENEBODY"
-                    }
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = "GENEBODY"
                     my_typeCountH["genebody"] += 1
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
+                    assigned_regions += 1
+
+            # If no region matched, still append the row with region=None but with existing annotation base
+            if assigned_regions == 0:
+                cpgA = dict(base_row)
+                cpgA.update(annot_base)
+                cpgA['region'] = None
+                my_eqtmA.append(cpgA)
 
         if my_eqtmA:
             assigned_total += len(my_eqtmA)
             out_df = pd.DataFrame(my_eqtmA)
-            # Make sure types are correct for Parquet
-            out_df['mt_chromStart'] = out_df['mt_chromStart'].astype(np.int64)
-            out_df['gt_chromStart'] = out_df['gt_chromStart'].astype(np.int64)
+
+            # Make sure types are correct for Parquet, handling nulls with Pandas nullable integer extension type if needed
+            # For pa.int64() in pyarrow, pd.Series with NaNs should be either float64 (old way) or Int64 (new pandas way).
+            # PyArrow handles Int64 properly when casting.
+            if 'mt_chromStart' in out_df.columns:
+                out_df['mt_chromStart'] = pd.to_numeric(out_df['mt_chromStart'], errors='coerce').astype('Int64')
+            if 'gt_chromStart' in out_df.columns:
+                out_df['gt_chromStart'] = pd.to_numeric(out_df['gt_chromStart'], errors='coerce').astype('Int64')
+
             table = pa.Table.from_pandas(out_df, schema=schema, preserve_index=False)
 
             if writer is None:
