@@ -316,11 +316,9 @@ def main():
     parser.add_argument("--all", action="store_true", help="Generate all plots (default if none specified)")
 
     # Tecpg paths for scatter plots
-    parser.add_argument("-r", "--root-path", default=".", help="Root path containing data directory")
-    parser.add_argument("-i", "--input-dir", default="data", help="Input directory inside root path")
-    parser.add_argument("-m", "--meth-file", default="M.csv", help="Methylation matrix file name")
-    parser.add_argument("-g", "--gene-file", default="G.csv", help="Gene expression matrix file name")
-    parser.add_argument("-c", "--covar-file", default="C.csv", help="Covariate matrix file name")
+    parser.add_argument("-m", "--meth-file", required=True, help="Full path to the methylation matrix file (e.g., M.csv)")
+    parser.add_argument("-g", "--gene-file", required=True, help="Full path to the gene expression matrix file (e.g., G.csv)")
+    parser.add_argument("-c", "--covar-file", required=True, help="Full path to the covariate matrix file (e.g., C.csv)")
 
     args = parser.parse_args()
 
@@ -350,13 +348,13 @@ def main():
         sort_col = 'fdr' if 'fdr' in plotter.df.columns else plotter.p_col
         logger.info(f"Sorting by {sort_col} to find top hits.")
 
-        meth_path = os.path.join(args.root_path, args.input_dir, args.meth_file)
-        gene_path = os.path.join(args.root_path, args.input_dir, args.gene_file)
-        covar_path = os.path.join(args.root_path, args.input_dir, args.covar_file)
+        meth_path = args.meth_file
+        gene_path = args.gene_file
+        covar_path = args.covar_file
 
         if not (os.path.exists(meth_path) and os.path.exists(gene_path) and os.path.exists(covar_path)):
             logger.error(f"Missing one or more data files for scatter plots: {meth_path}, {gene_path}, {covar_path}")
-            logger.error("Please provide the correct paths using -r, -i, -m, -g, -c")
+            logger.error("Please provide the correct paths using -m, -g, -c")
             return
 
         # Load matrices once to save memory and I/O time
