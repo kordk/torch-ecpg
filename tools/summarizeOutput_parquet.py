@@ -19,34 +19,63 @@ def process_chunk(chunk, sample_prob, df):
         - count of rows
         - histogram counts (100 bins for p-values 0-1)
         - extracted p-values
+        - region array (encoded as ints) or None
+        - region string mapping or None
+        - top hits dataframe for regions or None
     """
     # Unique counts
     unique_gt = set(chunk['gt_id'].dropna().unique()) if 'gt_id' in chunk.columns else set()
     unique_mt = set(chunk['mt_id'].dropna().unique()) if 'mt_id' in chunk.columns else set()
     row_count = len(chunk)
 
-    # Use high-precision p-values if available
-    if 'precise_mt_p' in chunk.columns:
-        p_values = chunk['precise_mt_p'].dropna().astype(np.float64).values
-    else:
-        # Calculate high-precision p-values from t-statistics as fallback
-        t_col = None
-        for col in chunk.columns:
-            if col.endswith('_t') or col == 't':
-                t_col = col
-                break
+    # Calculate high-precision p-values and identify t_col
+    t_col = None
+    for col in chunk.columns:
+        if col.endswith('_t') or col == 't':
+            t_col = col
+            break
 
+    # Drop NaNs based on the primary column being used to compute p-values
+    # This prevents length mismatch errors and mapping desyncs when building region arrays
+    if 'precise_mt_p' in chunk.columns:
+        chunk = chunk.dropna(subset=['precise_mt_p'])
+        p_values = chunk['precise_mt_p'].astype(np.float64).values
+    else:
         if not t_col:
             raise ValueError(f"Error: precise_mt_p and t-statistic column missing in chunk. Available columns: {list(chunk.columns)}")
-
-        # Log once per worker ideally, but for now we just compute it
-        t_stats = chunk[t_col].dropna().astype(np.float64).values
+        chunk = chunk.dropna(subset=[t_col])
+        t_stats = chunk[t_col].astype(np.float64).values
         p_values = stats.t.sf(np.abs(t_stats), np.float64(df)) * 2.0
 
     # Ensure values are within [0, 1] for histogram logic
     hist_counts, _ = np.histogram(p_values, bins=100, range=(0, 1))
 
-    return unique_gt, unique_mt, row_count, hist_counts, p_values
+    # Region processing
+    region_codes = None
+    region_uniques = None
+    top_hits_df = None
+
+    if 'region' in chunk.columns:
+        # Get region factorized arrays for minimal memory footprint of full region array
+        # We replace NaNs/None with a generic 'UNKNOWN' before factorizing
+        region_col = chunk['region'].fillna('UNKNOWN').astype(str)
+        codes, uniques = pd.factorize(region_col)
+        region_codes = codes
+        region_uniques = uniques.tolist()
+
+        # Build top 10 hits DataFrame for this chunk
+        top_cols = {}
+        if 'mt_id' in chunk.columns: top_cols['mt_id'] = chunk['mt_id'].values
+        if 'gt_id' in chunk.columns: top_cols['gt_id'] = chunk['gt_id'].values
+        top_cols['region'] = region_col.values
+        if t_col and t_col in chunk.columns: top_cols['mt_t'] = chunk[t_col].values
+        top_cols['p-value'] = p_values
+
+        df_region = pd.DataFrame(top_cols)
+        # We want the 10 lowest p-values per region
+        top_hits_df = df_region.sort_values('p-value').groupby('region').head(10)
+
+    return unique_gt, unique_mt, row_count, hist_counts, p_values, region_codes, region_uniques, top_hits_df
 
 
 def main():
@@ -117,6 +146,12 @@ Outputs and Metrics Calculated:
         print(f"Warning: 'precise_mt_p' column missing in {main_file}. Falling back to t-statistic calculation.")
         print(f"Available columns: {schema_cols}")
 
+    has_region = 'region' in schema_cols
+    if has_region:
+        print("Log: 'region' column detected in dataset. Regional analysis will be performed.")
+    else:
+        print("Log: 'region' column not found in dataset. Regional analysis will be skipped.")
+
     target_sample = 1_000_000
     if total_rows > 0:
         sample_prob = min(1.0, (target_sample * 1.2) / total_rows)
@@ -154,17 +189,44 @@ Outputs and Metrics Calculated:
     final_hist = np.zeros(100, dtype=int)
     all_p_values = []
 
+    all_top_hits = []
+    # Using lists to accumulate codes before stacking
+    region_code_arrays = []
+    global_uniques = []
+    global_uniques_map = {} # map string -> global int code
+
     for res in results:
         try:
-            gt_set, mt_set, count, hist, p_vals = res.get()
+            gt_set, mt_set, count, hist, p_vals, codes, uniques, top_hits_df = res.get()
             final_gt.update(gt_set)
             final_mt.update(mt_set)
             total_pairs += count
             final_hist += hist
             if len(p_vals) > 0:
                 all_p_values.append(p_vals)
+
+            if codes is not None and uniques is not None:
+                all_top_hits.append(top_hits_df)
+
+                # Map local codes to global codes
+                local_to_global = np.zeros(len(uniques), dtype=int)
+                for i, region_str in enumerate(uniques):
+                    if region_str not in global_uniques_map:
+                        global_uniques_map[region_str] = len(global_uniques)
+                        global_uniques.append(region_str)
+                    local_to_global[i] = global_uniques_map[region_str]
+
+                # Translate chunk's local codes to global using the mapping array
+                # Use np.take or direct indexing (codes can contain -1 for NaNs, but we filled them)
+                global_codes = local_to_global[codes]
+                region_code_arrays.append(global_codes)
+
         except Exception as e:
             print(f"Error retrieving result from worker: {e}")
+
+    combined_region_codes = None
+    if has_region and region_code_arrays:
+        combined_region_codes = np.concatenate(region_code_arrays)
 
     # Summary Stats
     print("-" * 30)
@@ -230,6 +292,9 @@ Outputs and Metrics Calculated:
     # Process FDR threshold discovery
     print("\nCalculating FDR threshold (Benjamini-Hochberg)...")
     p_max_fdr = -1.0
+    p_max_fdr_01 = -1.0
+    sig_count = 0
+    sig_count_01 = 0
     fdr_map = None  # To hold p-value -> fdr mapping if needed
 
     if all_p_values:
@@ -244,7 +309,9 @@ Outputs and Metrics Calculated:
         total_tests = args.total_tests
         ranks = np.arange(1, total_p_count + 1)
         bh_limits = (ranks / total_tests) * 0.05
+        bh_limits_01 = (ranks / total_tests) * 0.01
 
+        # Calculate FDR < 0.05
         valid_mask = sorted_p_values <= bh_limits
         valid_indices = np.nonzero(valid_mask)[0]
 
@@ -253,10 +320,25 @@ Outputs and Metrics Calculated:
             p_max_fdr = sorted_p_values[max_idx]
             sig_count = max_idx + 1 # 0-indexed
             print(f"FDR < 0.05 Threshold found!")
-            print(f"Maximum P-value satisfying FDR (p_max_fdr): {p_max_fdr:.3e}")
+            print(f"Maximum P-value satisfying FDR < 0.05 (p_max_fdr): {p_max_fdr:.3e}")
             print(f"Number of pairs remaining significant at FDR < 0.05: {sig_count:,}")
         else:
             print("No pairs remain significant at FDR < 0.05.")
+
+        # Calculate FDR < 0.01
+        valid_mask_01 = sorted_p_values <= bh_limits_01
+        valid_indices_01 = np.nonzero(valid_mask_01)[0]
+
+        if len(valid_indices_01) > 0:
+            max_idx_01 = valid_indices_01[-1]
+            p_max_fdr_01 = sorted_p_values[max_idx_01]
+            sig_count_01 = max_idx_01 + 1 # 0-indexed
+            print(f"\nFDR < 0.01 Threshold found!")
+            print(f"Maximum P-value satisfying FDR < 0.01: {p_max_fdr_01:.3e}")
+            print(f"Number of pairs remaining significant at FDR < 0.01: {sig_count_01:,}")
+        else:
+            print("\nNo pairs remain significant at FDR < 0.01.")
+
 
         if args.output_fdr_file and args.calculate_fdr:
             print("\nEstimating FDR values...")
@@ -281,11 +363,67 @@ Outputs and Metrics Calculated:
             temp_df = temp_df.groupby('p_val', as_index=False).max()
             fdr_map = pd.Series(temp_df['q_val'].values, index=temp_df['p_val']).to_dict()
 
+        # Generate Regional Summaries
+        if has_region and combined_region_codes is not None:
+            print("\n" + "=" * 40)
+            print("Regional Summary of Significant Hits")
+            print("=" * 40)
+
+            # Map the sorted indices to the combined region codes
+            sorted_region_codes = combined_region_codes[sorted_indices]
+
+            if sig_count > 0:
+                print(f"Significant Hits per Region (FDR < 0.05):")
+                # Get region codes for significant hits
+                sig_codes_05 = sorted_region_codes[:sig_count]
+                unique_codes_05, counts_05 = np.unique(sig_codes_05, return_counts=True)
+                # Map codes back to strings and print
+                for code, count in zip(unique_codes_05, counts_05):
+                    region_str = global_uniques[code]
+                    print(f"  {region_str:<12} {count:>10,}")
+            else:
+                print("No significant hits per region at FDR < 0.05.")
+
+            print("-" * 30)
+
+            if sig_count_01 > 0:
+                print(f"Significant Hits per Region (FDR < 0.01):")
+                sig_codes_01 = sorted_region_codes[:sig_count_01]
+                unique_codes_01, counts_01 = np.unique(sig_codes_01, return_counts=True)
+                for code, count in zip(unique_codes_01, counts_01):
+                    region_str = global_uniques[code]
+                    print(f"  {region_str:<12} {count:>10,}")
+            else:
+                print("No significant hits per region at FDR < 0.01.")
+
+            print("=" * 40 + "\n")
+
         del combined_p_values
         del sorted_indices
         del sorted_p_values
+        if has_region:
+            del combined_region_codes
     else:
         print("No p-values found in the main file for FDR adjustment.")
+
+    # Output Top 10 per region
+    if has_region and all_top_hits:
+        print("\nTop 10 Hits per Region (by Lowest P-value)")
+        print("-" * 50)
+
+        try:
+            # Combine all chunk top 10s
+            combined_top_df = pd.concat(all_top_hits, ignore_index=True)
+
+            # Group by region, sort by p-value, get top 10 globally per region
+            final_top_hits = combined_top_df.sort_values('p-value').groupby('region').head(10)
+
+            # Format and print the table
+            for region, group in final_top_hits.groupby('region'):
+                print(f"\nRegion: {region}")
+                print(group.to_string(index=False))
+        except Exception as e:
+            print(f"Error generating top 10 hits per region: {e}")
 
     # Write FDR Output
     if args.output_fdr_file:
