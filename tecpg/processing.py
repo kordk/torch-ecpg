@@ -55,6 +55,7 @@ def tecpg_mlr_lstsq(
     compute_ig: bool = False,
     compute_ig_deep: bool = False,
     ig_baseline: str = 'mean',
+    ig_covariates_filter: Optional[list] | str = None,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -221,10 +222,21 @@ def tecpg_mlr_lstsq(
         ]
 
     # Add _ig columns if IG is computed
+    ig_col_indices = []
     if compute_ig or compute_ig_deep:
-        # Note: Intercept gets excluded from IG outputs
-        categories_for_ig = ['mt'] if methylation_only else ['mt'] + C.columns.to_list()
-        ig_columns = [col + '_ig' for col in categories_for_ig]
+        # Intercept gets excluded from IG outputs (index 0). Meth is index 1. Covariates start at index 2.
+        ig_categories = ['mt']
+        ig_col_indices = [0] # Relative index in the K-1 slice (without intercept)
+
+        if ig_covariates_filter == 'all':
+            ig_categories.extend(C.columns.to_list())
+            ig_col_indices.extend(range(1, len(C.columns) + 1))
+        elif isinstance(ig_covariates_filter, list):
+            for covar in ig_covariates_filter:
+                ig_categories.append(covar)
+                ig_col_indices.append(C.columns.get_loc(covar) + 1)
+
+        ig_columns = [col + '_ig' for col in ig_categories]
         columns.extend(ig_columns)
 
     # Create covariate tensor
@@ -485,6 +497,9 @@ def tecpg_mlr_lstsq(
                     # Skip the intercept index 0 of B
                     IG_analytical = X_diff_mean.unsqueeze(1) * B[:, :, 1:].abs()  # Shape: (M, G, K-1)
 
+                    # Keep only the requested covariates
+                    IG_analytical = IG_analytical[:, :, ig_col_indices]
+
                 # We need to flatten to (M*G, K) to apply filters efficiently?
                 # Or apply masks on the (M, G) grid.
 
@@ -545,7 +560,7 @@ def tecpg_mlr_lstsq(
                 P = P.permute(1, 0, 2).reshape(-1, num_coeffs)
 
                 if compute_ig:
-                    IG_analytical = IG_analytical.permute(1, 0, 2).reshape(-1, num_coeffs - 1)
+                    IG_analytical = IG_analytical.permute(1, 0, 2).reshape(-1, len(ig_col_indices))
 
                 if region != 'all':
                     # mask is (M, G).
@@ -573,8 +588,6 @@ def tecpg_mlr_lstsq(
                     S = S[:, 1:2]
                     T = T[:, 1:2]
                     P = P[:, 1:2]
-                    if compute_ig:
-                        IG_analytical = IG_analytical[:, 0:1] # Meth is index 0 of IG
 
                 if p_only:
                     current_results = P
@@ -753,8 +766,9 @@ def tecpg_mlr_lstsq(
 
                             # Remove the intercept (index 0)
                             hit_saliency = hit_saliency[1:]
-                            if methylation_only:
-                                hit_saliency = hit_saliency[0:1] # only the meth column
+
+                            # Keep only the requested covariates
+                            hit_saliency = hit_saliency[ig_col_indices]
 
                             deep_ig_scores.append(hit_saliency)
 
@@ -762,7 +776,7 @@ def tecpg_mlr_lstsq(
                         chunk_results = torch.cat((chunk_results, deep_ig_tensor), dim=1)
                     else:
                         # No significant hits, but we need to match the columns
-                        num_ig_cols = 1 if methylation_only else C.shape[1]  # intercept removed
+                        num_ig_cols = len(ig_col_indices)
                         empty_ig = torch.empty((0, num_ig_cols), device=device, dtype=dtype)
                         chunk_results = torch.cat((chunk_results, empty_ig), dim=1)
 
