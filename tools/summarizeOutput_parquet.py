@@ -22,6 +22,7 @@ def process_chunk(chunk, sample_prob, df):
         - region array (encoded as ints) or None
         - region string mapping or None
         - top hits dataframe for regions or None
+        - top 50 hits dataframe for ig analysis or None
     """
     # Unique counts
     unique_gt = set(chunk['gt_id'].dropna().unique()) if 'gt_id' in chunk.columns else set()
@@ -75,7 +76,22 @@ def process_chunk(chunk, sample_prob, df):
         # We want the 10 lowest p-values per region
         top_hits_df = df_region.sort_values('p-value').groupby('region').head(10)
 
-    return unique_gt, unique_mt, row_count, hist_counts, p_values, region_codes, region_uniques, top_hits_df
+    # Integrated Gradients processing
+    top_ig_df = None
+    ig_cols = [col for col in chunk.columns if col.endswith('_ig')]
+    if ig_cols:
+        ig_top_cols = {}
+        if 'mt_id' in chunk.columns: ig_top_cols['mt_id'] = chunk['mt_id'].values
+        if 'gt_id' in chunk.columns: ig_top_cols['gt_id'] = chunk['gt_id'].values
+        if t_col and t_col in chunk.columns: ig_top_cols['mt_t'] = chunk[t_col].values
+        ig_top_cols['p-value'] = p_values
+        for col in ig_cols:
+            ig_top_cols[col] = chunk[col].values
+
+        df_ig = pd.DataFrame(ig_top_cols)
+        top_ig_df = df_ig.sort_values('p-value').head(50)
+
+    return unique_gt, unique_mt, row_count, hist_counts, p_values, region_codes, region_uniques, top_hits_df, top_ig_df
 
 
 def main():
@@ -190,6 +206,7 @@ Outputs and Metrics Calculated:
     all_p_values = []
 
     all_top_hits = []
+    all_top_ig = []
     # Using lists to accumulate codes before stacking
     region_code_arrays = []
     global_uniques = []
@@ -197,7 +214,7 @@ Outputs and Metrics Calculated:
 
     for res in results:
         try:
-            gt_set, mt_set, count, hist, p_vals, codes, uniques, top_hits_df = res.get()
+            gt_set, mt_set, count, hist, p_vals, codes, uniques, top_hits_df, top_ig_df = res.get()
             final_gt.update(gt_set)
             final_mt.update(mt_set)
             total_pairs += count
@@ -220,6 +237,9 @@ Outputs and Metrics Calculated:
                 # Use np.take or direct indexing (codes can contain -1 for NaNs, but we filled them)
                 global_codes = local_to_global[codes]
                 region_code_arrays.append(global_codes)
+
+            if top_ig_df is not None:
+                all_top_ig.append(top_ig_df)
 
         except Exception as e:
             print(f"Error retrieving result from worker: {e}")
@@ -485,6 +505,72 @@ Outputs and Metrics Calculated:
         print(f"Histogram saved to {output_image}")
     except Exception as e:
         print(f"Error plotting histogram: {e}")
+
+    # Stacked Proportional Saliency Chart
+    if all_top_ig:
+        print("\nGenerating Stacked Proportional Saliency Chart...")
+        try:
+            combined_ig_df = pd.concat(all_top_ig, ignore_index=True)
+            # Get the true global top 50 (lowest p-value at index 0)
+            top_50_ig = combined_ig_df.sort_values('p-value').head(50).copy()
+
+            # Create labels combining CpG and Gene IDs
+            top_50_ig['locus_pair'] = top_50_ig['mt_id'] + " - " + top_50_ig['gt_id']
+
+            # Extract the _ig columns
+            ig_columns = [col for col in top_50_ig.columns if col.endswith('_ig')]
+
+            # Calculate proportions
+            # Sum across all _ig columns for each row
+            top_50_ig['ig_sum'] = top_50_ig[ig_columns].sum(axis=1)
+
+            # Divide each _ig column by the sum to get the proportion
+            for col in ig_columns:
+                top_50_ig[f"{col}_prop"] = top_50_ig[col] / top_50_ig['ig_sum']
+
+            prop_columns = [f"{col}_prop" for col in ig_columns]
+
+            # Prepare data for plotting
+            plot_df = top_50_ig.set_index('locus_pair')[prop_columns]
+
+            # Reorder rows so the #1 hit (lowest p-value) is at the top
+            plot_df = plot_df.iloc[::-1]
+
+            # Setup colors: distinct for mt_ig, rest use pastels
+            import matplotlib as mpl
+            colors = []
+            cmap = mpl.colormaps['Pastel1']
+            covar_idx = 0
+            for col in prop_columns:
+                if col == 'mt_ig_prop':
+                    colors.append('darkblue') # Prominent color for methylation
+                else:
+                    colors.append(cmap(covar_idx % 9))
+                    covar_idx += 1
+
+            # Create the plot
+            # Need to get a Figure and Axes to plot properly with pandas
+            fig, ax = plt.subplots(figsize=(12, 10))
+            plot_df.plot.barh(stacked=True, color=colors, width=0.8, ax=ax)
+
+            plt.title("Stacked Proportional Saliency Profile (Top 50 Hits)")
+            plt.xlabel("Proportion of Total Saliency")
+            plt.ylabel("Locus Pair (CpG - Gene)")
+
+            # Clean up legend labels
+            handles, labels = ax.get_legend_handles_labels()
+            cleaned_labels = [label.replace('_ig_prop', '') for label in labels]
+            ax.legend(handles, cleaned_labels, title="Features", loc='center left', bbox_to_anchor=(1.0, 0.5))
+
+            plt.tight_layout()
+
+            output_image = "saliency_profile_top50.png"
+            plt.savefig(output_image)
+            plt.close()
+            print(f"Saliency profile saved to {output_image}")
+
+        except Exception as e:
+            print(f"Error plotting saliency profile: {e}")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
