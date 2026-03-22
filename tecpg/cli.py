@@ -356,6 +356,18 @@ def corr(
     default='mean',
     help='Baseline for IG attribution (default: mean).',
 )
+@click.option(
+    '--ig-covariates',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help='Output IG scores for all covariates.',
+)
+@click.option(
+    '--ig-covariates-list',
+    type=click.Path(exists=True, dir_okay=False),
+    help='Path to a text file containing covariates to output IG scores for (one per line).',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -380,6 +392,8 @@ def mlr(
     compute_ig: bool,
     compute_ig_deep: bool,
     ig_baseline: str,
+    ig_covariates: bool,
+    ig_covariates_list: Optional[str],
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -433,6 +447,20 @@ def mlr(
         logger.error(error)
         raise click.UsageError(error)
 
+    ig_covariates_filter = None
+    if ig_covariates_list:
+        with open(ig_covariates_list, 'r') as f:
+            target_covariates = [line.strip() for line in f if line.strip()]
+
+        missing_covariates = [covar for covar in target_covariates if covar not in C.columns]
+        if missing_covariates:
+            error = f"The following covariates from --ig-covariates-list are missing in the design matrix: {', '.join(missing_covariates)}"
+            logger.error(error)
+            raise click.UsageError(error)
+        ig_covariates_filter = target_covariates
+    elif ig_covariates:
+        ig_covariates_filter = 'all'
+
     methylation_only = not full_output
 
     kwargs = {
@@ -461,6 +489,7 @@ def mlr(
         'compute_ig': compute_ig,
         'compute_ig_deep': compute_ig_deep,
         'ig_baseline': ig_baseline,
+        'ig_covariates_filter': ig_covariates_filter,
     }
 
     logger.info(
@@ -491,6 +520,7 @@ def mlr(
         kwargs.pop('compute_ig', None)
         kwargs.pop('compute_ig_deep', None)
         kwargs.pop('ig_baseline', None)
+        kwargs.pop('ig_covariates_filter', None)
         output = regression_full(**kwargs, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output_file']], **logger)
