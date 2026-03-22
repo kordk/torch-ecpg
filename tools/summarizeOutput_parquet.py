@@ -31,10 +31,10 @@ def process_chunk(chunk, sample_prob, df):
 
     # Calculate high-precision p-values and identify t_col
     t_col = None
-    for col in chunk.columns:
-        if col.endswith('_t') or col == 't':
-            t_col = col
-            break
+    if 'mt_t' in chunk.columns:
+        t_col = 'mt_t'
+    elif 't' in chunk.columns:
+        t_col = 't'
 
     # Drop NaNs based on the primary column being used to compute p-values
     # This prevents length mismatch errors and mapping desyncs when building region arrays
@@ -261,10 +261,10 @@ Outputs and Metrics Calculated:
     try:
         res_df = pd.read_csv(reservoir_file)
         t_col = None
-        for col in res_df.columns:
-            if col.endswith('_t') or col == 't':
-                t_col = col
-                break
+        if 'mt_t' in res_df.columns:
+            t_col = 'mt_t'
+        elif 't' in res_df.columns:
+            t_col = 't'
 
         if t_col:
             t_stats = res_df[t_col].dropna().astype(np.float64).values
@@ -458,10 +458,10 @@ Outputs and Metrics Calculated:
                     chunk_p_vals = df_chunk['precise_mt_p'].values
                 else:
                     t_col = None
-                    for col in df_chunk.columns:
-                        if col.endswith('_t') or col == 't':
-                            t_col = col
-                            break
+                    if 'mt_t' in df_chunk.columns:
+                        t_col = 'mt_t'
+                    elif 't' in df_chunk.columns:
+                        t_col = 't'
                     t_stats = df_chunk[t_col].values
                     chunk_p_vals = stats.t.sf(np.abs(t_stats), np.float64(args.df)) * 2.0
 
