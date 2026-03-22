@@ -12,3 +12,4 @@ statsmodels
 nvidia-ml-py
 pyarrow
 captum
+pycircos
