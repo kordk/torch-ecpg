@@ -87,6 +87,8 @@ def load_and_validate_data(filepath):
     cols_to_load = required_cols.copy()
     if 'mt_id' in schema_cols:
         cols_to_load.append('mt_id')
+    if 'gt_id' in schema_cols:
+        cols_to_load.append('gt_id')
 
     # Load into pandas dataframe
     df = pd.read_parquet(filepath, columns=cols_to_load)
@@ -100,8 +102,35 @@ def load_and_validate_data(filepath):
     df['gt_chrom'] = df['gt_chrom'].apply(lambda x: f"chr{x}" if not x.startswith('chr') else x)
 
     # Strip decimals if present, then cast to int
-    df['mt_chromStart'] = df['mt_chromStart'].astype(float).astype(int)
-    df['gt_chromStart'] = df['gt_chromStart'].astype(float).astype(int)
+    df['mt_chromStart'] = pd.to_numeric(df['mt_chromStart'], errors='coerce')
+    df['gt_chromStart'] = pd.to_numeric(df['gt_chromStart'], errors='coerce')
+
+    missing_mask = df['mt_chromStart'].isna() | df['gt_chromStart'].isna() | (df['mt_chrom'] == 'chrnan') | (df['mt_chrom'] == 'chrNone') | (df['gt_chrom'] == 'chrnan') | (df['gt_chrom'] == 'chrNone')
+
+    if missing_mask.any():
+        missing_df = df[missing_mask]
+        print(f"Warning: Found {missing_mask.sum()} rows with missing or invalid coordinates/chromosomes.")
+
+        has_mt_id = 'mt_id' in df.columns
+        has_gt_id = 'gt_id' in df.columns
+
+        for _, row in missing_df.iterrows():
+            mt_name = row['mt_id'] if has_mt_id else "UNKNOWN_CPG"
+            gt_name = row['gt_id'] if has_gt_id else "UNKNOWN_GENE"
+            print(f"Excluding pair: CpG={mt_name}, Gene={gt_name}")
+
+        unique_cpgs = missing_df['mt_id'].nunique() if has_mt_id else 0
+        unique_genes = missing_df['gt_id'].nunique() if has_gt_id else 0
+
+        print(f"Summary of excluded missing data:")
+        print(f"  Total pairs excluded: {len(missing_df)}")
+        print(f"  Unique CpGs excluded: {unique_cpgs}")
+        print(f"  Unique genes excluded: {unique_genes}")
+
+        df = df[~missing_mask].copy()
+
+    df['mt_chromStart'] = df['mt_chromStart'].astype(int)
+    df['gt_chromStart'] = df['gt_chromStart'].astype(int)
 
     return df
 
