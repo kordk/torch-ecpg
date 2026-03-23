@@ -663,7 +663,19 @@ Outputs and Metrics Calculated:
 
         print(f"Loading background universe BED: {args.background_bed}...")
         try:
-            bg_df = pd.read_csv(args.background_bed, sep='\t', header=None, usecols=[0, 1, 2], names=['Chromosome', 'Start', 'End'])
+            bg_df = pd.read_csv(args.background_bed, sep='\t', header=None, usecols=[0, 1, 2], names=['Chromosome', 'Start', 'End'], dtype=str)
+
+            # Check for header in the first row
+            if not bg_df.empty:
+                first_start = bg_df['Start'].iloc[0]
+                if not str(first_start).isdigit():
+                    print(f"Detected header in background BED file, skipping first row...")
+                    bg_df = bg_df.iloc[1:].copy()
+
+            # Cast coordinates to int
+            bg_df['Start'] = bg_df['Start'].astype(int)
+            bg_df['End'] = bg_df['End'].astype(int)
+
             # Ensure 'chr' prefix
             if not bg_df['Chromosome'].astype(str).str.startswith('chr').all():
                 bg_df['Chromosome'] = 'chr' + bg_df['Chromosome'].astype(str)
