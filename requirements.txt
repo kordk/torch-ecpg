@@ -15,3 +15,6 @@ captum
 pycircos
 gseapy
 mygene
+pyranges
+seaborn
+statsmodels
