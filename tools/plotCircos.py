@@ -59,6 +59,7 @@ import pyarrow.parquet as pq
 import matplotlib.pyplot as plt
 import matplotlib.path as mpath
 import matplotlib.patches as mpatches
+import matplotlib.lines as mlines
 import pycircos
 
 def load_and_validate_data(filepath):
@@ -165,7 +166,7 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
         sys.exit(1)
 
     # Standard chromosomes to include
-    standard_chroms = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+    standard_chroms = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY", "chrM"]
     cytoband_df = cytoband_df[cytoband_df['chrom'].isin(standard_chroms)]
 
     # Prepare lengths for pycircos.Circos
@@ -197,7 +198,24 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
     circle.draw_scaffold(rad=0.98, width=0.04, fill=False, hatch='')
 
     circle.draw_cytobands(rad=0.98, width=0.04, cbfile=cytoband_file)
-    circle.draw_scaffold_ids(rad=1.05, fontsize=12)
+
+    # Custom draw scaffold IDs using polar coordinates explicitly
+    rad_label = 1.05
+    for chrom in standard_chroms:
+        if chrom not in chrom_lengths_dict:
+            continue
+        # Get midpoint of the chromosome in radians
+        mid_point_bp = chrom_lengths_dict[chrom] / 2
+        theta = circle.get_theta(chrom, mid_point_bp)
+
+        # Format the label (e.g., 'chr1' -> '1', 'chrX' -> 'X', 'chrM' -> 'mt')
+        label = chrom.replace('chr', '')
+        if label == 'M':
+            label = 'mt'
+
+        # Add text using polar axis
+        ax.text(theta, rad_label, label, ha='center', va='center', fontsize=12,
+                rotation=0) # You can adjust rotation if needed
 
     # 2. Add Density Tracks (Histograms)
     # 1MB bins
@@ -319,7 +337,23 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
         patch = mpatches.PathPatch(path, facecolor=link_color, edgecolor=link_color, lw=lw, alpha=alpha)
         circle.pax.add_patch(patch)
 
-    # 4. Save Plot
+    # 4. Add Legend
+    print("Adding legend...")
+    legend_elements = [
+        mpatches.Patch(facecolor='#888888', label='Total Significant eQTM Density'),
+        mpatches.Patch(facecolor='#E69F00', label='Top Saliency Density'),
+        mlines.Line2D([0], [0], color='#FF0000', lw=2, label='Positive Association (mt_est > 0)'),
+        mlines.Line2D([0], [0], color='#0000FF', lw=2, label='Negative Association (mt_est < 0)')
+    ]
+
+    # Place the legend in the bottom right corner, outside the main polar axes
+    legend = ax.legend(handles=legend_elements, loc='lower right', bbox_to_anchor=(1.25, 0),
+                       title="Line width proportional to AI Saliency (mt_ig)",
+                       fontsize=10, title_fontsize=11)
+    # Align the legend title to the left
+    legend._legend_box.align = "left"
+
+    # 5. Save Plot
     print(f"Saving plot to {out_path}...")
 
     ax.set_title(title, y=1.05, fontsize=16)
