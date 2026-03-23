@@ -10,6 +10,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import gseapy
 import mygene
+import pyranges as pr
+import seaborn as sns
+from statsmodels.stats.multitest import multipletests
+import urllib.request
+import zipfile
+import gzip
+import shutil
 
 def clean_and_translate_ensembl_ids(ensembl_ids):
     """
@@ -57,6 +64,82 @@ def clean_and_translate_ensembl_ids(ensembl_ids):
 
 
 # Worker function must be top-level for multiprocessing
+def download_encode_files(target_dir):
+    """
+    Downloads standard hg19 ENCODE BED files for ChromHMM, H3K27ac, and DNase I to the target directory.
+    """
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir)
+
+    urls = {
+        "ChromHMM": "http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeBroadHmm/wgEncodeBroadHmmGm12878HMM.bed.gz",
+        "H3K27ac": "http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeBroadHistone/wgEncodeBroadHistoneGm12878H3k27acStdPk.broadPeak.gz",
+        "DNase": "http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeAwgDnaseUniform/wgEncodeAwgDnaseUwcdGm12878UniPk.narrowPeak.gz"
+    }
+
+    files_present = True
+    for key, url in urls.items():
+        filename = url.split('/')[-1]
+        filepath = os.path.join(target_dir, filename)
+        unzipped_path = filepath[:-3] if filepath.endswith('.gz') else filepath
+
+        if not os.path.exists(unzipped_path):
+            files_present = False
+            print(f"Downloading {key} track from {url} ...")
+            try:
+                urllib.request.urlretrieve(url, filepath)
+                if filepath.endswith('.gz'):
+                    print(f"Extracting {filepath} ...")
+                    with gzip.open(filepath, 'rb') as f_in:
+                        with open(unzipped_path, 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    os.remove(filepath)
+            except Exception as e:
+                print(f"Error downloading or extracting {url}: {e}")
+                print(f"Please manually download it and place it in '{target_dir}'.")
+                sys.exit(1)
+
+    return files_present
+
+def run_fisher_exact(hits_pr, background_pr, encode_pr):
+    """
+    Runs Fisher's exact test for overlap of hits with ENCODE track vs background.
+    """
+    # Number of hits overlapping the state
+    A = len(hits_pr.overlap(encode_pr).df.drop_duplicates(subset=['Chromosome', 'Start', 'End'])) if not hits_pr.overlap(encode_pr).df.empty else 0
+    # Number of hits NOT overlapping the state
+    B = len(hits_pr) - A
+
+    # Overlap of the entire background (which includes hits, so we subtract hits overlap later)
+    bg_overlap = len(background_pr.overlap(encode_pr).df.drop_duplicates(subset=['Chromosome', 'Start', 'End'])) if not background_pr.overlap(encode_pr).df.empty else 0
+
+    # Non-significant background INSIDE annotation = (all bg inside) - (hits inside)
+    C = bg_overlap - A
+
+    # Non-significant background OUTSIDE annotation = (total bg - total hits) - C
+    total_non_hits = len(background_pr) - len(hits_pr)
+    D = total_non_hits - C
+
+    # Sanity checks
+    A = max(0, A)
+    B = max(0, B)
+    C = max(0, C)
+    D = max(0, D)
+
+    try:
+        oddsratio, pvalue = stats.fisher_exact([[A, B], [C, D]])
+    except ValueError as e:
+        # e.g. if one array is empty or 0 dimensions
+        oddsratio, pvalue = np.nan, np.nan
+
+    try:
+        fe = (A / (A + B)) / (C / (C + D))
+    except ZeroDivisionError:
+        fe = np.nan
+
+    return A, fe, pvalue
+
+
 def process_chunk(chunk, sample_prob, df):
     """
     Process a chunk of the dataframe (passed as pandas DataFrame).
@@ -180,7 +263,15 @@ Outputs and Metrics Calculated:
     fdr_group.add_argument("--calculate-fdr", action="store_true", help="Calculate and append an estimated FDR (`fdr_est`) column.")
     fdr_group.add_argument("--assign-fdr-passfail", action="store_true", help="Append a boolean `is_significant` column based on FDR threshold.")
 
+    # ENCODE Enrichment Options
+    parser.add_argument("--encode-enrichment", action="store_true", help="Run ENCODE enrichment analysis using Fisher's Exact Test.")
+    parser.add_argument("--encode-bed-dir", default="encode_beds", help="Directory containing ENCODE BED files (will auto-download if missing).")
+    parser.add_argument("--background-bed", help="Path to the background universe BED file (e.g. annoEPIC.hg19.bed6). Required if --encode-enrichment is set.")
+
     args = parser.parse_args()
+
+    if args.encode_enrichment and not args.background_bed:
+        parser.error("--encode-enrichment requires --background-bed to be specified.")
 
     main_file = args.main_file
     reservoir_file = args.reservoir_file
@@ -492,10 +583,14 @@ Outputs and Metrics Calculated:
         except Exception as e:
             print(f"Error generating top 10 hits per region: {e}")
 
-    # Collect Significant Genes for Enrichment (if requested and possible)
+    # Variables for ENCODE Enrichment Analysis
+    significant_cpgs = set()
+    significant_cpgs_by_region = {}
     significant_genes_by_region = {}
-    if has_region and p_max_fdr >= 0:
-        print(f"\nCollecting significant genes (FDR < 0.05) per region for enrichment...")
+
+    # Collect Significant Genes and CpGs for Enrichment (if requested and possible)
+    if p_max_fdr >= 0:
+        print(f"\nCollecting significant features (FDR < 0.05) for enrichment...")
         try:
             for i, batch in enumerate(parquet_file.iter_batches(batch_size=args.chunk_size)):
                 df_chunk = batch.to_pandas()
@@ -516,17 +611,229 @@ Outputs and Metrics Calculated:
                 sig_mask = chunk_p_vals <= p_max_fdr
                 if sig_mask.any():
                     sig_df = df_chunk[sig_mask]
-                    if 'region' in sig_df.columns and 'gt_id' in sig_df.columns:
+
+                    if has_region and 'region' in sig_df.columns:
                         for region, group in sig_df.groupby('region'):
-                            genes = set(group['gt_id'].dropna().unique())
-                            if region not in significant_genes_by_region:
-                                significant_genes_by_region[region] = set()
-                            significant_genes_by_region[region].update(genes)
+                            if 'gt_id' in sig_df.columns:
+                                genes = set(group['gt_id'].dropna().unique())
+                                if region not in significant_genes_by_region:
+                                    significant_genes_by_region[region] = set()
+                                significant_genes_by_region[region].update(genes)
+
+                            if args.encode_enrichment:
+                                if 'mt_chrom' in group.columns and 'mt_chromStart' in group.columns:
+                                    cpgs = set(zip(group['mt_chrom'], group['mt_chromStart']))
+                                    if region not in significant_cpgs_by_region:
+                                        significant_cpgs_by_region[region] = set()
+                                    significant_cpgs_by_region[region].update(cpgs)
+                                    significant_cpgs.update(cpgs)
+                    else:
+                        # If no region column, just collect global CpGs
+                        if args.encode_enrichment:
+                            if 'mt_chrom' in sig_df.columns and 'mt_chromStart' in sig_df.columns:
+                                cpgs = set(zip(sig_df['mt_chrom'], sig_df['mt_chromStart']))
+                                significant_cpgs.update(cpgs)
+
                 if (i + 1) % 100 == 0:
-                    print(f"Processed {i+1} chunks for significant genes...", end='\r')
-            print(f"\nFinished collecting significant genes.")
+                    print(f"Processed {i+1} chunks for significant features...", end='\r')
+            print(f"\nFinished collecting significant features.")
         except Exception as e:
-            print(f"Error collecting significant genes: {e}")
+            print(f"Error collecting significant features: {e}")
+
+    # Run ENCODE Enrichment Analysis
+    if args.encode_enrichment:
+        print("\n" + "=" * 40)
+        print("Running ENCODE Enrichment Analysis")
+        print("=" * 40)
+
+        # Download ENCODE files if necessary
+        download_encode_files(args.encode_bed_dir)
+
+        encode_files = {
+            "ChromHMM": os.path.join(args.encode_bed_dir, "wgEncodeBroadHmmGm12878HMM.bed"),
+            "H3K27ac": os.path.join(args.encode_bed_dir, "wgEncodeBroadHistoneGm12878H3k27acStdPk.broadPeak"),
+            "DNase": os.path.join(args.encode_bed_dir, "wgEncodeAwgDnaseUwcdGm12878UniPk.narrowPeak")
+        }
+
+        # Check if all files exist
+        missing_files = [f for f in encode_files.values() if not os.path.exists(f)]
+        if missing_files:
+            print(f"Error: Missing ENCODE files: {missing_files}")
+            sys.exit(1)
+
+        print(f"Loading background universe BED: {args.background_bed}...")
+        try:
+            bg_df = pd.read_csv(args.background_bed, sep='\t', header=None, usecols=[0, 1, 2], names=['Chromosome', 'Start', 'End'])
+            # Ensure 'chr' prefix
+            if not bg_df['Chromosome'].astype(str).str.startswith('chr').all():
+                bg_df['Chromosome'] = 'chr' + bg_df['Chromosome'].astype(str)
+            bg_pr = pr.PyRanges(bg_df)
+        except Exception as e:
+            print(f"Error reading background BED file: {e}")
+            sys.exit(1)
+
+        print(f"Loaded {len(bg_pr)} background CpGs.")
+
+        print(f"Processing {len(significant_cpgs)} significant global eCpGs for enrichment...")
+        hits_df = pd.DataFrame(list(significant_cpgs), columns=['Chromosome', 'Start'])
+        hits_df['End'] = hits_df['Start'] + 1
+        # Ensure 'chr' prefix
+        if not hits_df['Chromosome'].astype(str).str.startswith('chr').all():
+            hits_df['Chromosome'] = 'chr' + hits_df['Chromosome'].astype(str)
+        hits_pr = pr.PyRanges(hits_df)
+
+        # Also prepare region-specific hits
+        hits_pr_by_region = {}
+        for region, cpgs in significant_cpgs_by_region.items():
+            r_df = pd.DataFrame(list(cpgs), columns=['Chromosome', 'Start'])
+            r_df['End'] = r_df['Start'] + 1
+            if not r_df['Chromosome'].astype(str).str.startswith('chr').all():
+                r_df['Chromosome'] = 'chr' + r_df['Chromosome'].astype(str)
+            hits_pr_by_region[region] = pr.PyRanges(r_df)
+
+        enrichment_results = []
+
+        # ChromHMM Processing (15-state)
+        print("Processing ChromHMM (15-state model)...")
+        chromhmm_df = pd.read_csv(encode_files['ChromHMM'], sep='\t', header=None, usecols=[0, 1, 2, 3], names=['Chromosome', 'Start', 'End', 'State'])
+
+        # Focus states: Active TSS, Poised Enhancer, Active Enhancer, Heterochromatin, etc.
+        # States are usually formatted like "1_Active_Promoter", "2_Weak_Promoter", etc.
+        states_of_interest = chromhmm_df['State'].unique()
+
+        for state in states_of_interest:
+            state_df = chromhmm_df[chromhmm_df['State'] == state]
+            encode_pr = pr.PyRanges(state_df)
+
+            # Global
+            A, fe, pval = run_fisher_exact(hits_pr, bg_pr, encode_pr)
+            enrichment_results.append({
+                'Annotation Track': 'ChromHMM',
+                'State/Region': f'Global: {state}',
+                'Region_Category': 'Global',
+                'State': state,
+                'Overlap Count (A)': A,
+                'Fold Enrichment': fe,
+                'P-value': pval
+            })
+
+            # Per Region
+            for region, r_pr in hits_pr_by_region.items():
+                r_A, r_fe, r_pval = run_fisher_exact(r_pr, bg_pr, encode_pr)
+                enrichment_results.append({
+                    'Annotation Track': 'ChromHMM',
+                    'State/Region': f'{region}: {state}',
+                    'Region_Category': region,
+                    'State': state,
+                    'Overlap Count (A)': r_A,
+                    'Fold Enrichment': r_fe,
+                    'P-value': r_pval
+                })
+
+        # H3K27ac Processing
+        print("Processing H3K27ac (Active Enhancers)...")
+        h3k27ac_df = pd.read_csv(encode_files['H3K27ac'], sep='\t', header=None, usecols=[0, 1, 2], names=['Chromosome', 'Start', 'End'])
+        encode_pr = pr.PyRanges(h3k27ac_df)
+
+        A, fe, pval = run_fisher_exact(hits_pr, bg_pr, encode_pr)
+        enrichment_results.append({
+            'Annotation Track': 'H3K27ac',
+            'State/Region': 'Global',
+            'Region_Category': 'Global',
+            'State': 'H3K27ac',
+            'Overlap Count (A)': A,
+            'Fold Enrichment': fe,
+            'P-value': pval
+        })
+        for region, r_pr in hits_pr_by_region.items():
+            r_A, r_fe, r_pval = run_fisher_exact(r_pr, bg_pr, encode_pr)
+            enrichment_results.append({
+                'Annotation Track': 'H3K27ac',
+                'State/Region': region,
+                'Region_Category': region,
+                'State': 'H3K27ac',
+                'Overlap Count (A)': r_A,
+                'Fold Enrichment': r_fe,
+                'P-value': r_pval
+            })
+
+        # DNase Processing
+        print("Processing DNase I Hypersensitivity (Open Chromatin)...")
+        dnase_df = pd.read_csv(encode_files['DNase'], sep='\t', header=None, usecols=[0, 1, 2], names=['Chromosome', 'Start', 'End'])
+        encode_pr = pr.PyRanges(dnase_df)
+
+        A, fe, pval = run_fisher_exact(hits_pr, bg_pr, encode_pr)
+        enrichment_results.append({
+            'Annotation Track': 'DNase I',
+            'State/Region': 'Global',
+            'Region_Category': 'Global',
+            'State': 'DNase I',
+            'Overlap Count (A)': A,
+            'Fold Enrichment': fe,
+            'P-value': pval
+        })
+        for region, r_pr in hits_pr_by_region.items():
+            r_A, r_fe, r_pval = run_fisher_exact(r_pr, bg_pr, encode_pr)
+            enrichment_results.append({
+                'Annotation Track': 'DNase I',
+                'State/Region': region,
+                'Region_Category': region,
+                'State': 'DNase I',
+                'Overlap Count (A)': r_A,
+                'Fold Enrichment': r_fe,
+                'P-value': r_pval
+            })
+
+        # Compile Results
+        res_df = pd.DataFrame(enrichment_results)
+
+        if not res_df.empty:
+            # Calculate FDR-adjusted P-values
+            # Drop NaNs for FDR calculation
+            valid_idx = res_df['P-value'].notna()
+            if valid_idx.any():
+                res_df.loc[valid_idx, 'FDR-adjusted P-value'] = multipletests(res_df.loc[valid_idx, 'P-value'], method='fdr_bh')[1]
+            else:
+                res_df['FDR-adjusted P-value'] = np.nan
+        else:
+            res_df = pd.DataFrame(columns=['Annotation Track', 'State/Region', 'Region_Category', 'State', 'Overlap Count (A)', 'Fold Enrichment', 'P-value', 'FDR-adjusted P-value'])
+
+        # Save Summary Table
+        plots_dir = "plots"
+        if not os.path.exists(plots_dir):
+            os.makedirs(plots_dir)
+
+        csv_out = os.path.join(plots_dir, "encode_enrichment_results.csv")
+        res_df.to_csv(csv_out, index=False)
+        print(f"Saved ENCODE Enrichment results to {csv_out}")
+
+        # Visualization: Heatmap plotting Fold Enrichment across ChromHMM states
+        print("Generating Heatmap for Fold Enrichment...")
+        # Filter for ChromHMM and non-Global for faceting
+        heatmap_df = res_df[(res_df['Annotation Track'] == 'ChromHMM') & (res_df['Region_Category'] != 'Global')].copy()
+
+        if not heatmap_df.empty:
+            # Pivot table
+            pivot_df = heatmap_df.pivot(index="State", columns="Region_Category", values="Fold Enrichment")
+
+            plt.figure(figsize=(10, 8))
+            # Log2 transform Fold Enrichment for better visualization centered at 0 (log2(1) = 0)
+            log2_fe = np.log2(pivot_df.astype(float).replace(0, np.nan))
+
+            sns.heatmap(log2_fe, cmap='coolwarm', center=0, annot=True, fmt=".2f", cbar_kws={'label': 'Log2(Fold Enrichment)'})
+            plt.title('ENCODE ChromHMM Enrichment Across Regions')
+            plt.ylabel('ChromHMM State')
+            plt.xlabel('eCpG Region')
+            plt.tight_layout()
+
+            png_out = os.path.join(plots_dir, "encode_enrichment_heatmap.png")
+            plt.savefig(png_out, dpi=300)
+            plt.close()
+            print(f"Saved Fold Enrichment Heatmap to {png_out}")
+        else:
+            print("No regional data available for ChromHMM heatmap generation.")
+
+        print("=" * 40 + "\n")
 
     # Run Enrichment Analysis on Significant Genes
     if significant_genes_by_region:
