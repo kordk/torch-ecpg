@@ -13,3 +13,5 @@ nvidia-ml-py
 pyarrow
 captum
 pycircos
+gseapy
+mygene

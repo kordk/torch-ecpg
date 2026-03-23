@@ -8,6 +8,53 @@ import matplotlib.pyplot as plt
 import scipy.stats as stats
 import pyarrow as pa
 import pyarrow.parquet as pq
+import gseapy
+import mygene
+
+def clean_and_translate_ensembl_ids(ensembl_ids):
+    """
+    Strips version suffixes from Ensembl IDs and translates them to HGNC gene symbols using mygene.
+    Logs unmapped genes and returns a list of mapped symbols and the count of unmapped ones.
+    """
+    if not ensembl_ids:
+        return [], 0
+
+    # Clean IDs: strip everything after '.'
+    cleaned_ids = [str(gene_id).split('.')[0] for gene_id in ensembl_ids]
+
+    print(f"Translating {len(cleaned_ids)} cleaned Ensembl IDs to Gene Symbols...")
+
+    # Initialize mygene info
+    mg = mygene.MyGeneInfo()
+
+    # Query mygene to translate
+    try:
+        # We expect cleaned_ids to be Ensembl gene IDs
+        results = mg.querymany(cleaned_ids, scopes='ensembl.gene', fields='symbol', species='human', verbose=False)
+    except Exception as e:
+        print(f"Error querying mygene: {e}")
+        return [], len(cleaned_ids)
+
+    mapped_symbols = []
+    unmapped_ids = []
+
+    for res in results:
+        if 'symbol' in res:
+            mapped_symbols.append(res['symbol'])
+        else:
+            unmapped_ids.append(res['query'])
+
+    # Log unmapped IDs
+    if unmapped_ids:
+        # unique just in case
+        unmapped_ids = list(set(unmapped_ids))
+        print(f"  Warning: {len(unmapped_ids)} gene IDs could not be mapped to an HGNC symbol.")
+        # log up to first 20 for brevity, or all if you prefer
+        print(f"  Unmapped examples: {', '.join(unmapped_ids[:20])}" + ("..." if len(unmapped_ids) > 20 else ""))
+
+    # Return unique mapped symbols
+    return list(set(mapped_symbols)), len(unmapped_ids)
+
 
 # Worker function must be top-level for multiprocessing
 def process_chunk(chunk, sample_prob, df):
@@ -444,6 +491,123 @@ Outputs and Metrics Calculated:
                 print(group.to_string(index=False))
         except Exception as e:
             print(f"Error generating top 10 hits per region: {e}")
+
+    # Collect Significant Genes for Enrichment (if requested and possible)
+    significant_genes_by_region = {}
+    if has_region and p_max_fdr >= 0:
+        print(f"\nCollecting significant genes (FDR < 0.05) per region for enrichment...")
+        try:
+            for i, batch in enumerate(parquet_file.iter_batches(batch_size=args.chunk_size)):
+                df_chunk = batch.to_pandas()
+
+                # Use same logic to get p-values
+                if not using_fallback:
+                    chunk_p_vals = df_chunk['precise_mt_p'].values
+                else:
+                    t_col = None
+                    if 'mt_t' in df_chunk.columns:
+                        t_col = 'mt_t'
+                    elif 't' in df_chunk.columns:
+                        t_col = 't'
+                    t_stats = df_chunk[t_col].values
+                    chunk_p_vals = stats.t.sf(np.abs(t_stats), np.float64(args.df)) * 2.0
+
+                # Filter for significant
+                sig_mask = chunk_p_vals <= p_max_fdr
+                if sig_mask.any():
+                    sig_df = df_chunk[sig_mask]
+                    if 'region' in sig_df.columns and 'gt_id' in sig_df.columns:
+                        for region, group in sig_df.groupby('region'):
+                            genes = set(group['gt_id'].dropna().unique())
+                            if region not in significant_genes_by_region:
+                                significant_genes_by_region[region] = set()
+                            significant_genes_by_region[region].update(genes)
+                if (i + 1) % 100 == 0:
+                    print(f"Processed {i+1} chunks for significant genes...", end='\r')
+            print(f"\nFinished collecting significant genes.")
+        except Exception as e:
+            print(f"Error collecting significant genes: {e}")
+
+    # Run Enrichment Analysis on Significant Genes
+    if significant_genes_by_region:
+        enrichment_dir = "enrichment_results"
+        if not os.path.exists(enrichment_dir):
+            os.makedirs(enrichment_dir)
+
+        print(f"\nRunning functional enrichment analysis in '{enrichment_dir}/'...")
+        libraries = ['GO_Biological_Process_2021', 'KEGG_2021_Human', 'WikiPathways_2021_Human']
+
+        for region, genes in significant_genes_by_region.items():
+            print(f"\nProcessing region: {region} with {len(genes)} significant Ensembl IDs")
+
+            # Clean and translate
+            mapped_symbols, unmapped_count = clean_and_translate_ensembl_ids(list(genes))
+
+            if not mapped_symbols:
+                print(f"Skipping enrichment for {region} due to no mapped gene symbols.")
+                continue
+
+            print(f"  Successfully mapped {len(mapped_symbols)} gene symbols.")
+
+            # Run enrichr
+            for library in libraries:
+                print(f"  Running enrichment against {library}...")
+                try:
+                    # gseapy.enrichr
+                    enr = gseapy.enrichr(
+                        gene_list=mapped_symbols,
+                        gene_sets=library,
+                        organism='human',
+                        outdir=None,  # Do not auto-save to output directory immediately to allow filtering
+                        no_plot=True,
+                    )
+
+                    if enr.results is not None and not enr.results.empty:
+                        # Filter by Adjusted P-value < 0.05
+                        sig_res = enr.results[enr.results['Adjusted P-value'] < 0.05]
+
+                        if not sig_res.empty:
+                            # Save to CSV
+                            csv_filename = f"{region}_{library}_enrichment.csv".replace(" ", "_").replace("/", "_")
+                            csv_path = os.path.join(enrichment_dir, csv_filename)
+                            # Keep relevant columns
+                            columns_to_save = ['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Genes']
+                            # Filter missing columns just in case
+                            columns_to_save = [col for col in columns_to_save if col in sig_res.columns]
+                            sig_res[columns_to_save].to_csv(csv_path, index=False)
+                            print(f"    Saved {len(sig_res)} significant terms to {csv_filename}")
+
+                            # Visual Summary
+                            top_10 = sig_res.head(10).copy()
+                            if len(top_10) > 0:
+                                try:
+                                    # Create Dot Plot for Top 10
+                                    plt.figure(figsize=(10, 8))
+                                    # gseapy dotplot expects data with index as terms, 'Adjusted P-value', 'Overlap', etc.
+                                    # Alternatively, we can use simple matplotlib bar plot since gseapy.plot.dotplot requires specific formats
+
+                                    # Use a simple horizontal bar plot for Adjusted P-value
+                                    top_10 = top_10.sort_values('Adjusted P-value', ascending=False)
+                                    terms = top_10['Term'].apply(lambda x: (x[:47] + '...') if len(x) > 50 else x)
+                                    log_p = -np.log10(top_10['Adjusted P-value'].astype(float))
+
+                                    plt.barh(terms, log_p, color='skyblue', edgecolor='black')
+                                    plt.xlabel('-log10(Adjusted P-value)')
+                                    plt.title(f"Top Enriched Terms\n{region} - {library}")
+                                    plt.tight_layout()
+
+                                    plot_filename = f"{region}_{library}_top10.png".replace(" ", "_").replace("/", "_")
+                                    plot_path = os.path.join(enrichment_dir, plot_filename)
+                                    plt.savefig(plot_path)
+                                    plt.close()
+                                except Exception as plot_e:
+                                    print(f"    Error plotting {region} {library}: {plot_e}")
+                        else:
+                            print(f"    No significant terms found (Adjusted P-value < 0.05).")
+                    else:
+                        print(f"    No enrichment results returned.")
+                except Exception as e:
+                    print(f"    Error running gseapy for {library}: {e}")
 
     # Write FDR Output
     if args.output_fdr_file:
