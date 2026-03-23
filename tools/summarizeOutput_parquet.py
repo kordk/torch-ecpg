@@ -74,7 +74,7 @@ def download_encode_files(target_dir):
     urls = {
         "ChromHMM": "http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeBroadHmm/wgEncodeBroadHmmGm12878HMM.bed.gz",
         "H3K27ac": "http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeBroadHistone/wgEncodeBroadHistoneGm12878H3k27acStdPk.broadPeak.gz",
-        "DNase": "http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeAwgDnaseUniform/wgEncodeAwgDnaseUwcdGm12878UniPk.narrowPeak.gz"
+        "DNase": "http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeAwgDnaseUniform/wgEncodeAwgDnaseUwdukeGm12878UniPk.narrowPeak.gz"
     }
 
     files_present = True
@@ -652,7 +652,7 @@ Outputs and Metrics Calculated:
         encode_files = {
             "ChromHMM": os.path.join(args.encode_bed_dir, "wgEncodeBroadHmmGm12878HMM.bed"),
             "H3K27ac": os.path.join(args.encode_bed_dir, "wgEncodeBroadHistoneGm12878H3k27acStdPk.broadPeak"),
-            "DNase": os.path.join(args.encode_bed_dir, "wgEncodeAwgDnaseUwcdGm12878UniPk.narrowPeak")
+            "DNase": os.path.join(args.encode_bed_dir, "wgEncodeAwgDnaseUwdukeGm12878UniPk.narrowPeak")
         }
 
         # Check if all files exist
