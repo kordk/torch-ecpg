@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: "Torch-eCpG"
+message: "If you use this software, please cite the associated article."
+type: software
+
+authors:
+  - family-names: Kober
+    given-names: Kord M
+  - family-names: Berger
+    given-names: Liam
+  - family-names: Roy
+    given-names: Ritu
+  - family-names: Olshen
+    given-names: Adam
+
+doi: 10.1186/s12859-024-05670-4
+url: https://github.com/kordk/torch-ecpg
+repository-code: https://github.com/kordk/torch-ecpg
+
+abstract: >
+  Torch-eCpG is a GPU-accelerated eQTM mapper built in PyTorch
+  for scalable association analysis between DNA methylation and gene expression.
+
+keywords:
+  - epigenetics
+  - DNA methylation
+  - eQTM
+  - bioinformatics
+  - PyTorch
+  - GPU
