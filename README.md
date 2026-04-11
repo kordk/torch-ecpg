@@ -1,4 +1,6 @@
-# tecpg
+# Torch-eCpG (tecpg)
+
+## GPU-accelerated eQTM mapper in PyTorch for large-scale DNA methylation and gene expression analysis
 
 Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) mapper to identify expression associated CpG (eCpG) loci with python CLI using pytorch.
 
