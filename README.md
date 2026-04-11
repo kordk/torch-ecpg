@@ -4,7 +4,11 @@
 
 Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) mapper to identify expression associated CpG (eCpG) loci with python CLI using pytorch.
 
-If you use Torch-eCpG in your research, please cite the following paper: Kober, K.M., Berger, L., Roy, R. et al. Torch-eCpG: a fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. BMC Bioinformatics 25, 71 (2024). https://doi.org/10.1186/s12859-024-05670-4
+## Citation
+
+If you use Torch-eCpG in your work, please cite:
+
+Kober KM, Berger L, Roy R, Olshen A. Torch-eCpG: a fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. *BMC Bioinformatics*. 2024;25:71. https://doi.org/10.1186/s12859-024-05670-4
 
 ## Docker Image
 
