@@ -277,13 +277,31 @@ def corr(
 )
 @click.option(
     '--mlr-method',
-    type=click.Choice(['manual', 'lstsq']),
+    type=click.Choice(['manual', 'lstsq', 'lstsq_bootstrap']),
     default='manual',
     show_default=True,
     help=(
         "The MLR computation method to use. 'manual' uses the original"
-        " optimized inversion; 'lstsq' uses torch.linalg.lstsq."
+        " optimized inversion; 'lstsq' uses torch.linalg.lstsq;"
+        " 'lstsq_bootstrap' runs empirical bootstrap on specific pairs."
     ),
+)
+@click.option(
+    '--pairs-file',
+    type=click.Path(exists=True, dir_okay=False),
+    help='Path to a CSV file containing mt_id and gt_id columns. Required for lstsq_bootstrap.',
+)
+@click.option(
+    '--master-parquet',
+    type=click.Path(exists=True, dir_okay=False),
+    help='Path to the master annotated Parquet file to merge bootstrap results onto. Required for lstsq_bootstrap.',
+)
+@click.option(
+    '--bootstrap-iterations',
+    show_default=True,
+    default=1000,
+    type=int,
+    help='Number of resamples for lstsq_bootstrap.',
 )
 @click.option(
     '--logit-transform',
@@ -394,6 +412,9 @@ def mlr(
     ig_baseline: str,
     ig_covariates: bool,
     ig_covariates_list: Optional[str],
+    pairs_file: Optional[str],
+    master_parquet: Optional[str],
+    bootstrap_iterations: int,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -500,6 +521,34 @@ def mlr(
             if k not in ['M', 'G', 'C', 'M_annot', 'G_annot']
         },
     )
+
+    if mlr_method == 'lstsq_bootstrap':
+        if not pairs_file or not master_parquet:
+            error = '--pairs-file and --master-parquet are required for lstsq_bootstrap.'
+            logger.error(error)
+            raise click.UsageError(error)
+
+        from .bootstrap import tecpg_mlr_lstsq_bootstrap
+
+        output_file_path = data['output_file']
+        if chunking:
+            output_file_path = os.path.join(output_path, 'bootstrap_merged.parquet')
+        elif output_path and not output_file_path.startswith('/'):
+            output_file_path = os.path.join(output_path, output_file_path)
+
+        tecpg_mlr_lstsq_bootstrap(
+            M=M,
+            G=G,
+            C=C,
+            pairs_file=pairs_file,
+            master_parquet=master_parquet,
+            output_file=output_file_path,
+            iterations=bootstrap_iterations,
+            thermal_threshold=thermal_threshold,
+            thermal_wait=thermal_wait,
+            logger=logger
+        )
+        return
 
     if mlr_method == 'lstsq':
         if reservoir_count is None:
