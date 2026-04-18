@@ -20,6 +20,10 @@ def parse_args():
 def main():
     args = parse_args()
 
+    if args.percent > 1.0:
+        args.percent = args.percent / 100.0
+        print(f"Warning: Percent argument was > 1.0. Converted to {args.percent}")
+
     if not os.path.exists(args.input):
         print(f"Error: Input file '{args.input}' not found.")
         sys.exit(1)
@@ -106,10 +110,8 @@ def main():
                 regions_str = ", ".join(row['region'])
                 f.write(f"{row['mt_id']}\t{row['gt_id']}\t{regions_str}\n")
 
-        # Deduplicate dataframe, keeping first occurrence based on our sort metric to be safe,
-        # or just first seen. We will sort first then unique to keep the "best" one
+        # We will sort first to ensure deterministic ordering
         df = df.sort(sort_col, descending=descending)
-        df = df.unique(subset=["mt_id", "gt_id"], keep="first", maintain_order=True)
     else:
         # Just sort
         df = df.sort(sort_col, descending=descending)
@@ -143,7 +145,7 @@ def main():
         total_original_hits += total_hits
 
         target_count = int(total_hits * args.percent)
-        final_count = min(target_count, args.max_per_region)
+        final_count = min(total_hits, target_count, args.max_per_region)
         total_selected_hits += final_count
 
         is_capped = target_count > args.max_per_region
@@ -151,9 +153,10 @@ def main():
 
         summary_data.append({
             "Region": region,
-            "Total Hits": f"{total_hits:,}",
-            "Target (%)": f"{target_count:,}",
-            "Final Selected": f"{final_count:,}{capped_str}"
+            "Total Hits": total_hits,
+            "Target (%)": target_count,
+            "Final Selected": final_count,
+            "Capped": capped_str
         })
 
         # We already sorted df globally, so we can just take the top N
@@ -162,30 +165,50 @@ def main():
     # Combine all selected pairs
     if final_dfs:
         final_df = pl.concat(final_dfs)
+
+        # Deduplicate globally so that pairs selected across multiple regions are only counted once.
+        # keep="first" will retain the region assignment from whichever region was processed first (alphabetical by default).
+        final_df = final_df.unique(subset=["mt_id", "gt_id"], keep="first", maintain_order=True)
+
         # Select only required columns and write
         final_df.select(["mt_id", "gt_id"]).write_csv(args.output)
     else:
         print("Warning: No pairs selected.")
+        final_df = pl.DataFrame({"mt_id": [], "gt_id": [], "region": []})
         # Create empty CSV with headers
         with open(args.output, 'w') as f:
             f.write("mt_id,gt_id\n")
 
+    # Calculate the unique counts per region after global deduplication
+    final_region_counts = {}
+    if not final_df.is_empty():
+        counts_df = final_df.group_by("region").agg(pl.len().alias("count"))
+        for row in counts_df.iter_rows(named=True):
+            final_region_counts[row["region"]] = row["count"]
+
     # Print summary
-    print("=" * 50)
+    print("=" * 75)
     print("Bootstrap Pair List Generation Summary")
-    print("=" * 50)
+    print("=" * 75)
     print(f"Ranking Metric: {args.rank_by}")
     print(f"Selection Criteria: Top {args.percent*100:.0f}% | Cap: {args.max_per_region} per region")
     print()
-    print(f"{'Region':<12} {'Total Hits':<13} {'Target (%)':<14} {'Final Selected'}")
-    print("-" * 50)
+    print(f"{'Region':<12} {'Total Hits':<13} {'Target (%)':<14} {'Selected (Pre-dedup)':<22} {'Final Selected (Unique)'}")
+    print("-" * 75)
+
+    total_final_unique_hits = 0
 
     for row in summary_data:
-        print(f"{row['Region']:<12} {row['Total Hits']:<13} {row['Target (%)']:<14} {row['Final Selected']}")
+        region = row['Region']
+        unique_count = final_region_counts.get(region, 0)
+        total_final_unique_hits += unique_count
 
-    print("-" * 50)
-    print(f"{'TOTAL':<12} {f'{total_original_hits:,}':<13} {'':<14} {f'{total_selected_hits:,}'}")
-    print("=" * 50)
+        pre_dedup_str = f"{row['Final Selected']:,}{row['Capped']}"
+        print(f"{region:<12} {row['Total Hits']:<13,} {row['Target (%)']:<14,} {pre_dedup_str:<22} {unique_count:,}")
+
+    print("-" * 75)
+    print(f"{'TOTAL':<12} {total_original_hits:<13,} {'':<14} {total_selected_hits:<22,} {total_final_unique_hits:,}")
+    print("=" * 75)
     print(f"Output saved to: {args.output}")
 
 if __name__ == "__main__":
