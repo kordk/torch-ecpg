@@ -18,3 +18,4 @@ mygene
 pyranges
 seaborn
 statsmodels
+polars
