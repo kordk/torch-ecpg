@@ -304,6 +304,13 @@ def corr(
     help='Number of resamples for lstsq_bootstrap.',
 )
 @click.option(
+    '--bootstrap-batch-size',
+    show_default=True,
+    default=10,
+    type=int,
+    help='Number of pairs to process simultaneously in the bootstrap loop. Note: -g and -m chunks are ignored for bootstraps.',
+)
+@click.option(
     '--logit-transform',
     is_flag=True,
     show_default=True,
@@ -415,6 +422,7 @@ def mlr(
     pairs_file: Optional[str],
     master_parquet: Optional[str],
     bootstrap_iterations: int,
+    bootstrap_batch_size: int,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -544,6 +552,7 @@ def mlr(
             master_parquet=master_parquet,
             output_file=output_file_path,
             iterations=bootstrap_iterations,
+            batch_size=bootstrap_batch_size,
             thermal_threshold=thermal_threshold,
             thermal_wait=thermal_wait,
             logger=logger

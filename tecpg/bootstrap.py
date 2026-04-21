@@ -18,6 +18,7 @@ def tecpg_mlr_lstsq_bootstrap(
     master_parquet: str,
     output_file: str,
     iterations: int = 1000,
+    batch_size: int = 10,
     thermal_threshold: int = 80,
     thermal_wait: int = 30,
     *,
@@ -61,7 +62,7 @@ def tecpg_mlr_lstsq_bootstrap(
     # We will build X_boot: [ones, M, C]
     # To save memory, we can build X_boot per pair or per batch of pairs.
 
-    batch_size = min(100, len(pairs_df)) # Process pairs in batches
+    batch_size = min(batch_size, len(pairs_df)) # Process pairs in batches
 
     results = []
 
@@ -155,6 +156,20 @@ def tecpg_mlr_lstsq_bootstrap(
         # lstsq takes (..., N, K) and (..., N, 1)
         X_flat = X_boot.view(B * I, N, 2 + K_c)
         Y_flat = Y_boot.view(B * I, N, 1)
+
+        logger.info(
+            f"Batch tensor shapes - M_boot: {M_boot.shape}, G_boot: {G_boot.shape}, "
+            f"X_flat: {X_flat.shape}"
+        )
+        # Calculate size in GB for X_flat
+        x_flat_gb = X_flat.nelement() * X_flat.element_size() / (1024 ** 3)
+        logger.info(f"Estimated size of X_flat: {x_flat_gb:.2f} GB")
+
+        # Memory snapshot
+        if torch.cuda.is_available():
+            alloc_mem = torch.cuda.memory_allocated() / (1024 ** 3)
+            max_alloc_mem = torch.cuda.max_memory_allocated() / (1024 ** 3)
+            logger.info(f"GPU memory before lstsq - Allocated: {alloc_mem:.2f} GB, Max Allocated: {max_alloc_mem:.2f} GB")
 
         # Solve
         lstsq_res = torch.linalg.lstsq(X_flat, Y_flat)
