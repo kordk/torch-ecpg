@@ -15,6 +15,8 @@ def parse_args():
                         help="The percentage of top hits to select per region (Default: 0.10)")
     parser.add_argument("--max-per-region", type=int, default=2000,
                         help="The maximum number of pairs to select from any single region (Default: 2000)")
+    parser.add_argument("--min-per-region", type=int, default=200,
+                        help="The minimum number of pairs to select from each region, if available (Default: 200)")
     return parser.parse_args()
 
 def main():
@@ -145,18 +147,24 @@ def main():
         total_original_hits += total_hits
 
         target_count = int(total_hits * args.percent)
-        final_count = min(total_hits, target_count, args.max_per_region)
+        floor_val = max(target_count, args.min_per_region)
+        final_count = min(total_hits, floor_val, args.max_per_region)
+
         total_selected_hits += final_count
 
-        is_capped = target_count > args.max_per_region
-        capped_str = " (CAPPED)" if is_capped else ""
+        label_str = ""
+        if final_count >= args.max_per_region and floor_val >= args.max_per_region and final_count < total_hits:
+            label_str = " (CAPPED)"
+        elif final_count <= args.min_per_region and target_count < args.min_per_region:
+            label_str = " (FLOOR)"
 
         summary_data.append({
             "Region": region,
             "Total Hits": total_hits,
             "Target (%)": target_count,
+            "Min (Floor)": args.min_per_region,
             "Final Selected": final_count,
-            "Capped": capped_str
+            "Label": label_str
         })
 
         # We already sorted df globally, so we can just take the top N
@@ -187,14 +195,14 @@ def main():
             final_region_counts[row["region"]] = row["count"]
 
     # Print summary
-    print("=" * 75)
+    print("=" * 90)
     print("Bootstrap Pair List Generation Summary")
-    print("=" * 75)
+    print("=" * 90)
     print(f"Ranking Metric: {args.rank_by}")
-    print(f"Selection Criteria: Top {args.percent*100:.0f}% | Cap: {args.max_per_region} per region")
+    print(f"Selection Criteria: Top {args.percent*100:.0f}% | Min: {args.min_per_region} | Max: {args.max_per_region} per region")
     print()
-    print(f"{'Region':<12} {'Total Hits':<13} {'Target (%)':<14} {'Selected (Pre-dedup)':<22} {'Final Selected (Unique)'}")
-    print("-" * 75)
+    print(f"{'Region':<12} {'Total Hits':<12} {'Target (%)':<12} {'Min (Floor)':<13} {'Selected (Pre-dedup)':<22} {'Final Selected (Unique)'}")
+    print("-" * 90)
 
     total_final_unique_hits = 0
 
@@ -203,12 +211,12 @@ def main():
         unique_count = final_region_counts.get(region, 0)
         total_final_unique_hits += unique_count
 
-        pre_dedup_str = f"{row['Final Selected']:,}{row['Capped']}"
-        print(f"{region:<12} {row['Total Hits']:<13,} {row['Target (%)']:<14,} {pre_dedup_str:<22} {unique_count:,}")
+        pre_dedup_str = f"{row['Final Selected']:,}{row['Label']}"
+        print(f"{region:<12} {row['Total Hits']:<12,} {row['Target (%)']:<12,} {row['Min (Floor)']:<13,} {pre_dedup_str:<22} {unique_count:,}")
 
-    print("-" * 75)
-    print(f"{'TOTAL':<12} {total_original_hits:<13,} {'':<14} {total_selected_hits:<22,} {total_final_unique_hits:,}")
-    print("=" * 75)
+    print("-" * 90)
+    print(f"{'TOTAL':<12} {total_original_hits:<12,} {'':<12} {'':<13} {total_selected_hits:<22,} {total_final_unique_hits:,}")
+    print("=" * 90)
     print(f"Output saved to: {args.output}")
 
 if __name__ == "__main__":
