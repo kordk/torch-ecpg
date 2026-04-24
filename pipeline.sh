@@ -10,14 +10,44 @@ log() {
 
 # Default settings
 DATASET="dummy"
+MAPPING="all"
 TOTAL_TESTS=1000000
 M_CHUNK=500
 G_CHUNK=500
 NUM_PCS=5
 
 # Parse arguments
-if [ "$#" -ge 1 ]; then
-    DATASET=$1
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            echo "Usage: ./pipeline.sh [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  -h, --help               Show this help message and exit"
+            echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, mesa"
+            echo "  -m, --mapping MAPPING    Specify the mapping method for tecpg. Options: all (default), promoter"
+            exit 0
+            ;;
+        -d|--dataset)
+            DATASET="$2"
+            shift 2
+            ;;
+        -m|--mapping)
+            MAPPING="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown parameter passed: $1"
+            echo "Use --help for usage information."
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$MAPPING" != "all" ] && [ "$MAPPING" != "promoter" ]; then
+    log "Error: Unknown mapping: $MAPPING"
+    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|promoter]"
+    exit 1
 fi
 
 if [ "$DATASET" == "gtp" ]; then
@@ -34,12 +64,12 @@ elif [ "$DATASET" == "dummy" ]; then
     G_CHUNK=500
 else
     log "Error: Unknown dataset: $DATASET"
-    log "Usage: ./pipeline.sh [gtp|mesa|dummy]"
+    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|promoter]"
     exit 1
 fi
 
 log "======================================"
-log "Starting eQTM Pipeline for: $DATASET"
+log "Starting eQTM Pipeline for: $DATASET (Mapping: $MAPPING)"
 log "Dataset configurations: TOTAL_TESTS=$TOTAL_TESTS, M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK"
 log "======================================"
 
@@ -115,7 +145,7 @@ log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
 log "[3/9] Performing eQTM Mapping (lstsq + IG)..."
 log "This stage runs the multiple linear regression (mlr) model and computes Integrated Gradients (IG)."
 log "Using chunks: M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
-tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --all -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig
+tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig
 
 # Stage 4: Merge chunked outputs
 log "[4/9] Merging chunked outputs to Parquet..."
