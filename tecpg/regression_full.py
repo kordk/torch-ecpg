@@ -274,7 +274,7 @@ def regression_full(
 
     # Use the thread pool
     futures = []
-    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=2) as pool:
+    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=logger.carry_data.get('save_threads', 2)) as pool:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in (

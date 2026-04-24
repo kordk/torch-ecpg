@@ -150,6 +150,13 @@ from .tool import (
     default=DEFAULT_FLOAT_FORMAT,
     type=str,
 )
+@click.option(
+    '--save-threads',
+    show_default=True,
+    default=2,
+    type=int,
+    help='Number of threads used for saving data. Warning: increasing this value can result in an increase in performance with the cost of a large increase in CPU memory, use caution when increasing.',
+)
 @click.pass_context
 def cli(
     ctx: Optional[click.Context] = None,
@@ -169,6 +176,7 @@ def cli(
     log_dir: Optional[str] = None,
     no_log_file: Optional[bool] = None,
     float_format: Optional[str] = None,
+    save_threads: Optional[int] = None,
     obj: Optional[dict] = None,
 ) -> None:
     """The root cli group"""
@@ -197,6 +205,12 @@ def cli(
     logger.carry_data['float_format'] = (
         DEFAULT_FLOAT_FORMAT if float_format is None else float_format
     )
+    if save_threads is not None:
+        if save_threads > 2:
+            logger.warning('Warning: increasing save threads can result in an increase in performance with the cost of a large increase in CPU memory, use caution when increasing.')
+        logger.carry_data['save_threads'] = save_threads
+    else:
+        logger.carry_data['save_threads'] = 2
     ctx.obj['logger'] = logger
 
 
