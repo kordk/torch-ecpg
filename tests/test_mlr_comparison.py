@@ -199,6 +199,96 @@ def run_comparison_test(test_name, M, G, C, M_annot=None, G_annot=None, logit_tr
         print(f"Max relative difference: {max_rel_diff}")
         raise e
 
+def test_lstsq_memory_opt_various():
+    import scipy.stats
+
+    print("\n--- Running Test: Memory Opt Num. Equivalence ---")
+    np.random.seed(42)
+    S = 30
+    M = 20
+    G = 15
+    K = 4
+
+    M_data = pd.DataFrame(np.random.rand(M, S), index=[f'mt_{i}' for i in range(M)])
+    G_data = pd.DataFrame(np.random.rand(G, S), index=[f'gt_{i}' for i in range(G)])
+    C_data = pd.DataFrame(np.random.rand(S, K - 2), columns=[str(i) for i in range(K-2)])
+
+    for meth_only, chunk in [(True, False), (False, True), (False, False)]:
+        print(f"Testing meth_only={meth_only}, chunking={chunk}")
+
+        kwargs = {
+            'region': 'all',
+            'methylation_only': meth_only,
+            'p_only': False,
+            'logit_transform': False,
+            'logger': Logger()
+        }
+
+        if chunk:
+            kwargs['gene_loci_per_chunk'] = 7
+            kwargs['output_dir'] = 'test_mem_opt_out'
+            if os.path.exists('test_mem_opt_out'):
+                shutil.rmtree('test_mem_opt_out')
+            os.makedirs('test_mem_opt_out')
+
+        df_tecpg = tecpg_mlr_lstsq(M_data, G_data, C_data, **kwargs)
+
+        if chunk:
+            df_tecpg = read_chunk_results('test_mem_opt_out')
+            shutil.rmtree('test_mem_opt_out')
+
+        results = []
+
+        for gt_idx in range(G):
+            for mt_idx in range(M):
+                y = G_data.iloc[gt_idx].values
+
+                x_m = M_data.iloc[mt_idx].values
+                X = np.column_stack((np.ones(S), x_m, C_data.values))
+
+                b, res, rank, s = np.linalg.lstsq(X, y, rcond=None)
+
+                df = S - K
+                if len(res) > 0:
+                    rss = res[0]
+                else:
+                    rss = np.sum((y - X @ b)**2)
+
+                sigma2 = rss / df
+                var_b = sigma2 * np.linalg.inv(X.T @ X).diagonal()
+                se = np.sqrt(var_b)
+
+                t = b / se
+                p = 2 * (1 - scipy.stats.norm.cdf(np.abs(t)))
+
+                row = {
+                    'gt_id': G_data.index[gt_idx],
+                    'mt_id': M_data.index[mt_idx]
+                }
+
+                col_names = ['const', 'mt', '0', '1']
+                for k in range(K):
+                    if meth_only and k != 1:
+                        continue
+                    row[f'{col_names[k]}_est'] = b[k]
+                    row[f'{col_names[k]}_err'] = se[k]
+                    row[f'{col_names[k]}_t'] = t[k]
+                    row[f'{col_names[k]}_p'] = p[k]
+
+                results.append(row)
+
+        df_np = pd.DataFrame(results).set_index(['gt_id', 'mt_id'])
+
+        # match columns and type
+        df_np = df_np[df_tecpg.columns].astype(df_tecpg.dtypes.iloc[0])
+
+        # ensure indices are sorted similarly
+        df_tecpg = df_tecpg.sort_index()
+        df_np = df_np.sort_index()
+
+        pd.testing.assert_frame_equal(df_tecpg, df_np, rtol=1e-4, atol=1e-4)
+        print("Memory Opt Num. Equivalence passed!")
+
 def main():
     try:
         print("Generating data without annotation...")
@@ -256,4 +346,98 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    test_lstsq_memory_opt_various()
+
+    test_lstsq_memory_opt_various()
+
     main()
+
+def test_lstsq_memory_opt_various():
+    import scipy.stats
+
+    print("\n--- Running Test: Memory Opt Num. Equivalence ---")
+    np.random.seed(42)
+    S = 30
+    M = 20
+    G = 15
+    K = 4
+
+    M_data = pd.DataFrame(np.random.rand(M, S), index=[f'mt_{i}' for i in range(M)])
+    G_data = pd.DataFrame(np.random.rand(G, S), index=[f'gt_{i}' for i in range(G)])
+    C_data = pd.DataFrame(np.random.rand(S, K - 2), columns=[str(i) for i in range(K-2)])
+
+    for meth_only, chunk in [(True, False), (False, True), (False, False)]:
+        print(f"Testing meth_only={meth_only}, chunking={chunk}")
+
+        kwargs = {
+            'region': 'all',
+            'methylation_only': meth_only,
+            'p_only': False,
+            'logit_transform': False,
+            'logger': Logger()
+        }
+
+        if chunk:
+            kwargs['gene_loci_per_chunk'] = 7
+            kwargs['output_dir'] = 'test_mem_opt_out'
+            if os.path.exists('test_mem_opt_out'):
+                shutil.rmtree('test_mem_opt_out')
+            os.makedirs('test_mem_opt_out')
+
+        df_tecpg = tecpg_mlr_lstsq(M_data, G_data, C_data, **kwargs)
+
+        if chunk:
+            df_tecpg = read_chunk_results('test_mem_opt_out')
+            shutil.rmtree('test_mem_opt_out')
+
+        results = []
+
+        for gt_idx in range(G):
+            for mt_idx in range(M):
+                y = G_data.iloc[gt_idx].values
+
+                x_m = M_data.iloc[mt_idx].values
+                X = np.column_stack((np.ones(S), x_m, C_data.values))
+
+                b, res, rank, s = np.linalg.lstsq(X, y, rcond=None)
+
+                df = S - K
+                if len(res) > 0:
+                    rss = res[0]
+                else:
+                    rss = np.sum((y - X @ b)**2)
+
+                sigma2 = rss / df
+                var_b = sigma2 * np.linalg.inv(X.T @ X).diagonal()
+                se = np.sqrt(var_b)
+
+                t = b / se
+                p = 2 * (1 - scipy.stats.norm.cdf(np.abs(t)))
+
+                row = {
+                    'gt_id': G_data.index[gt_idx],
+                    'mt_id': M_data.index[mt_idx]
+                }
+
+                col_names = ['const', 'mt', '0', '1']
+                for k in range(K):
+                    if meth_only and k != 1:
+                        continue
+                    row[f'{col_names[k]}_est'] = b[k]
+                    row[f'{col_names[k]}_err'] = se[k]
+                    row[f'{col_names[k]}_t'] = t[k]
+                    row[f'{col_names[k]}_p'] = p[k]
+
+                results.append(row)
+
+        df_np = pd.DataFrame(results).set_index(['gt_id', 'mt_id'])
+
+        # match columns and type
+        df_np = df_np[df_tecpg.columns].astype(df_tecpg.dtypes.iloc[0])
+
+        # ensure indices are sorted similarly
+        df_tecpg = df_tecpg.sort_index()
+        df_np = df_np.sort_index()
+
+        pd.testing.assert_frame_equal(df_tecpg, df_np, rtol=1e-4, atol=1e-4)
+        print("Memory Opt Num. Equivalence passed!")
