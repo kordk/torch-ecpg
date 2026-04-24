@@ -1,7 +1,7 @@
 import os
 import time
 from contextlib import nullcontext
-from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, Optional, Tuple
 
 import numpy
@@ -188,7 +188,8 @@ def regression_single(
     inner_logger.start_timer('info', 'Calculating chunks...')
     i = 0
     last_time = time.time()
-    with gpu_guardian(logger) as gpu_handle, Pool() if regressions_per_chunk else nullcontext() as pool:
+    futures = []
+    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=2) if regressions_per_chunk else nullcontext() as pool:
         for (gene_site, G_row) in G.iterrows():
             throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
 
@@ -269,11 +270,11 @@ def regression_single(
                             + ('' if filter_p else '/{0}'),
                             regressions // regressions_per_chunk,
                         )
-                        pool.apply_async(
+                        futures.append(pool.submit(
                             save_dataframe_part,
-                            (out_df, file_path),
-                            dict(logger),
-                        )
+                            out_df, file_path,
+                            **dict(logger),
+                        ))
 
                         del out_df
                         out_df = pandas.DataFrame(
@@ -303,15 +304,16 @@ def regression_single(
                 'Saving part {i}' + ('' if filter_p else '/{0}'),
                 regressions // regressions_per_chunk,
             )
-            pool.apply_async(
+            futures.append(pool.submit(
                 save_dataframe_part,
-                (out_df, file_path),
-                dict(logger),
-            )
+                out_df, file_path,
+                **dict(logger),
+            ))
 
         if regressions_per_chunk:
-            pool.close()
-            pool.join()
+            for future in futures:
+                future.result()
+            pool.shutdown(wait=True)
 
     logger.time('Calculated regression_single in {t} seconds')
     if regressions_per_chunk == 0:

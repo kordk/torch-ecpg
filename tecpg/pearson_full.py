@@ -1,6 +1,6 @@
 import math
 import os
-from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import pandas
@@ -233,7 +233,8 @@ def pearson_chunk_save_tensor(
     logger.start_counter('info', '')
     chunks_elapsed = 0
     corr_pd = pandas.DataFrame()
-    with Pool() as pool:
+    futures = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
         for i in range(0, len(M_t), chunk_rows):
             chunks_elapsed += 1
             if chunks_elapsed > save_chunks:
@@ -244,9 +245,9 @@ def pearson_chunk_save_tensor(
                 if flatten:
                     corr_pd = corr_pd.stack()
                     corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
-                pool.apply_async(
-                    save_dataframe_part, (corr_pd, file_path), dict(logger)
-                )
+                futures.append(pool.submit(
+                    save_dataframe_part, corr_pd, file_path, **dict(logger)
+                ))
                 del corr_pd
                 corr_pd = pandas.DataFrame()
 
@@ -282,11 +283,12 @@ def pearson_chunk_save_tensor(
         if flatten:
             corr_pd = corr_pd.stack()
             corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
-        pool.apply_async(
-            save_dataframe_part, (corr_pd, file_path), dict(logger)
-        )
+        futures.append(pool.submit(
+            save_dataframe_part, corr_pd, file_path, **dict(logger)
+        ))
 
-        pool.close()
-        pool.join()
+        for future in futures:
+            future.result()
+        pool.shutdown(wait=True)
 
     logger.time('Calculated pearson_chunk_tensor in {t} seconds')
