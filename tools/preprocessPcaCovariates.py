@@ -76,6 +76,9 @@ def main():
     initial_samples_C = C.shape[0]
 
     # The inner join on index
+    G.index = G.index.astype(str)
+    C.index = C.index.astype(str)
+
     merged_indices = G.index.intersection(C.index)
 
     if len(merged_indices) == 0:
