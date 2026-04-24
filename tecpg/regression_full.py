@@ -1,7 +1,7 @@
 import math
 import os
 import time
-from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, Optional
 
 import numpy
@@ -272,8 +272,9 @@ def regression_full(
     mc_logger.info_color = colors.GREEN
     inner_logger = mc_logger.alias()
 
-    # Use the multiprocessing pool
-    with gpu_guardian(logger) as gpu_handle, Pool() as pool:
+    # Use the thread pool
+    futures = []
+    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=2) as pool:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in (
@@ -499,16 +500,16 @@ def regression_full(
                         torch.cuda.empty_cache()
                         mc_logger.memory_check('regression_full')
 
-                    # Save output with multiprocessing pool
+                    # Save output with thread pool
                     mc_logger.count(
                         'Saving part {i}/{0}',
                         chunk_count,
                     )
-                    pool.apply_async(
+                    futures.append(pool.submit(
                         save_dataframe_part,
-                        (out, file_path, mc_logger.current_count),
-                        dict(mc_logger),
-                    )
+                        out, file_path, mc_logger.current_count,
+                        **dict(mc_logger),
+                    ))
 
                     # Report gene chunk time
                     inner_logger.time(
@@ -586,11 +587,11 @@ def regression_full(
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )
-                    pool.apply_async(
+                    futures.append(pool.submit(
                         save_dataframe_part,
-                        (out, file_path, meth_chunk_index + 1),
-                        dict(mc_logger),
-                    )
+                        out, file_path, meth_chunk_index + 1,
+                        **dict(mc_logger),
+                    ))
 
                     inner_logger.time(
                         (
@@ -611,8 +612,9 @@ def regression_full(
         # Wait for chunks to save
         if chunking:
             logger.time('Waiting for chunks to save...')
-            pool.close()
-            pool.join()
+            for future in futures:
+                future.result()
+            pool.shutdown(wait=True)
             logger.time('Finished waiting for chunks to save in {l} seconds')
 
         logger.time(
