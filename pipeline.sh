@@ -13,6 +13,7 @@ DATASET="dummy"
 TOTAL_TESTS=1000000
 M_CHUNK=500
 G_CHUNK=500
+NUM_PCS=5
 
 # Parse arguments
 if [ "$#" -ge 1 ]; then
@@ -49,11 +50,15 @@ ANNOT_DIR="annot_${DATASET}"
 mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
 
 # Stage 1: Data Preparation
-log "[1/8] Preparing data..."
+log "[1/9] Preparing data..."
 log "Checking if dataset files already exist in $DATA_DIR..."
 
-if [ -s "$DATA_DIR/M.csv" ] && [ -s "$DATA_DIR/G.csv" ] && [ -s "$DATA_DIR/C.csv" ]; then
-    log "Data files (M.csv, G.csv, C.csv) already exist and are not empty. Skipping download/generation."
+if [ -s "$DATA_DIR/M.csv" ] && [ -s "$DATA_DIR/G.csv" ] && ( [ -s "$DATA_DIR/C_orig.csv" ] || [ -s "$DATA_DIR/C.csv" ] ); then
+    log "Data files (M.csv, G.csv, and C_orig.csv/C.csv) already exist and are not empty. Skipping download/generation."
+    if [ -s "$DATA_DIR/C.csv" ] && [ ! -s "$DATA_DIR/C_orig.csv" ]; then
+        log "Found C.csv but not C_orig.csv. Renaming C.csv to C_orig.csv for backwards compatibility."
+        mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
+    fi
 else
     log "Data files not found or empty. Proceeding with data generation/download for $DATASET..."
     if [ "$DATASET" == "dummy" ]; then
@@ -63,10 +68,12 @@ else
         mv data/* "$DATA_DIR/"
         mv annot/* "$ANNOT_DIR/"
         rmdir data annot
+        mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
     elif [ "$DATASET" == "gtp" ]; then
         log "Downloading GTP data..."
         echo "y" | tecpg data gtp --yes
         mv data/* "$DATA_DIR/"
+        mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
         # For GTP, assuming the demo annots are used
         cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6"
         cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6"
@@ -75,12 +82,22 @@ else
         log "Downloading MESA data..."
         echo "y" | tecpg data mesa
         mv data/* "$DATA_DIR/"
+        mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
         # For MESA, assuming appropriate demo annots are used if available
         # Or fall back to EPIC/HT12 for now
         cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6" 2>/dev/null || true
         cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6" 2>/dev/null || true
         rmdir data
     fi
+fi
+
+# Stage 2: Preprocess PCA Covariates
+log "[2/9] Preprocessing PCA Covariates..."
+if [ -s "$DATA_DIR/C.csv" ]; then
+    log "C.csv already exists. Skipping PCA covariate preprocessing."
+else
+    log "Running PCA to append top $NUM_PCS components from gene expression data to covariates..."
+    python3 tools/preprocessPcaCovariates.py -g "$DATA_DIR/G.csv" -c "$DATA_DIR/C_orig.csv" -o "$DATA_DIR/C.csv" -n "$NUM_PCS"
 fi
 
 # Determine Degrees of Freedom for P-value calculation
@@ -94,14 +111,14 @@ DF=$((SAMPLES - COVARS - 2))
 
 log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
 
-# Stage 2: Mapping (lstsq + ig)
-log "[2/8] Performing eQTM Mapping (lstsq + IG)..."
+# Stage 3: Mapping (lstsq + ig)
+log "[3/9] Performing eQTM Mapping (lstsq + IG)..."
 log "This stage runs the multiple linear regression (mlr) model and computes Integrated Gradients (IG)."
 log "Using chunks: M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
 tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --all -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig
 
-# Stage 3: Merge chunked outputs
-log "[3/8] Merging chunked outputs to Parquet..."
+# Stage 4: Merge chunked outputs
+log "[4/9] Merging chunked outputs to Parquet..."
 MERGED_PARQUET="$OUT_DIR/merged.parquet"
 log "Converting CSV chunks in $OUT_DIR into a single Parquet file at $MERGED_PARQUET..."
 python3 tools/mergeOutputs.py --format parquet "$OUT_DIR" "$MERGED_PARQUET"
@@ -110,22 +127,22 @@ python3 tools/mergeOutputs.py --format parquet "$OUT_DIR" "$MERGED_PARQUET"
 log "Cleaning up intermediate CSV chunks..."
 rm "$OUT_DIR"/*-*.csv || true
 
-# Stage 4: Annotate regions
-log "[4/8] Annotating regions..."
+# Stage 5: Annotate regions
+log "[5/9] Annotating regions..."
 ANNOTATED_PARQUET="$OUT_DIR/annotated.parquet"
 log "Mapping eCpG and Gene coordinates to determine regional categories (e.g., CIS, TRANS)."
 log "Input Parquet: $MERGED_PARQUET, Output Parquet: $ANNOTATED_PARQUET"
 python3 tools/assignRegionToEcpg_parquet.py -d "$MERGED_PARQUET" -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" -o "$ANNOTATED_PARQUET"
 
-# Stage 5: Precise P-value recalculation
-log "[5/8] Recalculating precise p-values..."
+# Stage 6: Precise P-value recalculation
+log "[6/9] Recalculating precise p-values..."
 RECALC_PARQUET="$OUT_DIR/annotated_pcalc.parquet"
 log "Calculating high-precision p-values using DF=$DF."
 log "Input Parquet: $ANNOTATED_PARQUET, Output Parquet: $RECALC_PARQUET"
 python3 tools/recalculate_pvalues_parquet.py "$ANNOTATED_PARQUET" --df "$DF" --output-file "$RECALC_PARQUET"
 
-# Stage 6: Summarize & FDR
-log "[6/8] Calculating FDR and summarizing..."
+# Stage 7: Summarize & FDR
+log "[7/9] Calculating FDR and summarizing..."
 SUMMARIZED_PARQUET="$OUT_DIR/summarized.parquet"
 log "Estimating global Benjamini-Hochberg FDR based on TOTAL_TESTS=$TOTAL_TESTS."
 log "Generating diagnostic plots (QQ, Histogram, Saliency)."
@@ -135,15 +152,15 @@ python3 tools/summarizeOutput_parquet.py --main-file "$RECALC_PARQUET" --reservo
 log "Moving generated plots to $OUT_DIR..."
 mv p_value_histogram.png qq_plot.png saliency_profile_top50.png "$OUT_DIR/" 2>/dev/null || true
 
-# Stage 7: Bootstrap List creation
-log "[7/8] Creating Bootstrap List..."
+# Stage 8: Bootstrap List creation
+log "[8/9] Creating Bootstrap List..."
 BOOTSTRAP_LIST="$OUT_DIR/bootstrap_list.csv"
 log "Identifying top hits (ranked by p-value) to be evaluated via bootstrapping."
 log "Input Parquet: $SUMMARIZED_PARQUET, Output List: $BOOTSTRAP_LIST"
 python3 tools/createBootstrapList.py --input "$SUMMARIZED_PARQUET" --output "$BOOTSTRAP_LIST" --rank-by p-value
 
-# Stage 8: Bootstrap evaluation
-log "[8/8] Bootstrapping top hits..."
+# Stage 9: Bootstrap evaluation
+log "[9/9] Bootstrapping top hits..."
 log "Running bootstrap analysis on the top candidates to validate association robustness."
 log "Pairs File: $BOOTSTRAP_LIST, Master Parquet: $SUMMARIZED_PARQUET"
 tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 100 --bootstrap-batch-size 10 --compute-ig
