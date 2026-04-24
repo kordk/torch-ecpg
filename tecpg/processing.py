@@ -391,7 +391,7 @@ def tecpg_mlr_lstsq(
             # We want diag((R_inv) @ (R_inv).mT)
             # Element [i, j, j] = sum_k R_inv[i, j, k] * R_inv[i, j, k]
             XtXi_diag_sqrt = (R_inv.pow(2).sum(dim=2)).sqrt()
-            del Q, R, R_inv
+            del R
 
             # Display amount of total memory occupied by the constants
             if allocated_memory := torch.cuda.memory_allocated():
@@ -428,32 +428,24 @@ def tecpg_mlr_lstsq(
                 # G_chunk_np is (G_chunk, S). Transpose to (S, G_chunk).
                 Y = torch.tensor(G_chunk_np.T, device=device, dtype=dtype) # (S, G_chunk)
 
-                # Solve using lstsq(X, Y)
-                # X is (M_chunk, S, K). Y is (S, G_chunk).
-                # We need to solve for B of shape (M_chunk, K, G_chunk).
-                # Broadcast Y to (1, S, G_chunk)?
-                # torch.linalg.lstsq(A, B):
-                # A: (*, m, n). B: (*, m, k).
-                # If we want output (*, n, k).
-                # Here A=X is (M_chunk, S, K).
-                # We want B to match M_chunk dim.
-                # So expand Y to (M_chunk, S, G_chunk).
-                Y_expanded = Y.unsqueeze(0).expand(mt_count, -1, -1)
+                # Solve reusing Q and R_inv from QR decomposition
+                # Q is (M_chunk, S, K). Y is (S, G_chunk).
+                # Batched matmul broadcasts Y: (M_chunk, K, S) @ (S, G_chunk) -> (M_chunk, K, G_chunk)
+                QtY = Q.mT.matmul(Y)
                 inner_logger.memory_check('tecpg_mlr_lstsq - target expanded')
 
                 # Coefficients B
-                lstsq_result = torch.linalg.lstsq(X, Y_expanded)
-                inner_logger.memory_check('tecpg_mlr_lstsq - lstsq result')
-                B = lstsq_result.solution # (M_chunk, K, G_chunk)
+                B = R_inv.matmul(QtY) # (M_chunk, K, G_chunk)
+                inner_logger.memory_check('tecpg_mlr_lstsq - solve (QR reuse)')
 
-                # Calculate Residuals E = Y - X B
-                # X: (M, S, K). B: (M, K, G).
-                # X @ B -> (M, S, G).
-                E = Y_expanded - X.matmul(B)
-                inner_logger.memory_check('tecpg_mlr_lstsq - residuals')
+                # Calculate Residuals (RSS) algebraically without materializing E
+                # ||Y - XB||^2 = ||Y||^2 - ||Q^T Y||^2
+                Y_norm_sq = (Y * Y).sum(dim=0) # (G_chunk,)
+                QtY_norm_sq = (QtY * QtY).sum(dim=1) # (M_chunk, G_chunk)
 
-                # RSS = sum(E^2, dim=1) -> (M, G)
-                RSS = E.pow(2).sum(dim=1)
+                # clamp_min(0) guards against float32 cancellation producing small negatives, not for NaN handling
+                RSS = (Y_norm_sq.unsqueeze(0) - QtY_norm_sq).clamp_min(0) # (M_chunk, G_chunk)
+                inner_logger.memory_check('tecpg_mlr_lstsq - RSS (no E)')
 
                 # Sigma = sqrt(RSS / df)
                 # Standard Errors S = XtXi_diag_sqrt * Sigma
@@ -465,7 +457,7 @@ def tecpg_mlr_lstsq(
                 Sigma = (RSS / df).sqrt().unsqueeze(1) # (M, 1, G)
                 S = XtXi_diag_sqrt.unsqueeze(2) * Sigma # (M, K, G)
 
-                del E, RSS, Sigma, Y_expanded, Y
+                del QtY, Y_norm_sq, QtY_norm_sq, RSS, Sigma, Y
 
                 # Calculate T and P
                 # B is (M, K, G). S is (M, K, G).
@@ -868,6 +860,8 @@ def tecpg_mlr_lstsq(
                     # Force GC
                     if allocated_memory:
                          torch.cuda.empty_cache()
+
+            del Q, R_inv, XtXi_diag_sqrt
 
             mc_logger.time('Looped over methylation loci in {l} seconds')
             mc_logger.time('Calculated tecpg_mlr_lstsq in {t} seconds')
