@@ -234,7 +234,7 @@ def pearson_chunk_save_tensor(
     chunks_elapsed = 0
     corr_pd = pandas.DataFrame()
     futures = []
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=logger.carry_data.get('save_threads', 2)) as pool:
         for i in range(0, len(M_t), chunk_rows):
             chunks_elapsed += 1
             if chunks_elapsed > save_chunks:

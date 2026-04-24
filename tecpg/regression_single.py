@@ -189,7 +189,7 @@ def regression_single(
     i = 0
     last_time = time.time()
     futures = []
-    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=2) if regressions_per_chunk else nullcontext() as pool:
+    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=logger.carry_data.get('save_threads', 2)) if regressions_per_chunk else nullcontext() as pool:
         for (gene_site, G_row) in G.iterrows():
             throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
 
