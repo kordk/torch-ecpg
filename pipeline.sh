@@ -14,12 +14,12 @@ fi
 
 if [ "$DATASET" == "gtp" ]; then
     TOTAL_TESTS=13744315260 # Approximate full GTP size
-    M_CHUNK=10000
-    G_CHUNK=10000
+    M_CHUNK=5000
+    G_CHUNK=100
 elif [ "$DATASET" == "mesa" ]; then
     TOTAL_TESTS=10000000000 # Placeholder for MESA
-    M_CHUNK=10000
-    G_CHUNK=10000
+    M_CHUNK=5000
+    G_CHUNK=100
 elif [ "$DATASET" == "dummy" ]; then
     TOTAL_TESTS=1000000 # 1000 M * 1000 G
     M_CHUNK=500
@@ -49,7 +49,7 @@ if [ "$DATASET" == "dummy" ]; then
     mv annot/* "$ANNOT_DIR/"
     rmdir data annot
 elif [ "$DATASET" == "gtp" ]; then
-    echo "y" | tecpg data gtp
+    echo "y" | tecpg data gtp --yes
     mv data/* "$DATA_DIR/"
     # For GTP, assuming the demo annots are used
     cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6"
@@ -78,6 +78,7 @@ echo "Calculated Degrees of Freedom: $DF"
 
 # Stage 2: Mapping (lstsq + ig)
 echo "[2/8] Performing eQTM Mapping (lstsq + IG)..."
+echo "[2/8] m chunks: $M_CHUNK g chunks: $G_CHUNK"
 tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --all -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig
 
 # Stage 3: Merge chunked outputs
