@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+export PYTHONUNBUFFERED=1
+
 # Log function for timestamps
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
@@ -19,12 +21,12 @@ fi
 
 if [ "$DATASET" == "gtp" ]; then
     TOTAL_TESTS=13744315260 # Approximate full GTP size
-    M_CHUNK=5000
-    G_CHUNK=100
+    M_CHUNK=100000
+    G_CHUNK=1000
 elif [ "$DATASET" == "mesa" ]; then
     TOTAL_TESTS=10000000000 # Placeholder for MESA
-    M_CHUNK=5000
-    G_CHUNK=100
+    M_CHUNK=100000
+    G_CHUNK=1000
 elif [ "$DATASET" == "dummy" ]; then
     TOTAL_TESTS=1000000 # 1000 M * 1000 G
     M_CHUNK=500
