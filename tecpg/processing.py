@@ -1,7 +1,8 @@
 import math
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 from collections import deque
 from typing import Literal, Optional
 
@@ -68,6 +69,55 @@ def tecpg_mlr_lstsq(
         gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
     )
 
+    # Use the process pool
+    max_workers = logger.carry_data.get('save_threads', 2)
+    ctx = multiprocessing.get_context('spawn')
+    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
+        _ = list(pool.map(int, range(max_workers)))
+        return _tecpg_mlr_lstsq_inner(
+            M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
+            gene_loci_per_chunk, meth_loci_per_chunk, p_thresh, output_dir,
+            methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
+            file_format, reservoir_count, subsample_mt_count, subsample_g_count, seed,
+            permute_label_test, compute_ig, compute_ig_deep, ig_baseline,
+            ig_covariates_filter, pool, max_workers, logger=logger, chunking=chunking
+        )
+
+def _tecpg_mlr_lstsq_inner(
+    M: pandas.DataFrame,
+    G: pandas.DataFrame,
+    C: pandas.DataFrame,
+    M_annot: Optional[pandas.DataFrame] = None,
+    G_annot: Optional[pandas.DataFrame] = None,
+    region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
+    window_base: Optional[int] = None,
+    downstream: Optional[int] = None,
+    upstream: Optional[int] = None,
+    gene_loci_per_chunk: Optional[int] = None,
+    meth_loci_per_chunk: Optional[int] = None,
+    p_thresh: Optional[float] = None,
+    output_dir: Optional[str] = None,
+    methylation_only: bool = True,
+    p_only: bool = False,
+    logit_transform: bool = False,
+    thermal_threshold: int = 80,
+    thermal_wait: int = 30,
+    file_format: str = '{meth_chunk}-{gene_chunk}.csv',
+    reservoir_count: Optional[int] = None,
+    subsample_mt_count: Optional[int] = None,
+    subsample_g_count: Optional[int] = None,
+    seed: int = 42,
+    permute_label_test: bool = False,
+    compute_ig: bool = False,
+    compute_ig_deep: bool = False,
+    ig_baseline: str = 'mean',
+    ig_covariates_filter: Optional[list] | str = None,
+    pool: ProcessPoolExecutor = None,
+    max_workers: int = 2,
+    *,
+    logger: Logger = Logger(),
+    chunking: bool = False,
+) -> Optional[pandas.DataFrame]:
     # Detect errors in the input values
     if (output_dir is None) != (not chunking):
         error = 'Output dir and chunk size must be defined together.'
@@ -281,10 +331,9 @@ def tecpg_mlr_lstsq(
 
     methylation_loop_start_time = time.time()
 
-    # Use the thread pool
+    # Use the process pool
     futures = deque()
-    max_workers = logger.carry_data.get('save_threads', 2)
-    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=max_workers) as pool:
+    with gpu_guardian(logger) as gpu_handle:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in range(meth_chunk_count):

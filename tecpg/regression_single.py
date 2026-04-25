@@ -1,8 +1,9 @@
 import os
 import time
+import multiprocessing
 from collections import deque
 from contextlib import nullcontext
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from typing import Literal, Optional, Tuple
 
 import numpy
@@ -89,6 +90,40 @@ def regression_single(
     overlap and redundance of multiple matrix multiplications with
     similar inputs.
     """
+    max_workers = logger.carry_data.get('save_threads', 2)
+    ctx = multiprocessing.get_context('spawn')
+    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) if regressions_per_chunk else nullcontext() as pool:
+        if pool is not None:
+            _ = list(pool.map(int, range(max_workers)))
+        return _regression_single_inner(
+            M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
+            regressions_per_chunk, p_thresh, output_dir, methylation_only, p_only,
+            thermal_threshold, thermal_wait, file_format, pool, max_workers, logger
+        )
+
+
+def _regression_single_inner(
+    M: pandas.DataFrame,
+    G: pandas.DataFrame,
+    C: pandas.DataFrame,
+    M_annot: Optional[pandas.DataFrame] = None,
+    G_annot: Optional[pandas.DataFrame] = None,
+    region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
+    window_base: Optional[int] = None,
+    downstream: Optional[int] = None,
+    upstream: Optional[int] = None,
+    regressions_per_chunk: Optional[int] = None,
+    p_thresh: Optional[float] = None,
+    output_dir: Optional[str] = None,
+    methylation_only: bool = True,
+    p_only: bool = False,
+    thermal_threshold: int = 80,
+    thermal_wait: int = 30,
+    file_format: str = '{chunk}.csv',
+    pool: Optional[ProcessPoolExecutor] = None,
+    max_workers: int = 2,
+    logger: Logger = Logger(),
+) -> Optional[pandas.DataFrame]:
     if region not in ['all', 'cis', 'distal', 'trans']:
         error = f'Region {region} not valid. Use all, cis, distal, or trans.'
         logger.error(error)
@@ -190,8 +225,7 @@ def regression_single(
     i = 0
     last_time = time.time()
     futures = deque()
-    max_workers = logger.carry_data.get('save_threads', 2)
-    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=max_workers) if regressions_per_chunk else nullcontext() as pool:
+    with gpu_guardian(logger) as gpu_handle:
         for (gene_site, G_row) in G.iterrows():
             throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
 

@@ -1,7 +1,8 @@
 import math
 import os
+import multiprocessing
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from typing import Optional
 
 import pandas
@@ -232,54 +233,67 @@ def pearson_chunk_save_tensor(
     inner_logger = logger.alias()
     inner_logger.start_timer('info', 'Calculating chunks...')
     logger.start_counter('info', '')
+    max_workers = logger.carry_data.get('save_threads', 2)
+    ctx = multiprocessing.get_context('spawn')
+    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
+        _ = list(pool.map(int, range(max_workers)))
+        return _pearson_chunk_save_tensor_inner(
+            M, G, M_t, G_t, chunks, save_chunks, output_dir, n, flatten,
+            chunk_rows, save_chunk_count, G_means, G_std, max_workers,
+            pool, logger, inner_logger
+        )
+
+def _pearson_chunk_save_tensor_inner(
+    M, G, M_t, G_t, chunks, save_chunks, output_dir, n, flatten,
+    chunk_rows, save_chunk_count, G_means, G_std, max_workers,
+    pool, logger, inner_logger
+):
     chunks_elapsed = 0
     corr_pd = pandas.DataFrame()
     futures = deque()
-    max_workers = logger.carry_data.get('save_threads', 2)
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for i in range(0, len(M_t), chunk_rows):
-            chunks_elapsed += 1
-            if chunks_elapsed > save_chunks:
-                chunks_elapsed = 1
-                file_name = str(logger.current_count + 1) + '.csv'
-                file_path = os.path.join(output_dir, file_name)
-                logger.count('Saving part {i}/{0}', save_chunk_count)
-                if flatten:
-                    corr_pd = corr_pd.stack()
-                    corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
-                while len(futures) >= max_workers + 1:
-                    futures.popleft().result()
-                futures.append(pool.submit(
-                    save_dataframe_part, corr_pd, file_path, **dict(logger)
-                ))
-                del corr_pd
-                corr_pd = pandas.DataFrame()
+    for i in range(0, len(M_t), chunk_rows):
+        chunks_elapsed += 1
+        if chunks_elapsed > save_chunks:
+            chunks_elapsed = 1
+            file_name = str(logger.current_count + 1) + '.csv'
+            file_path = os.path.join(output_dir, file_name)
+            logger.count('Saving part {i}/{0}', save_chunk_count)
+            if flatten:
+                corr_pd = corr_pd.stack()
+                corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
+            while len(futures) >= max_workers + 1:
+                futures.popleft().result()
+            futures.append(pool.submit(
+                save_dataframe_part, corr_pd, file_path, **dict(logger)
+            ))
+            del corr_pd
+            corr_pd = pandas.DataFrame()
 
-            j = i + chunk_rows
-            M_chunk = M_t[i:j]
-            corr_pd = corr_pd.append(
-                pandas.DataFrame(
+        j = i + chunk_rows
+        M_chunk = M_t[i:j]
+        corr_pd = corr_pd.append(
+            pandas.DataFrame(
+                (
                     (
-                        (
-                            M_chunk @ G_t.T
-                            - M_chunk.mean(axis=1).outer(G_means) * n
-                        )
-                        / (M_chunk.std(axis=1).outer(G_std) * (n - 1))
-                    ).tolist(),
-                    index=M.index[i:j],
-                    columns=G.index,
-                )
+                        M_chunk @ G_t.T
+                        - M_chunk.mean(axis=1).outer(G_means) * n
+                    )
+                    / (M_chunk.std(axis=1).outer(G_std) * (n - 1))
+                ).tolist(),
+                index=M.index[i:j],
+                columns=G.index,
             )
-            del M_chunk
-            inner_logger.time(
-                'Completed chunk {i}/{0} in {l} seconds. Average chunk time:'
-                ' {a} seconds',
-                chunks,
-            )
-            inner_logger.info(
-                'Estimated time remaining: {0} seconds',
-                inner_logger.remaining_time(chunks),
-            )
+        )
+        del M_chunk
+        inner_logger.time(
+            'Completed chunk {i}/{0} in {l} seconds. Average chunk time:'
+            ' {a} seconds',
+            chunks,
+        )
+        inner_logger.info(
+            'Estimated time remaining: {0} seconds',
+            inner_logger.remaining_time(chunks),
+        )
 
         file_name = str(logger.current_count + 1) + '.csv'
         file_path = os.path.join(output_dir, file_name)
