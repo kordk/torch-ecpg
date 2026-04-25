@@ -1,6 +1,7 @@
 import os
 import time
 import torch
+import threading
 from contextlib import contextmanager
 from .logger import Logger
 
@@ -9,6 +10,74 @@ try:
     HAS_PYNVML = True
 except ImportError:
     HAS_PYNVML = False
+
+
+class ThermalMonitor:
+    def __init__(self, handle, threshold: int, logger: Logger, poll_interval: float = 2.0):
+        self.handle = handle
+        self.threshold = threshold
+        self.logger = logger
+        self.poll_interval = poll_interval
+
+        self.last_temp = -1
+        self.cool_event = threading.Event()
+        self.cool_event.set()
+
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def start(self):
+        if self.handle is None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def _run(self):
+        was_hot = False
+        while not self._stop_event.is_set():
+            temp = get_gpu_temp(self.handle)
+            self.last_temp = temp
+
+            if temp > self.threshold:
+                if not was_hot:
+                    self.logger.warning(f"GPU temperature {temp}C exceeds threshold {self.threshold}C. Throttling active.")
+                    was_hot = True
+                self.cool_event.clear()
+            else:
+                if was_hot:
+                    self.logger.info(f"GPU temperature dropped to {temp}C. Resuming processing.")
+                    was_hot = False
+                self.cool_event.set()
+
+            self._stop_event.wait(self.poll_interval)
+
+    def should_throttle(self) -> bool:
+        if self.handle is None:
+            return False
+        return not self.cool_event.is_set()
+
+
+class DummyThermalMonitor:
+    def __init__(self):
+        self.handle = None
+        self.last_temp = -1
+        self.cool_event = threading.Event()
+        self.cool_event.set()
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def should_throttle(self) -> bool:
+        return False
+
 
 def _normalize_uuid(uuid) -> str:
     """Helper to normalize UUID strings for comparison."""
@@ -157,34 +226,37 @@ def get_gpu_temp(handle: object) -> int:
     except pynvml.NVMLError:
         return -1
 
-def report_thermal_status(handle: object, threshold: int, logger: Logger):
-    """Reports the current GPU temperature and thermal threshold."""
-    if handle is None:
+def report_thermal_status(monitor: object, threshold: int, logger: Logger):
+    """Reports the current GPU temperature from the monitor and the thermal threshold."""
+    if monitor is None or monitor.handle is None:
         logger.info("GPU Thermal Status: Monitor not active")
         return
 
-    temp = get_gpu_temp(handle)
+    temp = monitor.last_temp
     if temp == -1:
         logger.warning("GPU Thermal Status: Error reading temperature (Threshold: {0}C)", threshold)
     else:
         logger.info("GPU Thermal Status: {0}C (Threshold: {1}C)", temp, threshold)
 
-def throttle_if_needed(handle: object, threshold: int, wait_time: int, logger: Logger):
-    """Checks GPU temperature and sleeps if it exceeds the threshold."""
-    if handle is None:
+def throttle_if_needed(monitor: object, threshold: int, wait_time: int, logger: Logger):
+    """Sleeps if the monitor indicates the GPU exceeds the thermal threshold."""
+    if monitor is None or not monitor.should_throttle():
         return
 
     try:
-        temp = get_gpu_temp(handle)
-        if temp > threshold:
-            logger.warning(f"GPU temperature {temp}C exceeds threshold {threshold}C. Throttling for {wait_time}s...")
-            time.sleep(wait_time)
-
+        # It's hot! Wait for the event to be set (cooling down)
+        # We cap the wait at wait_time just to ensure we periodically wake
+        # but cool_event.wait will return immediately when cool.
+        monitor.cool_event.wait(timeout=wait_time)
     except Exception as e:
-        logger.warning(f"Error during thermal check: {e}")
+        logger.warning(f"Error during thermal check wait: {e}")
 
-def shutdown_gpu_monitor(handle: object):
-    """Shuts down NVML."""
+def shutdown_gpu_monitor(monitor: object):
+    """Stops the thermal monitor thread and shuts down NVML."""
+    if monitor is None:
+        return
+    monitor.stop()
+    handle = monitor.handle
     if handle is None:
         return
     try:
@@ -194,10 +266,16 @@ def shutdown_gpu_monitor(handle: object):
         pass
 
 @contextmanager
-def gpu_guardian(logger: Logger):
+def gpu_guardian(logger: Logger, thermal_threshold: int = 80):
     """Context manager for GPU monitoring lifecycle."""
     handle = init_gpu_monitor(logger)
+    if handle is not None:
+        monitor = ThermalMonitor(handle, thermal_threshold, logger)
+    else:
+        monitor = DummyThermalMonitor()
+
+    monitor.start()
     try:
-        yield handle
+        yield monitor
     finally:
-        shutdown_gpu_monitor(handle)
+        shutdown_gpu_monitor(monitor)

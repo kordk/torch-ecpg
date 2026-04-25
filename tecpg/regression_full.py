@@ -310,14 +310,14 @@ def _regression_full_inner(
 
     # Use the process pool
     futures = deque()
-    with gpu_guardian(logger) as gpu_handle:
+    with gpu_guardian(logger, thermal_threshold) as gpu_monitor:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in (
             (0,) if meth_loci_per_chunk is None else range(meth_chunk_count)
         ):
-            throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
-            report_thermal_status(gpu_handle, thermal_threshold, logger)
+            throttle_if_needed(gpu_monitor, thermal_threshold, thermal_wait, logger)
+            report_thermal_status(gpu_monitor, thermal_threshold, logger)
 
             logger.memory_check('regression_full')
             # Log methylation chunk index

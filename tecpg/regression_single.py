@@ -224,9 +224,9 @@ def _regression_single_inner(
     i = 0
     last_time = time.time()
     futures = deque()
-    with gpu_guardian(logger) as gpu_handle:
+    with gpu_guardian(logger, thermal_threshold) as gpu_monitor:
         for (gene_site, G_row) in G.iterrows():
-            throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
+            throttle_if_needed(gpu_monitor, thermal_threshold, thermal_wait, logger)
 
             y = torch.tensor(G_row.to_numpy(), dtype=torch.float32).to(device)
             for (meth_site, M_row) in M.iterrows():
