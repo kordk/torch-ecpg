@@ -5,5 +5,5 @@ def main() -> None:
     # Starts the command line interface
     start()
 
-
-main()
+if __name__ == '__main__':
+    main()
