@@ -96,9 +96,9 @@ def regression_single(
         if pool is not None:
             _ = list(pool.map(int, range(max_workers)))
         return _regression_single_inner(
-            M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
-            regressions_per_chunk, p_thresh, output_dir, methylation_only, p_only,
-            thermal_threshold, thermal_wait, file_format, pool, max_workers, logger
+            M, G, C, include, M_annot, G_annot, region, window,
+            regressions_per_chunk, p_thresh, output_dir, methylation_only, logit_transform, update_period,
+            thermal_threshold, thermal_wait, pool, max_workers, logger
         )
 
 
@@ -106,24 +106,23 @@ def _regression_single_inner(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
     C: pandas.DataFrame,
+    include: Tuple[bool, bool, bool, bool] = (True, True, True, True),
     M_annot: Optional[pandas.DataFrame] = None,
     G_annot: Optional[pandas.DataFrame] = None,
     region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
-    window_base: Optional[int] = None,
-    downstream: Optional[int] = None,
-    upstream: Optional[int] = None,
+    window: Optional[int] = None,
     regressions_per_chunk: Optional[int] = None,
     p_thresh: Optional[float] = None,
     output_dir: Optional[str] = None,
     methylation_only: bool = True,
-    p_only: bool = False,
+    logit_transform: bool = False,
+    update_period: Optional[float] = 1,
     thermal_threshold: int = 80,
     thermal_wait: int = 30,
-    file_format: str = '{chunk}.csv',
     pool: Optional[ProcessPoolExecutor] = None,
     max_workers: int = 2,
     logger: Logger = Logger(),
-) -> Optional[pandas.DataFrame]:
+) -> pandas.DataFrame:
     if region not in ['all', 'cis', 'distal', 'trans']:
         error = f'Region {region} not valid. Use all, cis, distal, or trans.'
         logger.error(error)
