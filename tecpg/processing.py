@@ -2,6 +2,7 @@ import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 from typing import Literal, Optional
 
 import numpy
@@ -281,8 +282,9 @@ def tecpg_mlr_lstsq(
     methylation_loop_start_time = time.time()
 
     # Use the thread pool
-    futures = []
-    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=logger.carry_data.get('save_threads', 2)) as pool:
+    futures = deque()
+    max_workers = logger.carry_data.get('save_threads', 2)
+    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=max_workers) as pool:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in range(meth_chunk_count):
@@ -842,11 +844,15 @@ def tecpg_mlr_lstsq(
                         'Saving part {i}/{0}',
                         gene_chunk_count,
                     )
+                    # Backpressure: keep at most max_workers + 1 tasks in flight
+                    while len(futures) >= max_workers + 1:
+                        futures.popleft().result()
                     futures.append(pool.submit(
                         save_dataframe_part,
                         out, file_path, gene_chunk_index + 1,
                         **dict(mc_logger),
                     ))
+                    del out, gt_sites, mt_sites, index_chunk
                     del results[:]
 
                     # Force GC
@@ -899,11 +905,15 @@ def tecpg_mlr_lstsq(
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )
+                    # Backpressure: keep at most max_workers + 1 tasks in flight
+                    while len(futures) >= max_workers + 1:
+                        futures.popleft().result()
                     futures.append(pool.submit(
                         save_dataframe_part,
                         out, file_path, meth_chunk_index + 1,
                         **dict(mc_logger),
                     ))
+                    del out, gt_sites, mt_sites, index_chunk
                     del results[:]
 
             completed_chunks = meth_chunk_index + 1
@@ -923,8 +933,8 @@ def tecpg_mlr_lstsq(
         # Wait for chunks
         if chunking:
             logger.time('Waiting for chunks to save...')
-            for future in futures:
-                future.result()
+            while futures:
+                futures.popleft().result()
             pool.shutdown(wait=True)
             logger.time('Finished waiting for chunks to save in {l} seconds')
 
