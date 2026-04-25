@@ -333,12 +333,12 @@ def _tecpg_mlr_lstsq_inner(
 
     # Use the process pool
     futures = deque()
-    with gpu_guardian(logger) as gpu_handle:
+    with gpu_guardian(logger, thermal_threshold) as gpu_monitor:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
         for meth_chunk_index in range(meth_chunk_count):
-            throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
-            report_thermal_status(gpu_handle, thermal_threshold, logger)
+            throttle_if_needed(gpu_monitor, thermal_threshold, thermal_wait, logger)
+            report_thermal_status(gpu_monitor, thermal_threshold, logger)
 
             logger.memory_check('tecpg_mlr_lstsq')
             # Log methylation chunk index
@@ -424,11 +424,21 @@ def _tecpg_mlr_lstsq_inner(
             # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
             # We need the diagonal elements.
             Q, R = torch.linalg.qr(X, mode='reduced')
+
+            # K is ncols + 1 (because X is cat(ones, Mt, Ct)). Mt adds 1 column. Ct adds ncols - 1 (since ncols is C.shape[1] + 1)
+            # Actually, C.shape[1] is number of covariates.
+            # X = [ones(1), Mt(1), Ct(C.shape[1])]
+            # So K = 1 + 1 + C.shape[1] = C.shape[1] + 2
+            # Notice above: `ncols = C.shape[1] + 1`, which means `ncols` is missing the `Mt` column!
+            # So `K = X.shape[2]`
+            K = X.shape[2]
+
             # Calculate R_inv. R is upper triangular.
-            # torch.linalg.inv works, or solve_triangular
-            # For batch, inv is fine.
-            R_inv = torch.linalg.inv(R)
-            # XtXi_diag = sum(R_inv^2, dim=2) ? No.
+            R_inv = torch.linalg.solve_triangular(
+                R,
+                torch.eye(K, device=device, dtype=dtype).expand(mt_count, -1, -1),
+                upper=True
+            )
             # (R^-1)(R^-1)^T diagonal is sum of squares of rows of R^-1.
             # R_inv is (M, K, K).
             # We want diag((R_inv) @ (R_inv).mT)
@@ -473,9 +483,9 @@ def _tecpg_mlr_lstsq_inner(
 
                 # Solve reusing Q and R_inv from QR decomposition
                 # Q is (M_chunk, S, K). Y is (S, G_chunk).
-                # Batched matmul broadcasts Y: (M_chunk, K, S) @ (S, G_chunk) -> (M_chunk, K, G_chunk)
-                QtY = Q.mT.matmul(Y)
-                inner_logger.memory_check('tecpg_mlr_lstsq - target expanded')
+                # To avoid materializing Y_expanded, do QtY = torch.einsum('msk,sg->mkg', Q, Y)
+                QtY = torch.einsum('msk,sg->mkg', Q, Y)
+                inner_logger.memory_check('tecpg_mlr_lstsq - QtY computed')
 
                 # Coefficients B
                 B = R_inv.matmul(QtY) # (M_chunk, K, G_chunk)
@@ -486,7 +496,7 @@ def _tecpg_mlr_lstsq_inner(
                 Y_norm_sq = (Y * Y).sum(dim=0) # (G_chunk,)
                 QtY_norm_sq = (QtY * QtY).sum(dim=1) # (M_chunk, G_chunk)
 
-                # clamp_min(0) guards against float32 cancellation producing small negatives, not for NaN handling
+                # clamp_min(0) guards against float32 cancellation producing small negatives
                 RSS = (Y_norm_sq.unsqueeze(0) - QtY_norm_sq).clamp_min(0) # (M_chunk, G_chunk)
                 inner_logger.memory_check('tecpg_mlr_lstsq - RSS (no E)')
 

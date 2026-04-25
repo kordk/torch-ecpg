@@ -163,3 +163,65 @@ class TestGPUUUIDMatching(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+import unittest
+from unittest.mock import MagicMock
+import time
+
+class TestThermalMonitorLifecycle(unittest.TestCase):
+    def test_thermal_monitor_lifecycle(self):
+        from tecpg.logger import Logger
+        import tecpg.gpu_monitor
+
+        # Mock get_gpu_temp
+        temp_values = [40, 85, 90, 75, 40]
+        temp_idx = [0]
+
+        def mock_get_gpu_temp(handle):
+            if temp_idx[0] < len(temp_values):
+                val = temp_values[temp_idx[0]]
+                temp_idx[0] += 1
+                return val
+            return 40
+
+        original_get_gpu_temp = tecpg.gpu_monitor.get_gpu_temp
+        tecpg.gpu_monitor.get_gpu_temp = mock_get_gpu_temp
+
+        try:
+            logger = MagicMock(spec=Logger)
+            monitor = tecpg.gpu_monitor.ThermalMonitor(handle="dummy_handle", threshold=80, logger=logger, poll_interval=0.01)
+
+            # Initially cool_event should be set
+            self.assertTrue(monitor.cool_event.is_set())
+            self.assertFalse(monitor.should_throttle())
+
+            # Start thread
+            monitor.start()
+
+            # Poll until cool_event is cleared
+            timeout = time.time() + 1.0
+            while monitor.cool_event.is_set() and time.time() < timeout:
+                time.sleep(0.01)
+
+            # At this point, temp is 85 or 90 > threshold 80. cool_event should be clear
+            self.assertFalse(monitor.cool_event.is_set())
+            self.assertTrue(monitor.should_throttle())
+            self.assertIn(monitor.last_temp, [85, 90])
+
+            # Poll until cool_event is set again
+            timeout = time.time() + 1.0
+            while not monitor.cool_event.is_set() and time.time() < timeout:
+                time.sleep(0.01)
+
+            # Temp is now 40 < threshold 80. cool_event should be set
+            self.assertTrue(monitor.cool_event.is_set())
+            self.assertFalse(monitor.should_throttle())
+            self.assertIn(monitor.last_temp, [40, 75])
+
+            # Stop thread
+            monitor.stop()
+            self.assertFalse(monitor._thread.is_alive())
+        finally:
+            tecpg.gpu_monitor.get_gpu_temp = original_get_gpu_temp
+
+if __name__ == '__main__':
+    unittest.main()
