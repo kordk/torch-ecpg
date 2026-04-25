@@ -1,5 +1,6 @@
 import os
 import time
+from collections import deque
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, Optional, Tuple
@@ -188,8 +189,9 @@ def regression_single(
     inner_logger.start_timer('info', 'Calculating chunks...')
     i = 0
     last_time = time.time()
-    futures = []
-    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=logger.carry_data.get('save_threads', 2)) if regressions_per_chunk else nullcontext() as pool:
+    futures = deque()
+    max_workers = logger.carry_data.get('save_threads', 2)
+    with gpu_guardian(logger) as gpu_handle, ThreadPoolExecutor(max_workers=max_workers) if regressions_per_chunk else nullcontext() as pool:
         for (gene_site, G_row) in G.iterrows():
             throttle_if_needed(gpu_handle, thermal_threshold, thermal_wait, logger)
 
@@ -270,6 +272,8 @@ def regression_single(
                             + ('' if filter_p else '/{0}'),
                             regressions // regressions_per_chunk,
                         )
+                        while len(futures) >= max_workers + 1:
+                            futures.popleft().result()
                         futures.append(pool.submit(
                             save_dataframe_part,
                             out_df, file_path,
@@ -304,15 +308,18 @@ def regression_single(
                 'Saving part {i}' + ('' if filter_p else '/{0}'),
                 regressions // regressions_per_chunk,
             )
+            while len(futures) >= max_workers + 1:
+                futures.popleft().result()
             futures.append(pool.submit(
                 save_dataframe_part,
                 out_df, file_path,
                 **dict(logger),
             ))
+            del out_df
 
         if regressions_per_chunk:
-            for future in futures:
-                future.result()
+            while futures:
+                futures.popleft().result()
             pool.shutdown(wait=True)
 
     logger.time('Calculated regression_single in {t} seconds')

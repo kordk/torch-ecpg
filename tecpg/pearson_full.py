@@ -1,5 +1,6 @@
 import math
 import os
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -233,8 +234,9 @@ def pearson_chunk_save_tensor(
     logger.start_counter('info', '')
     chunks_elapsed = 0
     corr_pd = pandas.DataFrame()
-    futures = []
-    with ThreadPoolExecutor(max_workers=logger.carry_data.get('save_threads', 2)) as pool:
+    futures = deque()
+    max_workers = logger.carry_data.get('save_threads', 2)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for i in range(0, len(M_t), chunk_rows):
             chunks_elapsed += 1
             if chunks_elapsed > save_chunks:
@@ -245,6 +247,8 @@ def pearson_chunk_save_tensor(
                 if flatten:
                     corr_pd = corr_pd.stack()
                     corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
+                while len(futures) >= max_workers + 1:
+                    futures.popleft().result()
                 futures.append(pool.submit(
                     save_dataframe_part, corr_pd, file_path, **dict(logger)
                 ))
@@ -283,12 +287,15 @@ def pearson_chunk_save_tensor(
         if flatten:
             corr_pd = corr_pd.stack()
             corr_pd.index.set_names(['mt_id', 'gt_id'], inplace=True)
+        while len(futures) >= max_workers + 1:
+            futures.popleft().result()
         futures.append(pool.submit(
             save_dataframe_part, corr_pd, file_path, **dict(logger)
         ))
+        del corr_pd
 
-        for future in futures:
-            future.result()
+        while futures:
+            futures.popleft().result()
         pool.shutdown(wait=True)
 
     logger.time('Calculated pearson_chunk_tensor in {t} seconds')

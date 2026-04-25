@@ -132,4 +132,5 @@ def save_dataframe_part(
         ),
         mode=mode,
         header=first,
+        chunksize=logger.carry_data.get('csv_chunksize', 100_000),
     )
