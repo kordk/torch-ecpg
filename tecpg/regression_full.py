@@ -244,14 +244,9 @@ def regression_full(
         ]
 
     # Create covariate tensor
-    if meth_loci_per_chunk is None:
-        Ct: torch.Tensor = torch.tensor(
-            C.to_numpy(), device=device, dtype=dtype
-        ).repeat(len(M), 1, 1)
-    else:
-        Ct: torch.Tensor = torch.tensor(
-            C.to_numpy(), device=device, dtype=dtype
-        ).repeat(meth_loci_per_chunk, 1, 1)
+    Ct_base: torch.Tensor = torch.tensor(
+        C.to_numpy(), device=device, dtype=dtype
+    ).unsqueeze(0)
 
     # Initialize variables for use in the regression calculation loop
     end_index = 0
@@ -300,12 +295,11 @@ def regression_full(
                 start_index = end_index
                 end_index = (meth_chunk_index + 1) * meth_loci_per_chunk
                 M_chunk = M[start_index:end_index]
-                if len(M_chunk) < meth_loci_per_chunk:
-                    Ct = Ct[: len(M_chunk)]
             else:
                 M_chunk = M
 
             mt_count = len(M_chunk)
+            Ct = Ct_base.expand(mt_count, -1, -1)
             mt_site_names = numpy.array(M_chunk.index.values)
             if region == 'all' and p_thresh is None:
                 output_sizes = mt_count

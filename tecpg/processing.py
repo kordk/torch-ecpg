@@ -240,14 +240,9 @@ def tecpg_mlr_lstsq(
         columns.extend(ig_columns)
 
     # Create covariate tensor
-    if meth_loci_per_chunk is None:
-        Ct_base: torch.Tensor = torch.tensor(
-            C.to_numpy(), device=device, dtype=dtype
-        ).repeat(len(M), 1, 1)
-    else:
-        Ct_base: torch.Tensor = torch.tensor(
-            C.to_numpy(), device=device, dtype=dtype
-        ).repeat(meth_loci_per_chunk, 1, 1)
+    Ct_base: torch.Tensor = torch.tensor(
+        C.to_numpy(), device=device, dtype=dtype
+    ).unsqueeze(0)
 
     # Initialize variables for use in the regression calculation loop
     end_index = 0
@@ -311,17 +306,13 @@ def tecpg_mlr_lstsq(
                 start_index = end_index
                 end_index = (meth_chunk_index + 1) * meth_loci_per_chunk
                 M_chunk = M[start_index:end_index]
-                if len(M_chunk) < meth_loci_per_chunk:
-                    Ct = Ct_base[: len(M_chunk)]
-                else:
-                    Ct = Ct_base
             else:
                 M_chunk = M
-                Ct = Ct_base
                 start_index = 0
                 end_index = len(M)
 
             mt_count = len(M_chunk)
+            Ct = Ct_base.expand(mt_count, -1, -1)
             mt_site_names = numpy.array(M_chunk.index.values)
             if region == 'all' and p_thresh is None:
                 # If no filtration, output size is constant per gene chunk

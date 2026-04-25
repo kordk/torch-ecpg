@@ -226,6 +226,7 @@ def test_lstsq_memory_opt_various():
 
         if chunk:
             kwargs['gene_loci_per_chunk'] = 7
+            kwargs['meth_loci_per_chunk'] = 7
             kwargs['output_dir'] = 'test_mem_opt_out'
             if os.path.exists('test_mem_opt_out'):
                 shutil.rmtree('test_mem_opt_out')
@@ -379,6 +380,7 @@ def test_lstsq_memory_opt_various():
 
         if chunk:
             kwargs['gene_loci_per_chunk'] = 7
+            kwargs['meth_loci_per_chunk'] = 7
             kwargs['output_dir'] = 'test_mem_opt_out'
             if os.path.exists('test_mem_opt_out'):
                 shutil.rmtree('test_mem_opt_out')
