@@ -15,7 +15,7 @@ from .config import DTYPE, get_device
 from .gpu_monitor import gpu_guardian, report_thermal_status, throttle_if_needed
 from .helper import logit_transform_torch, trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
-from .logger import Logger
+from .logger import Logger, analyze_bottleneck
 
 
 def create_normal_p(device: torch.device, dtype: torch.dtype):
@@ -118,6 +118,21 @@ def _tecpg_mlr_lstsq_inner(
     logger: Logger = Logger(),
     chunking: bool = False,
 ) -> Optional[pandas.DataFrame]:
+
+    logger.print_startup_banner(
+        torch_version=torch.__version__,
+        cuda_version=torch.version.cuda if torch.cuda.is_available() else 'N/A',
+        device_name=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU',
+        vram_gb=torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0,
+        compute_cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'N/A',
+        mt_count=len(M),
+        gene_loci_per_chunk=gene_loci_per_chunk,
+        meth_loci_per_chunk=meth_loci_per_chunk,
+        dtype=str(DTYPE),
+        workers=max_workers,
+        **logger.resource_check()
+    )
+
     # Detect errors in the input values
     if (output_dir is None) != (not chunking):
         error = 'Output dir and chunk size must be defined together.'
@@ -468,6 +483,10 @@ def _tecpg_mlr_lstsq_inner(
             gene_end_index = 0
 
             for gene_chunk_index in range(gene_chunk_count):
+                prof_t0 = prof_t1 = prof_t2 = prof_t3 = prof_t4 = prof_t5 = time.perf_counter()
+                prof_prep_time = prof_h2d_time = prof_gpu_time = prof_d2h_time = prof_post_time = prof_write_time = 0.0
+                prof_t0 = time.perf_counter()
+
                 gene_start_index = gene_end_index
                 if gene_loci_per_chunk is not None:
                     gene_end_index = min((gene_chunk_index + 1) * gene_loci_per_chunk, len(G))
@@ -477,9 +496,19 @@ def _tecpg_mlr_lstsq_inner(
                 G_chunk_np = G_np[gene_start_index:gene_end_index]
                 chunk_len = gene_end_index - gene_start_index
 
+                if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                prof_t1 = time.perf_counter()
+                prof_prep_time += (prof_t1 - prof_t0)
+
                 # Transpose gene expression matrix to serve as target matrix Y
                 # G_chunk_np is (G_chunk, S). Transpose to (S, G_chunk).
                 Y = torch.tensor(G_chunk_np.T, device=device, dtype=dtype) # (S, G_chunk)
+
+                if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                prof_t2 = time.perf_counter()
+                prof_h2d_time += (prof_t2 - prof_t1)
 
                 # Solve reusing Q and R_inv from QR decomposition
                 # Q is (M_chunk, S, K). Y is (S, G_chunk).
@@ -897,6 +926,36 @@ def _tecpg_mlr_lstsq_inner(
                         columns=columns,
                     )
                     out.index.set_names(index_names, inplace=True)
+
+                    prof_t6 = time.perf_counter()
+                    prof_write_time += (prof_t6 - prof_t5)
+
+                    if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
+                        prof_total = prof_t6 - prof_t0
+                        M_c = len(M_chunk)
+                        G_c = chunk_len
+                        K_val = K
+                        S_val = S
+                        gflops = (2 * M_c * (K_val**2) * S_val + 2 * M_c * K_val * G_c * S_val) / 1e9 / max(prof_gpu_time, 1e-9)
+                        reg_sec = (M_c * G_c) / max(prof_total, 1e-9)
+
+                        res = inner_logger.resource_check()
+                        util_sm = gpu_gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
+
+                        inner_logger.debug(
+                            f"PROFILE chunk m={meth_chunk_index+1}/{meth_chunk_count} g={gene_chunk_index+1}/{gene_chunk_count} | "
+                            f"prep={prof_prep_time*1000:.1f}ms h2d={prof_h2d_time*1000:.1f}ms "
+                            f"gpu={prof_gpu_time*1000:.1f}ms d2h={prof_d2h_time*1000:.1f}ms "
+                            f"post={prof_post_time*1000:.1f}ms write={prof_write_time*1000:.1f}ms total={prof_total*1000:.1f}ms "
+                            f"reg/s={reg_sec:.2e} gflops={gflops:.1f} util_sm={util_sm:.1f}% ram_avail={res['ram_avail_gb']:.1f}GB"
+                        )
+
+                        bottleneck = analyze_bottleneck(
+                            prof_gpu_time, prof_total, prof_h2d_time, prof_d2h_time, prof_write_time,
+                            util_sm, res['ram_avail_gb'], res['cpu_percent']
+                        )
+                        if bottleneck:
+                            inner_logger.info(bottleneck)
 
                     # Save
                     mc_logger.count(
