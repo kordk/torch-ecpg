@@ -35,9 +35,42 @@ class ThermalMonitor:
         self._stop_event = threading.Event()
         self._thread = None
 
+    def _update_metrics(self):
+        temp = get_gpu_temp(self.handle)
+        self.last_temp = temp
+
+        if HAS_PYNVML:
+            try:
+                rates = pynvml.nvmlDeviceGetUtilizationRates(self.handle)
+                self.last_util_sm = rates.gpu
+                self.last_util_mem = rates.memory
+
+                self._sm_samples.append(rates.gpu)
+                if len(self._sm_samples) > self._max_samples:
+                    self._sm_samples.pop(0)
+                self.avg_util_sm = sum(self._sm_samples) / len(self._sm_samples)
+
+                power = pynvml.nvmlDeviceGetPowerUsage(self.handle)
+                self.last_power = power / 1000.0  # W
+
+                clock_sm = pynvml.nvmlDeviceGetClockInfo(self.handle, pynvml.NVML_CLOCK_SM)
+                clock_mem = pynvml.nvmlDeviceGetClockInfo(self.handle, pynvml.NVML_CLOCK_MEM)
+                self.last_clock_sm = clock_sm
+                self.last_clock_mem = clock_mem
+            except Exception:
+                pass
+
+        return temp
+
     def start(self):
         if self.handle is None:
             return
+
+        # Initial synchronous read to populate self.last_temp and metrics
+        # before the background thread starts, to prevent a race condition
+        # where the main thread immediately reads an uninitialized value.
+        self._update_metrics()
+
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -49,29 +82,7 @@ class ThermalMonitor:
     def _run(self):
         was_hot = False
         while not self._stop_event.is_set():
-            temp = get_gpu_temp(self.handle)
-            self.last_temp = temp
-
-            if HAS_PYNVML:
-                try:
-                    rates = pynvml.nvmlDeviceGetUtilizationRates(self.handle)
-                    self.last_util_sm = rates.gpu
-                    self.last_util_mem = rates.memory
-
-                    self._sm_samples.append(rates.gpu)
-                    if len(self._sm_samples) > self._max_samples:
-                        self._sm_samples.pop(0)
-                    self.avg_util_sm = sum(self._sm_samples) / len(self._sm_samples)
-
-                    power = pynvml.nvmlDeviceGetPowerUsage(self.handle)
-                    self.last_power = power / 1000.0  # W
-
-                    clock_sm = pynvml.nvmlDeviceGetClockInfo(self.handle, pynvml.NVML_CLOCK_SM)
-                    clock_mem = pynvml.nvmlDeviceGetClockInfo(self.handle, pynvml.NVML_CLOCK_MEM)
-                    self.last_clock_sm = clock_sm
-                    self.last_clock_mem = clock_mem
-                except Exception:
-                    pass
+            temp = self._update_metrics()
 
             if temp > self.threshold:
                 if not was_hot:

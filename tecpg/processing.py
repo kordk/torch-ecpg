@@ -940,7 +940,7 @@ def _tecpg_mlr_lstsq_inner(
                         reg_sec = (M_c * G_c) / max(prof_total, 1e-9)
 
                         res = inner_logger.resource_check()
-                        util_sm = gpu_gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
+                        util_sm = gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
 
                         inner_logger.debug(
                             f"PROFILE chunk m={meth_chunk_index+1}/{meth_chunk_count} g={gene_chunk_index+1}/{gene_chunk_count} | "
