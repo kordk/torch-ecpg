@@ -410,6 +410,7 @@ def _regression_full_inner(
             # Inner loop over each gene expression locus
             last_index = 0
             inner_logger.start_timer('info', 'Calculating regression...')
+            # TODO: Consider implementing --prefetch-chunks pattern here as done in processing.py
             for index, G_row in enumerate(G_np, 1):
                 Y = torch.tensor(G_row, device=device, dtype=dtype)
 

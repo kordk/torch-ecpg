@@ -456,6 +456,13 @@ To use the L4 GPU, the following re-mapping works:
 CUDA_VISIBLE_DEVICES=0,1 python tecpg run mlr --all --p-thresh 0.000001 -g 100 -m 100000
 ```
 
+## Performance tuning
+
+If VRAM is full but GPU SM% is low, try `--prefetch-chunks 2`; if CPU is saturated by writers, lower `--save-threads`; if host BLAS is fighting the GPU feeder, set `--blas-threads 2`.
+* `--prefetch-chunks` (`TECPG_PREFETCH`): Number of chunks to prefetch to the GPU to overlap with compute (default: 0).
+* `--save-threads` (`TECPG_SAVE_THREADS`): Number of CPU threads used for saving data (default: 2).
+* `--blas-threads` (`TECPG_BLAS_THREADS`): Number of threads for host BLAS/OpenMP operations (default: 0).
+
 ## Acknowledgements
 
 This work was partially supported by an NIH NCI MERIT award (R37, CA233774, PI: Kober) and Cancer Center Support Grant (P30, CA082103, Co-I: Olshen).

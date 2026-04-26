@@ -159,6 +159,7 @@ def pearson_chunk_tensor(
     )
     inner_logger.start_timer('info', 'Calculating chunks...')
     corr_pd = pandas.DataFrame()
+    # TODO: Consider implementing --prefetch-chunks pattern here as done in processing.py
     for i in range(0, len(M_t), chunk_rows):
         if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
             torch.cuda.synchronize()
