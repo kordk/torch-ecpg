@@ -154,8 +154,17 @@ from .tool import (
     '--save-threads',
     show_default=True,
     default=2,
+    envvar='TECPG_SAVE_THREADS',
     type=int,
     help='Number of threads used for saving data. Warning: increasing this value can result in an increase in performance with the cost of a large increase in CPU memory, use caution when increasing.',
+)
+@click.option(
+    '--blas-threads',
+    show_default=True,
+    default=0,
+    envvar='TECPG_BLAS_THREADS',
+    type=int,
+    help='Number of threads for BLAS/OpenMP operations. Env var TECPG_BLAS_THREADS is preferred. This CLI flag works via a pre-import shim.',
 )
 @click.pass_context
 def cli(
@@ -177,6 +186,7 @@ def cli(
     no_log_file: Optional[bool] = None,
     float_format: Optional[str] = None,
     save_threads: Optional[int] = None,
+    blas_threads: Optional[int] = None,
     obj: Optional[dict] = None,
 ) -> None:
     """The root cli group"""
@@ -211,6 +221,20 @@ def cli(
         logger.carry_data['save_threads'] = save_threads
     else:
         logger.carry_data['save_threads'] = 2
+
+    if blas_threads and blas_threads > 0:
+        env_omp = os.environ.get('OMP_NUM_THREADS')
+        if env_omp != str(blas_threads):
+            logger.warning(
+                'Warning: --blas-threads {} was passed, but OMP_NUM_THREADS is {}. '
+                'This may mean the env-var shim missed the flag. '
+                'Consider using TECPG_BLAS_THREADS directly.',
+                blas_threads, env_omp
+            )
+        logger.carry_data['blas_threads'] = blas_threads
+    else:
+        logger.carry_data['blas_threads'] = 0
+
     ctx.obj['logger'] = logger
 
 
@@ -407,6 +431,14 @@ def corr(
     type=click.Path(exists=True, dir_okay=False),
     help='Path to a text file containing covariates to output IG scores for (one per line).',
 )
+@click.option(
+    '--prefetch-chunks',
+    show_default=True,
+    default=0,
+    envvar='TECPG_PREFETCH',
+    type=int,
+    help='Number of chunks to prefetch to the GPU to overlap with compute (default 0).',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -437,6 +469,7 @@ def mlr(
     master_parquet: Optional[str],
     bootstrap_iterations: int,
     bootstrap_batch_size: int,
+    prefetch_chunks: int,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -533,6 +566,7 @@ def mlr(
         'compute_ig_deep': compute_ig_deep,
         'ig_baseline': ig_baseline,
         'ig_covariates_filter': ig_covariates_filter,
+        'prefetch_chunks': prefetch_chunks,
     }
 
     logger.info(

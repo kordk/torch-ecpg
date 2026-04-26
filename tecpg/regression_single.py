@@ -239,6 +239,7 @@ def _regression_single_inner(
     last_time = time.time()
     futures = deque()
     with gpu_guardian(logger, thermal_threshold) as gpu_monitor:
+        # TODO: Consider implementing --prefetch-chunks pattern here as done in processing.py
         for (gene_site, G_row) in G.iterrows():
             throttle_if_needed(gpu_monitor, thermal_threshold, thermal_wait, logger)
 

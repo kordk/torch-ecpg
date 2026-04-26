@@ -2,7 +2,7 @@ import math
 import os
 import time
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from collections import deque
 from typing import Literal, Optional
 
@@ -58,6 +58,7 @@ def tecpg_mlr_lstsq(
     compute_ig_deep: bool = False,
     ig_baseline: str = 'mean',
     ig_covariates_filter: Optional[list] | str = None,
+    prefetch_chunks: int = 0,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -80,7 +81,7 @@ def tecpg_mlr_lstsq(
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
             file_format, reservoir_count, subsample_mt_count, subsample_g_count, seed,
             permute_label_test, compute_ig, compute_ig_deep, ig_baseline,
-            ig_covariates_filter, pool, max_workers, logger=logger, chunking=chunking
+            ig_covariates_filter, prefetch_chunks, pool, max_workers, logger=logger, chunking=chunking
         )
 
 def _tecpg_mlr_lstsq_inner(
@@ -112,6 +113,7 @@ def _tecpg_mlr_lstsq_inner(
     compute_ig_deep: bool = False,
     ig_baseline: str = 'mean',
     ig_covariates_filter: Optional[list] | str = None,
+    prefetch_chunks: int = 0,
     pool: ProcessPoolExecutor = None,
     max_workers: int = 2,
     *,
@@ -119,6 +121,7 @@ def _tecpg_mlr_lstsq_inner(
     chunking: bool = False,
 ) -> Optional[pandas.DataFrame]:
 
+    import psutil
     logger.print_startup_banner(
         torch_version=torch.__version__,
         cuda_version=torch.version.cuda if torch.cuda.is_available() else 'N/A',
@@ -130,6 +133,13 @@ def _tecpg_mlr_lstsq_inner(
         meth_loci_per_chunk=meth_loci_per_chunk,
         dtype=str(DTYPE),
         workers=max_workers,
+        save_threads_effective=max_workers if max_workers > 0 else os.cpu_count(),
+        prefetch_chunks_effective=prefetch_chunks,
+        blas_threads_effective=os.environ.get('OMP_NUM_THREADS', 'N/A'),
+        torch_num_threads=torch.get_num_threads(),
+        torch_interop_threads=torch.get_num_interop_threads(),
+        cpu_count_logical=os.cpu_count(),
+        cpu_count_physical=psutil.cpu_count(logical=False),
         **logger.resource_check()
     )
 
@@ -348,6 +358,16 @@ def _tecpg_mlr_lstsq_inner(
 
     # Use the process pool
     futures = deque()
+
+    # Run summary diagnostics
+    total_chunks_saved = 0
+    total_bytes_written = 0
+    run_metrics = {
+        'prep_ms': [], 'h2d_ms': [], 'compute_ms': [], 'd2h_ms': [], 'post_ms': [],
+        'write_enqueue_ms': [], 'gpu_idle_between_chunks_ms': []
+    }
+    last_chunk_end_time = None
+
     with gpu_guardian(logger, thermal_threshold) as gpu_monitor:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
@@ -482,10 +502,35 @@ def _tecpg_mlr_lstsq_inner(
 
             gene_end_index = 0
 
+            # Setup prefetch executor
+            prefetch_executor = None
+            if prefetch_chunks > 0:
+                prefetch_executor = ThreadPoolExecutor(max_workers=prefetch_chunks)
+
+            prefetch_queue = deque()
+
+            def prep_chunk(g_start, g_end):
+                G_chunk_np = G_np[g_start:g_end]
+                # Pinned memory for fast H2D transfer
+                Y_host = torch.tensor(G_chunk_np.T, dtype=dtype).pin_memory()
+                # Non-blocking transfer to device
+                Y_dev = Y_host.to(device, non_blocking=True)
+                return Y_dev
+
             for gene_chunk_index in range(gene_chunk_count):
                 prof_t0 = prof_t1 = prof_t2 = prof_t3 = prof_t4 = prof_t5 = time.perf_counter()
                 prof_prep_time = prof_h2d_time = prof_gpu_time = prof_d2h_time = prof_post_time = prof_write_time = 0.0
+
+                # Prune ready futures for accurate save queue depth
+                while futures and futures[0].done():
+                    futures.popleft().result()
+                save_queue_depth = len(futures)
+
+                # Calculate prefetch fill
+                prefetch_fill = len(prefetch_queue) if prefetch_executor else 0
+
                 prof_t0 = time.perf_counter()
+                gpu_idle_between_chunks_ms = (prof_t0 - last_chunk_end_time) * 1000 if last_chunk_end_time else 0.0
 
                 gene_start_index = gene_end_index
                 if gene_loci_per_chunk is not None:
@@ -493,8 +538,26 @@ def _tecpg_mlr_lstsq_inner(
                 else:
                     gene_end_index = len(G)
 
-                G_chunk_np = G_np[gene_start_index:gene_end_index]
                 chunk_len = gene_end_index - gene_start_index
+
+                # Enqueue prefetch tasks to fill the pipeline up to prefetch_chunks
+                if prefetch_executor:
+                    # Current chunk enqueued if not already there
+                    if len(prefetch_queue) == 0:
+                        prefetch_queue.append(prefetch_executor.submit(prep_chunk, gene_start_index, gene_end_index))
+
+                    # Future chunks
+                    lookahead_start = gene_end_index
+                    for offset in range(1, prefetch_chunks + 1):
+                        lookahead_index = gene_chunk_index + offset
+                        if lookahead_index < gene_chunk_count and len(prefetch_queue) <= offset:
+                            l_start = lookahead_start
+                            if gene_loci_per_chunk is not None:
+                                l_end = min((lookahead_index + 1) * gene_loci_per_chunk, len(G))
+                            else:
+                                l_end = len(G)
+                            prefetch_queue.append(prefetch_executor.submit(prep_chunk, l_start, l_end))
+                            lookahead_start = l_end
 
                 if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
                     torch.cuda.synchronize()
@@ -503,7 +566,11 @@ def _tecpg_mlr_lstsq_inner(
 
                 # Transpose gene expression matrix to serve as target matrix Y
                 # G_chunk_np is (G_chunk, S). Transpose to (S, G_chunk).
-                Y = torch.tensor(G_chunk_np.T, device=device, dtype=dtype) # (S, G_chunk)
+                if prefetch_executor:
+                    Y = prefetch_queue.popleft().result()
+                else:
+                    G_chunk_np = G_np[gene_start_index:gene_end_index]
+                    Y = torch.tensor(G_chunk_np.T, device=device, dtype=dtype) # (S, G_chunk)
 
                 if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
                     torch.cuda.synchronize()
@@ -942,12 +1009,36 @@ def _tecpg_mlr_lstsq_inner(
                         res = inner_logger.resource_check()
                         util_sm = gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
 
+                    run_metrics['prep_ms'].append(prof_prep_time * 1000)
+                    run_metrics['h2d_ms'].append(prof_h2d_time * 1000)
+                    run_metrics['compute_ms'].append(prof_gpu_time * 1000)
+                    run_metrics['d2h_ms'].append(prof_d2h_time * 1000)
+                    run_metrics['post_ms'].append(prof_post_time * 1000)
+                    run_metrics['write_enqueue_ms'].append(prof_write_time * 1000)
+                    run_metrics['gpu_idle_between_chunks_ms'].append(gpu_idle_between_chunks_ms)
+                    total_chunks_saved += 1
+                    total_bytes_written += out.memory_usage(deep=True).sum()
+                    last_chunk_end_time = time.perf_counter()
+
+                    if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
+                        prof_total = prof_t6 - prof_t0
+                        M_c = len(M_chunk)
+                        G_c = chunk_len
+                        K_val = K
+                        S_val = nrows
+                        gflops = (2 * M_c * (K_val**2) * S_val + 2 * M_c * K_val * G_c * S_val) / 1e9 / max(prof_gpu_time, 1e-9)
+                        reg_sec = (M_c * G_c) / max(prof_total, 1e-9)
+
+                        res = inner_logger.resource_check()
+                        util_sm = gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
+
                         inner_logger.debug(
                             f"PROFILE chunk m={meth_chunk_index+1}/{meth_chunk_count} g={gene_chunk_index+1}/{gene_chunk_count} | "
                             f"prep={prof_prep_time*1000:.1f}ms h2d={prof_h2d_time*1000:.1f}ms "
                             f"gpu={prof_gpu_time*1000:.1f}ms d2h={prof_d2h_time*1000:.1f}ms "
-                            f"post={prof_post_time*1000:.1f}ms write={prof_write_time*1000:.1f}ms total={prof_total*1000:.1f}ms "
-                            f"reg/s={reg_sec:.2e} gflops={gflops:.1f} util_sm={util_sm:.1f}% ram_avail={res['ram_avail_gb']:.1f}GB"
+                            f"post={prof_post_time*1000:.1f}ms write={prof_write_time*1000:.1f}ms "
+                            f"idle={gpu_idle_between_chunks_ms:.1f}ms save_q={save_queue_depth} pref_f={prefetch_fill} "
+                            f"total={prof_total*1000:.1f}ms reg/s={reg_sec:.2e} gflops={gflops:.1f} util_sm={util_sm:.1f}% ram_avail={res['ram_avail_gb']:.1f}GB"
                         )
 
                         bottleneck = analyze_bottleneck(
@@ -1055,6 +1146,21 @@ def _tecpg_mlr_lstsq_inner(
                 futures.popleft().result()
             pool.shutdown(wait=True)
             logger.time('Finished waiting for chunks to save in {l} seconds')
+
+        if prefetch_executor:
+            prefetch_executor.shutdown(wait=True)
+
+        # Print end-of-run summary
+        if len(run_metrics['prep_ms']) > 0:
+            import numpy as np
+            summary_str = ["--- END OF RUN SUMMARY ---"]
+            summary_str.append(f"Chunks saved: {total_chunks_saved}")
+            summary_str.append(f"Total bytes written: {total_bytes_written} ({total_bytes_written/1024/1024:.2f} MB)")
+            for metric, vals in run_metrics.items():
+                if len(vals) > 0:
+                    summary_str.append(f"{metric}: sum={sum(vals):.1f}ms, mean={np.mean(vals):.1f}ms, p95={np.percentile(vals, 95):.1f}ms")
+            for line in summary_str:
+                logger.info(line)
 
         if do_reservoir and reservoir_processed > 0:
             logger.info('Saving reservoir sample ({0} rows)', min(reservoir_processed, reservoir_count))
