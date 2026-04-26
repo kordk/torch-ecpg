@@ -547,17 +547,16 @@ def _tecpg_mlr_lstsq_inner(
                         prefetch_queue.append(prefetch_executor.submit(prep_chunk, gene_start_index, gene_end_index))
 
                     # Future chunks
-                    lookahead_start = gene_end_index
                     for offset in range(1, prefetch_chunks + 1):
                         lookahead_index = gene_chunk_index + offset
                         if lookahead_index < gene_chunk_count and len(prefetch_queue) <= offset:
-                            l_start = lookahead_start
                             if gene_loci_per_chunk is not None:
+                                l_start = lookahead_index * gene_loci_per_chunk
                                 l_end = min((lookahead_index + 1) * gene_loci_per_chunk, len(G))
                             else:
+                                l_start = 0
                                 l_end = len(G)
                             prefetch_queue.append(prefetch_executor.submit(prep_chunk, l_start, l_end))
-                            lookahead_start = l_end
 
                 if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
                     torch.cuda.synchronize()
