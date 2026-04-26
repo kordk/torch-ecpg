@@ -15,7 +15,7 @@ from .config import DTYPE, get_device
 from .gpu_monitor import gpu_guardian, report_thermal_status, throttle_if_needed
 from .helper import logit_transform_torch, trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
-from .logger import Logger
+from .logger import Logger, analyze_bottleneck
 from .test_data import generate_data
 
 
@@ -179,6 +179,21 @@ def _regression_full_inner(
     chunking: bool = False,
 ) -> Optional[pandas.DataFrame]:
     # Detect errors in the input values
+
+    logger.print_startup_banner(
+        torch_version=torch.__version__,
+        cuda_version=torch.version.cuda if torch.cuda.is_available() else 'N/A',
+        device_name=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU',
+        vram_gb=torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0,
+        compute_cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'N/A',
+        mt_count=len(M),
+        gene_loci_per_chunk=gene_loci_per_chunk,
+        meth_loci_per_chunk=meth_loci_per_chunk,
+        dtype=str(DTYPE),
+        workers=max_workers,
+        **logger.resource_check()
+    )
+
     if (output_dir is None) != (not chunking):
         error = 'Output dir and chunk size must be defined together.'
         logger.error(error)

@@ -1,3 +1,4 @@
+import time
 import math
 import os
 import multiprocessing
@@ -8,9 +9,9 @@ from typing import Optional
 import pandas
 import torch
 
-from .config import get_device
+from .config import get_device, DTYPE
 from .import_data import save_dataframe_part
-from .logger import Logger
+from .logger import Logger, analyze_bottleneck
 
 
 def pearson_full_tensor(
@@ -143,9 +144,27 @@ def pearson_chunk_tensor(
     logger.time('Calculated G standard deviations in {l} seconds')
 
     inner_logger = logger.alias()
+
+    inner_logger.print_startup_banner(
+        torch_version=torch.__version__,
+        cuda_version=torch.version.cuda if torch.cuda.is_available() else 'N/A',
+        device_name=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU',
+        vram_gb=torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0,
+        compute_cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'N/A',
+        mt_count=len(M),
+        gt_count=len(G),
+        chunks=chunks,
+        dtype=str(DTYPE),
+        **inner_logger.resource_check()
+    )
     inner_logger.start_timer('info', 'Calculating chunks...')
     corr_pd = pandas.DataFrame()
     for i in range(0, len(M_t), chunk_rows):
+        if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        prof_t1 = time.perf_counter()
+        prof_prep_time += (prof_t1 - prof_t0)
+
         j = i + chunk_rows
         M_chunk = M_t[i:j]
         corr_pd = corr_pd.append(
@@ -231,6 +250,19 @@ def pearson_chunk_save_tensor(
     logger.time('Calculated G standard deviations in {l} seconds')
 
     inner_logger = logger.alias()
+
+    inner_logger.print_startup_banner(
+        torch_version=torch.__version__,
+        cuda_version=torch.version.cuda if torch.cuda.is_available() else 'N/A',
+        device_name=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU',
+        vram_gb=torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0,
+        compute_cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'N/A',
+        mt_count=len(M),
+        gt_count=len(G),
+        chunks=chunks,
+        dtype=str(DTYPE),
+        **inner_logger.resource_check()
+    )
     inner_logger.start_timer('info', 'Calculating chunks...')
     logger.start_counter('info', '')
     max_workers = logger.carry_data.get('save_threads', 2)
@@ -252,6 +284,9 @@ def _pearson_chunk_save_tensor_inner(
     corr_pd = pandas.DataFrame()
     futures = deque()
     for i in range(0, len(M_t), chunk_rows):
+        prof_prep_time = prof_h2d_time = prof_gpu_time = prof_d2h_time = prof_write_time = 0.0
+        prof_t0 = time.perf_counter()
+
         chunks_elapsed += 1
         if chunks_elapsed > save_chunks:
             chunks_elapsed = 1
@@ -268,6 +303,11 @@ def _pearson_chunk_save_tensor_inner(
             ))
             del corr_pd
             corr_pd = pandas.DataFrame()
+
+        if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        prof_t1 = time.perf_counter()
+        prof_prep_time += (prof_t1 - prof_t0)
 
         j = i + chunk_rows
         M_chunk = M_t[i:j]

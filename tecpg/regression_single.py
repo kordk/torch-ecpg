@@ -10,11 +10,11 @@ import numpy
 import pandas
 import torch
 
-from .config import get_device
+from .config import get_device, DTYPE
 from .gpu_monitor import gpu_guardian, throttle_if_needed
 from .helper import logit_transform_pandas
 from .import_data import initialize_dir, save_dataframe_part
-from .logger import Logger
+from .logger import Logger, analyze_bottleneck
 from .test_data import generate_data
 
 
@@ -169,6 +169,20 @@ def _regression_single_inner(
         region,
     )
     logger.memory_check('regression_single')
+
+
+    logger.print_startup_banner(
+        torch_version=torch.__version__,
+        cuda_version=torch.version.cuda if torch.cuda.is_available() else 'N/A',
+        device_name=torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU',
+        vram_gb=torch.cuda.get_device_properties(0).total_memory / 1024**3 if torch.cuda.is_available() else 0,
+        compute_cap=torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'N/A',
+        mt_count=len(M),
+        regressions_per_chunk=regressions_per_chunk,
+        dtype=str(DTYPE),
+        workers=max_workers,
+        **logger.resource_check()
+    )
 
     if output_dir is None and regressions_per_chunk:
         message = (

@@ -435,42 +435,6 @@ class Logger(PassAsKwarg):
 
         return wrapper
 
-    def resource_check(self) -> Dict[str, Any]:
-        """
-        Returns a snapshot of current system and GPU resources.
-        """
-        process = psutil.Process(os.getpid())
-        ram_rss = process.memory_info().rss / 1024 ** 3
-        sys_vm = psutil.virtual_memory()
-        sys_swap = psutil.swap_memory()
-        cpu_pct = psutil.cpu_percent(interval=None)
-
-        gpu_alloc = 0.0
-        gpu_res = 0.0
-        gpu_max_alloc = 0.0
-        if torch.cuda.is_available():
-            gpu_alloc = torch.cuda.memory_allocated() / 1024 ** 3
-            gpu_res = torch.cuda.memory_reserved() / 1024 ** 3
-            gpu_max_alloc = torch.cuda.max_memory_allocated() / 1024 ** 3
-            torch.cuda.reset_peak_memory_stats()
-
-        return {
-            'cpu_percent': cpu_pct,
-            'ram_rss_gb': ram_rss,
-            'ram_avail_gb': sys_vm.available / 1024 ** 3,
-            'swap_used_gb': sys_swap.used / 1024 ** 3,
-            'gpu_alloc_gb': gpu_alloc,
-            'gpu_res_gb': gpu_res,
-            'gpu_max_alloc_gb': gpu_max_alloc,
-        }
-
-    def print_startup_banner(self, **kwargs) -> None:
-        """Prints system/GPU info once at start"""
-        self.info('--- STARTUP BANNER ---')
-        for k, v in kwargs.items():
-            self.info(f'{k}: {v}')
-        self.info('----------------------')
-
 def analyze_bottleneck(
     gpu_time: float,
     total_time: float,
@@ -487,9 +451,6 @@ def analyze_bottleneck(
     if ram_avail_gb < LOW_RAM_GB:
         return "BOTTLENECK: low system RAM — reduce chunk size"
 
-    if cpu_percent > HIGH_CPU_PCT and util_sm < GPU_UNDERUTIL_SM_PCT:
-        return "BOTTLENECK: CPU postprocessing — consider doing filter on GPU"
-
     if gpu_time / max(total_time, 1e-9) < GPU_UNDERUTIL_RATIO and util_sm < GPU_UNDERUTIL_SM_PCT:
         return "BOTTLENECK: GPU underutilized — consider larger gene/meth chunk"
 
@@ -498,5 +459,8 @@ def analyze_bottleneck(
 
     if write_time > gpu_time:
         return "BOTTLENECK: disk I/O — consider parquet, larger output buffer, or .filter() before write"
+
+    if cpu_percent > HIGH_CPU_PCT and util_sm < GPU_UNDERUTIL_SM_PCT:
+        return "BOTTLENECK: CPU postprocessing — consider doing filter on GPU"
 
     return None
