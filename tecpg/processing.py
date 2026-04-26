@@ -935,7 +935,7 @@ def _tecpg_mlr_lstsq_inner(
                         M_c = len(M_chunk)
                         G_c = chunk_len
                         K_val = K
-                        S_val = S
+                        S_val = nrows
                         gflops = (2 * M_c * (K_val**2) * S_val + 2 * M_c * K_val * G_c * S_val) / 1e9 / max(prof_gpu_time, 1e-9)
                         reg_sec = (M_c * G_c) / max(prof_total, 1e-9)
 
