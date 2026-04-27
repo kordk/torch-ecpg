@@ -8,6 +8,8 @@ from typing import Literal, Optional
 
 import numpy
 import pandas
+
+HIGH_WATER = 0.85
 import torch
 from colorama import Fore as colors
 
@@ -67,6 +69,7 @@ def regression_full(
     thermal_threshold: int = 80,
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
+    aggressive_gc: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -148,7 +151,7 @@ def regression_full(
             M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
             gene_loci_per_chunk, meth_loci_per_chunk, p_thresh, output_dir,
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
-            file_format, pool, max_workers, logger=logger, chunking=chunking
+            file_format, aggressive_gc, pool, max_workers, logger=logger, chunking=chunking
         )
 
 
@@ -172,6 +175,7 @@ def _regression_full_inner(
     thermal_threshold: int = 80,
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
+    aggressive_gc: bool = False,
     pool: ProcessPoolExecutor = None,
     max_workers: int = 2,
     *,
@@ -405,7 +409,9 @@ def _regression_full_inner(
 
             mc_logger.memory_check('regression_full')
             if allocated_memory := torch.cuda.memory_allocated() if torch.cuda.is_available() else 0:
-                torch.cuda.empty_cache()
+                total_memory = torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 0
+                if aggressive_gc or (total_memory and torch.cuda.memory_allocated() / total_memory > HIGH_WATER):
+                    torch.cuda.empty_cache()
 
             # Inner loop over each gene expression locus
             last_index = 0
@@ -548,7 +554,8 @@ def _regression_full_inner(
 
                     # CUDA memory notice
                     if index == gene_loci_per_chunk and allocated_memory:
-                        torch.cuda.empty_cache()
+                        if aggressive_gc or (total_memory and torch.cuda.memory_allocated() / total_memory > HIGH_WATER):
+                            torch.cuda.empty_cache()
                         mc_logger.memory_check('regression_full')
 
                     # Save output with thread pool

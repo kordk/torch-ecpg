@@ -4,6 +4,10 @@ import os
 from typing import Any, List, Optional
 
 import click
+
+def _auto_save_threads(physical_cores: int, ram_gb: float) -> int:
+    return max(2, min(16, min(physical_cores // 4, int(ram_gb // 8))))
+
 import pandas
 import psutil
 import torch
@@ -153,10 +157,10 @@ from .tool import (
 @click.option(
     '--save-threads',
     show_default=True,
-    default=2,
+    default=None,
     envvar='TECPG_SAVE_THREADS',
     type=int,
-    help='Number of threads used for saving data. Warning: increasing this value can result in an increase in performance with the cost of a large increase in CPU memory, use caution when increasing.',
+    help='Number of writer processes for saving output. If unset, auto-scales based on physical CPU count and available RAM. Set explicitly (or via TECPG_SAVE_THREADS) to override.',
 )
 @click.option(
     '--blas-threads',
@@ -218,9 +222,14 @@ def cli(
     if save_threads is not None:
         if save_threads > 2:
             logger.warning('Warning: increasing save threads can result in an increase in performance with the cost of a large increase in CPU memory, use caution when increasing.')
+        logger.info('User-supplied save_threads: {0}', save_threads)
         logger.carry_data['save_threads'] = save_threads
     else:
-        logger.carry_data['save_threads'] = 2
+        physical = psutil.cpu_count(logical=False) or os.cpu_count() or 2
+        ram_gb = psutil.virtual_memory().total / (1024**3)
+        auto_threads = _auto_save_threads(physical, ram_gb)
+        logger.info('Auto-scaled save_threads to {0}', auto_threads)
+        logger.carry_data['save_threads'] = auto_threads
 
     if blas_threads and blas_threads > 0:
         env_omp = os.environ.get('OMP_NUM_THREADS')
@@ -439,6 +448,13 @@ def corr(
     type=int,
     help='Number of chunks to prefetch to the GPU to overlap with compute (default 0).',
 )
+@click.option(
+    '--aggressive-gc',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help='Call torch.cuda.empty_cache() after every gene chunk. Default is to only empty the cache under memory pressure (> 85% allocated). Useful on memory-constrained GPUs.',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -470,6 +486,7 @@ def mlr(
     bootstrap_iterations: int,
     bootstrap_batch_size: int,
     prefetch_chunks: int,
+    aggressive_gc: bool,
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
@@ -567,6 +584,7 @@ def mlr(
         'ig_baseline': ig_baseline,
         'ig_covariates_filter': ig_covariates_filter,
         'prefetch_chunks': prefetch_chunks,
+        'aggressive_gc': aggressive_gc,
     }
 
     logger.info(
