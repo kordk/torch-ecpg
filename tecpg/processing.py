@@ -8,6 +8,8 @@ from typing import Literal, Optional
 
 import numpy
 import pandas
+
+HIGH_WATER = 0.85
 import torch
 from colorama import Fore as colors
 
@@ -59,6 +61,7 @@ def tecpg_mlr_lstsq(
     ig_baseline: str = 'mean',
     ig_covariates_filter: Optional[list] | str = None,
     prefetch_chunks: int = 0,
+    aggressive_gc: bool = False,
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -81,7 +84,7 @@ def tecpg_mlr_lstsq(
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
             file_format, reservoir_count, subsample_mt_count, subsample_g_count, seed,
             permute_label_test, compute_ig, compute_ig_deep, ig_baseline,
-            ig_covariates_filter, prefetch_chunks, pool, max_workers, logger=logger, chunking=chunking
+            ig_covariates_filter, prefetch_chunks, aggressive_gc, pool, max_workers, logger=logger, chunking=chunking
         )
 
 def _tecpg_mlr_lstsq_inner(
@@ -114,6 +117,7 @@ def _tecpg_mlr_lstsq_inner(
     ig_baseline: str = 'mean',
     ig_covariates_filter: Optional[list] | str = None,
     prefetch_chunks: int = 0,
+    aggressive_gc: bool = False,
     pool: ProcessPoolExecutor = None,
     max_workers: int = 2,
     *,
@@ -1065,7 +1069,9 @@ def _tecpg_mlr_lstsq_inner(
 
                     # Force GC
                     if allocated_memory:
-                         torch.cuda.empty_cache()
+                        total_memory = torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 0
+                        if aggressive_gc or (total_memory and torch.cuda.memory_allocated() / total_memory > HIGH_WATER):
+                            torch.cuda.empty_cache()
 
             del Q, R_inv, XtXi_diag_sqrt
 
