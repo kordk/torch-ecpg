@@ -1,0 +1,3 @@
+Cell: run
+Env: env CUDA_LAUNCH_BLOCKING=0
+Cmd: timeout 5 tecpg --debug -i data_dummy -a annot_dummy -o ./profiling-runs/devbox-20260427T031645Z/run run mlr --mlr-method lstsq --all --compute-ig --profile-equivalent -m 500 -g 500
