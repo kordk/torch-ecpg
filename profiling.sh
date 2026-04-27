@@ -284,7 +284,7 @@ extract_metrics() {
             else if(a[1]=="idle") idle=val
         }
         print prep, h2d, gpu, d2h, post, write, idle
-    }' > "$tsv_file"
+    }' > "$tsv_file" || true
 
     if [ ! -s "$tsv_file" ]; then
         echo "No PROFILE lines found in log." > "$sum_file"
@@ -478,6 +478,8 @@ run_workload() {
         log "tecpg timed out after $cap_duration seconds as expected."
     elif [ $tecpg_exit -ne 0 ]; then
         log "Warning: tecpg exited with code $tecpg_exit"
+        log "Last 20 lines of tecpg.log:"
+        tail -n 20 "$cell_dir/tecpg.log" 2>/dev/null || true
     fi
 
     kill $top_pid 2>/dev/null || true
@@ -528,15 +530,19 @@ if [ "$RUN_MATRIX" -eq 1 ]; then
     ln -s "baseline/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
     ln -s "baseline/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
     ln -s "baseline/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
-    VERDICT=$(tail -n 1 "$OUT_DIR/baseline/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //')
+    VERDICT=$(tail -n 1 "$OUT_DIR/baseline/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
 
 else
     log "Running single workload..."
     VERDICT_ROW=$(run_workload "run" "" "" 1 "$DURATION")
-    VERDICT=$(tail -n 1 "$OUT_DIR/run/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //')
+    VERDICT=$(tail -n 1 "$OUT_DIR/run/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
     ln -s "run/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
     ln -s "run/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
     ln -s "run/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
+fi
+
+if [ -z "${VERDICT:-}" ]; then
+    VERDICT="Failed to extract verdict (no PROFILE lines found)"
 fi
 
 tarball="${OUT_DIR}.tar.gz"
