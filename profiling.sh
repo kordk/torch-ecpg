@@ -269,6 +269,12 @@ extract_metrics() {
     local query_file=$4
     local pidstat_file=$5
 
+    if [ ! -f "$log_file" ]; then
+        echo "Error: tecpg.log not found. Execution failed." > "$sum_file"
+        echo "NA"
+        return
+    fi
+
     grep -a "PROFILE chunk" "$log_file" | sed -n 's/.*| //p' | awk '{
         prep="NA"; h2d="NA"; gpu="NA"; d2h="NA"; post="NA"; write="NA"; idle="NA"
         for(i=1; i<=NF; i++) {
@@ -530,12 +536,18 @@ if [ "$RUN_MATRIX" -eq 1 ]; then
     ln -s "baseline/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
     ln -s "baseline/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
     ln -s "baseline/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
-    VERDICT=$(tail -n 1 "$OUT_DIR/baseline/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
+    VERDICT=""
+    if [ -f "$OUT_DIR/baseline/chunk_profile_summary.txt" ]; then
+        VERDICT=$(tail -n 1 "$OUT_DIR/baseline/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
+    fi
 
 else
     log "Running single workload..."
     VERDICT_ROW=$(run_workload "run" "" "" 1 "$DURATION")
-    VERDICT=$(tail -n 1 "$OUT_DIR/run/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
+    VERDICT=""
+    if [ -f "$OUT_DIR/run/chunk_profile_summary.txt" ]; then
+        VERDICT=$(tail -n 1 "$OUT_DIR/run/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
+    fi
     ln -s "run/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
     ln -s "run/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
     ln -s "run/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
