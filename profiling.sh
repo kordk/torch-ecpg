@@ -175,8 +175,8 @@ for tool in pidstat iostat vmstat awk sort tar mktemp; do
 done
 
 if [ "$DATASET" == "gtp" ] || [ "$DATASET" == "mesa" ]; then
-    [ -z "$S_CHUNK" ] && S_CHUNK=100000
-    [ -z "$G_CHUNK" ] && G_CHUNK=1000
+    [ -z "$S_CHUNK" ] && S_CHUNK=20000
+    [ -z "$G_CHUNK" ] && G_CHUNK=500
 else
     [ -z "$S_CHUNK" ] && S_CHUNK=500
     [ -z "$G_CHUNK" ] && G_CHUNK=500
@@ -408,14 +408,16 @@ run_workload() {
 
     log "Running cell: $cell_name"
 
+    local tecpg_global_args="--debug -i data_${DATASET} -a annot_${DATASET} -o $cell_dir/tecpg_out"
+    if [ -n "$BLAS_THREADS" ]; then tecpg_global_args+=" --blas-threads $BLAS_THREADS"; fi
+
     local tecpg_args="run mlr --mlr-method lstsq --$MAPPING --compute-ig"
     if [ -n "$S_CHUNK" ]; then tecpg_args+=" -m $S_CHUNK"; fi
     if [ -n "$G_CHUNK" ]; then tecpg_args+=" -g $G_CHUNK"; fi
     if [ -n "$PREFETCH_CHUNKS" ] && [ "$PREFETCH_CHUNKS" -ne 0 ]; then tecpg_args+=" --prefetch-chunks $PREFETCH_CHUNKS"; fi
-    if [ -n "$BLAS_THREADS" ]; then tecpg_args+=" --blas-threads $BLAS_THREADS"; fi
     tecpg_args+=" $extra_args"
 
-    local base_cmd="tecpg --debug -i data_${DATASET} -a annot_${DATASET} -o $cell_dir/tecpg_out $tecpg_args"
+    local base_cmd="tecpg $tecpg_global_args $tecpg_args"
 
     local env_cmd="env TECPG_PROFILE=1 CUDA_LAUNCH_BLOCKING=${TECPG_PROFILING_BLOCKING:-0} $extra_env"
 
