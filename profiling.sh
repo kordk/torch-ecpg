@@ -65,7 +65,7 @@ Options:
   -d, --dataset DATASET    {dummy,gtp,mesa} (default: dummy)
   -m, --mapping MAPPING    {all,promoter} (default: all)
   -o, --output-dir DIR     Directory for artifacts (default: ./profiling-runs/<hostname>-<timestamp>)
-  -D, --duration SECS      Max runtime cap in seconds (default: 600). Capped at 90s per cell if --matrix is used.
+  -D, --duration SECS      Max runtime cap in seconds (default: 600).
   --prefetch-chunks N      Pass to tecpg (default: 0)
   --blas-threads N         Pass to tecpg via env and args if set
   -g N                     Gene chunk size for tecpg (default: depends on dataset)
@@ -496,11 +496,6 @@ run_workload() {
     if [ "$KEEP_OUTPUT" -eq 0 ]; then
         rm -rf "$cell_dir/tecpg_out" 2>/dev/null || true
     fi
-
-    local row
-    row=$(extract_metrics "$cell_dir/tecpg.log" "$cell_dir/chunk_profile.tsv" "$cell_dir/chunk_profile_summary.txt" "$cell_dir/nvidia-smi-query.csv" "$cell_dir/pidstat.csv")
-
-    echo "$row"
 }
 
 capture_environment
@@ -517,10 +512,12 @@ if [ "$RUN_MATRIX" -eq 1 ]; then
         local envs=$3
         local baseline=$4
         local dur=$DURATION
-        if [ "$dur" -gt 90 ]; then dur=90; fi
 
+
+        run_workload "$name" "$args" "$envs" "$baseline" "$dur"
+        local cell_dir="$OUT_DIR/$name"
         local metrics
-        metrics=$(run_workload "$name" "$args" "$envs" "$baseline" "$dur")
+        metrics=$(extract_metrics "$cell_dir/tecpg.log" "$cell_dir/chunk_profile.tsv" "$cell_dir/chunk_profile_summary.txt" "$cell_dir/nvidia-smi-query.csv" "$cell_dir/pidstat.csv")
         echo "$name,$metrics" >> "$matrix_csv"
     }
 
@@ -543,7 +540,8 @@ if [ "$RUN_MATRIX" -eq 1 ]; then
 
 else
     log "Running single workload..."
-    VERDICT_ROW=$(run_workload "run" "" "" 1 "$DURATION")
+    run_workload "run" "" "" 1 "$DURATION"
+    VERDICT_ROW=$(extract_metrics "$OUT_DIR/run/tecpg.log" "$OUT_DIR/run/chunk_profile.tsv" "$OUT_DIR/run/chunk_profile_summary.txt" "$OUT_DIR/run/nvidia-smi-query.csv" "$OUT_DIR/run/pidstat.csv")
     VERDICT=""
     if [ -f "$OUT_DIR/run/chunk_profile_summary.txt" ]; then
         VERDICT=$(tail -n 1 "$OUT_DIR/run/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
