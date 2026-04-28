@@ -415,7 +415,7 @@ run_workload() {
     if [ -n "$BLAS_THREADS" ]; then tecpg_args+=" --blas-threads $BLAS_THREADS"; fi
     tecpg_args+=" $extra_args"
 
-    local base_cmd="tecpg --debug -i data_${DATASET} -a annot_${DATASET} -o $cell_dir $tecpg_args"
+    local base_cmd="tecpg --debug -i data_${DATASET} -a annot_${DATASET} -o $cell_dir/tecpg_out $tecpg_args"
 
     local env_cmd="env TECPG_PROFILE=1 CUDA_LAUNCH_BLOCKING=${TECPG_PROFILING_BLOCKING:-0} $extra_env"
 
@@ -494,7 +494,7 @@ run_workload() {
     stop_samplers
 
     if [ "$KEEP_OUTPUT" -eq 0 ]; then
-        rm -f "$cell_dir"/*.csv "$cell_dir"/*.parquet 2>/dev/null || true
+        rm -rf "$cell_dir/tecpg_out" 2>/dev/null || true
     fi
 
     local row
