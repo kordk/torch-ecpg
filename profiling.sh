@@ -527,9 +527,24 @@ if [ "$RUN_MATRIX" -eq 1 ]; then
     run_and_append "prefetch" "--prefetch-chunks 4" "" 0
     g_dbl=$(( G_CHUNK * 2 ))
     s_dbl=$(( S_CHUNK * 2 ))
-    run_and_append "bigger_chunks" "-g $g_dbl -m $s_dbl" "" 0
+    if [ "$g_dbl" -gt 1000 ]; then g_dbl=1000; fi
+    if [ "$s_dbl" -gt 40000 ]; then s_dbl=40000; fi
+
+    OLD_G_CHUNK="$G_CHUNK"
+    OLD_S_CHUNK="$S_CHUNK"
+    G_CHUNK="$g_dbl"
+    S_CHUNK="$s_dbl"
+    run_and_append "bigger_chunks" "" "" 0
+    G_CHUNK="$OLD_G_CHUNK"
+    S_CHUNK="$OLD_S_CHUNK"
     run_and_append "tf32" "" "NVIDIA_TF32_OVERRIDE=1 TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1" 0
-    run_and_append "blas" "--blas-threads 8" "OMP_NUM_THREADS=8 MKL_NUM_THREADS=8" 0
+
+    # Store old BLAS_THREADS to temporarily override it for this cell
+    OLD_BLAS_THREADS="$BLAS_THREADS"
+    BLAS_THREADS="8"
+    run_and_append "blas" "" "OMP_NUM_THREADS=8 MKL_NUM_THREADS=8" 0
+    BLAS_THREADS="$OLD_BLAS_THREADS"
+
     run_and_append "single_thread" "" "OMP_NUM_THREADS=1" 0
 
     ln -s "baseline/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
@@ -537,7 +552,7 @@ if [ "$RUN_MATRIX" -eq 1 ]; then
     ln -s "baseline/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
     VERDICT=""
     if [ -f "$OUT_DIR/baseline/chunk_profile_summary.txt" ]; then
-        VERDICT=$(tail -n 1 "$OUT_DIR/baseline/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
+        VERDICT=$(grep "Verdict:" "$OUT_DIR/baseline/chunk_profile_summary.txt" | sed 's/Verdict: //' || true)
     fi
 
 else
@@ -546,7 +561,7 @@ else
     VERDICT_ROW=$(extract_metrics "$OUT_DIR/run/tecpg.log" "$OUT_DIR/run/chunk_profile.tsv" "$OUT_DIR/run/chunk_profile_summary.txt" "$OUT_DIR/run/nvidia-smi-query.csv" "$OUT_DIR/run/pidstat.csv")
     VERDICT=""
     if [ -f "$OUT_DIR/run/chunk_profile_summary.txt" ]; then
-        VERDICT=$(tail -n 1 "$OUT_DIR/run/chunk_profile_summary.txt" | grep "Verdict:" | sed 's/Verdict: //' || true)
+        VERDICT=$(grep "Verdict:" "$OUT_DIR/run/chunk_profile_summary.txt" | sed 's/Verdict: //' || true)
     fi
     ln -s "run/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
     ln -s "run/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
@@ -568,6 +583,19 @@ echo "========================================================="
 echo "Profiling Complete!"
 echo "Verdict: $VERDICT"
 echo ""
+
+if [ "$RUN_MATRIX" -eq 1 ] && [ -f "$OUT_DIR/matrix_summary.csv" ]; then
+    echo "Cell Summary:"
+    tail -n +2 "$OUT_DIR/matrix_summary.csv" | while IFS=, read -r cell util idle wall reg verdict; do
+        if [[ "$verdict" == *"Failed"* ]] || [[ "$verdict" == "NA" ]]; then
+            echo "  - $cell: Failed"
+        else
+            echo "  - $cell: Completed"
+        fi
+    done
+    echo ""
+fi
+
 echo "What to look at first:"
 echo "1. chunk_profile_summary.txt (Tells you which stage dominates)"
 echo "2. nvidia-smi-query.csv (Look at clocks_throttle_reasons.active for thermal/power capping)"

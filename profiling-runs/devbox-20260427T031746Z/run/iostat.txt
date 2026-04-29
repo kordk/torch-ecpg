@@ -1,9 +1,0 @@
-Linux 6.8.0 (devbox) 	04/27/26 	_x86_64_	(4 CPU)
-
-04/27/26 03:17:49
-avg-cpu:  %user   %nice %system %iowait  %steal   %idle
-           1.53    0.00    2.85    0.19    0.00   95.43
-
-Device            r/s     rMB/s   rrqm/s  %rrqm r_await rareq-sz     w/s     wMB/s   wrqm/s  %wrqm w_await wareq-sz     d/s     dMB/s   drqm/s  %drqm d_await dareq-sz     f/s f_await  aqu-sz  %util
-vda             31.51      0.10     0.00   0.00    0.29     3.13    0.00      0.00     0.00   0.00    0.00     0.00    0.00      0.00     0.00   0.00    0.00     0.00    0.00    0.00    0.01   1.22
-vdb              0.24      0.00     0.00   0.00    0.36     6.40  364.33      1.46     0.00   0.00    1.25     4.09    0.00      0.00     0.00   0.00    0.00     0.00    0.00    0.00    0.46   0.95
