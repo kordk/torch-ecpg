@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **1.12.2-dev**.
+The current development version on the `dev` branch is **1.15.1-dev**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 Entries below describe the work accumulated on `dev` since the last
@@ -11,6 +11,85 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 1.15.1-dev
+
+### Bug Fixes
+- `profiling.sh`: stop counting `GpuIdle` as a throttle and prioritize the
+  save-bound verdict so diagnostic conclusions correctly attribute
+  bottlenecks (adds `tests/profiling_verdict_test.sh`).
+
+## 1.15.0-dev
+
+### Features
+- Add `profiling.sh`, a bash-based GPU diagnostic tool that drives
+  `nvidia-smi`, `top`, `vmstat`, and `pidstat` alongside PyTorch debug
+  output to evaluate bottleneck origins, with a matrix sweep over
+  prefetching, larger chunks, TF32, and BLAS thread configurations and
+  an environment-annotated tarball of results. Documented in
+  `docs/profiling.md`.
+- Add `AGENTS.md` and vendor the Clean Code and *A Philosophy of
+  Software Design* mini rule sets under `docs/agent-rules/` for use by
+  AI coding agents.
+
+### Bug Fixes
+- `profiling.sh`: prevent aborts under `set -euo pipefail` when text
+  searches (e.g. for `PROFILE` chunks or `Verdict`) find no matches,
+  add a fallback message when `VERDICT` is empty, and surface the tail
+  of `tecpg.log` on non-zero `tecpg` exits.
+- `profiling.sh`: replace the invalid `--profile-equivalent` flag with
+  the `TECPG_PROFILE=1` environment variable so `PROFILE chunk` log
+  lines are actually produced.
+- `profiling.sh`: gracefully handle missing `tecpg.log` and
+  `chunk_profile_summary.txt` files (fall back to `NA` metrics) instead
+  of leaking `grep`/`tail` "No such file or directory" errors.
+- `profiling.sh`: write `tecpg` output to `$cell_dir/tecpg_out` so
+  `tecpg`'s output-directory initialization no longer wipes the
+  profiler's own logs (`tecpg.log`, `nvidia-smi-query.csv`,
+  `chunk_profile_summary.txt`).
+- `profiling.sh`: remove the hardcoded 90-second matrix-run cap that
+  was overriding the user-supplied `-D` duration, and evaluate
+  `extract_metrics` outside the `metrics=$(run_workload ...)` subshell
+  so runtime log lines are no longer swallowed or mixed into
+  `matrix_csv` output.
+- `profiling.sh`: cap `bigger_chunks` cell sizes (`g <= 1000`,
+  `s <= 40000`; defaults reduced to 20000 / 500 for `gtp` and `mesa`)
+  to avoid CUDA OOM on 22–24 GB devices, and place
+  `--blas-threads` as a global `tecpg` option before the subcommand to
+  fix `Error: No such option: --blas-threads`.
+- `profiling.sh`: add step-status summary logging and search for the
+  `Verdict:` string instead of relying on `tail -n 1`.
+
+## 1.14.0-dev
+
+### Improvements / Performance
+- Auto-scale `--save-threads` based on available CPUs and remove
+  per-chunk `torch.cuda.empty_cache()` calls to reduce GPU
+  synchronization overhead. Adds `tests/test_auto_scale.py`.
+
+## 1.13.1-dev
+
+### Bug Fixes
+- Calculate prefetch chunk coordinates directly from the lookahead
+  index in `_tecpg_mlr_lstsq_inner` so a saturated prefetch queue no
+  longer leaves `lookahead_start` stale, which previously caused
+  oversized chunks and downstream `IndexError` dimension mismatches.
+
+## 1.13.0-dev
+
+### Features
+- Add `--prefetch-chunks` (via `concurrent.futures.ThreadPoolExecutor`
+  in `tecpg_mlr_lstsq`) to overlap chunk preparation with GPU compute.
+- Add a `--blas-threads` global CLI option implemented as a
+  pre-import environment shim in `tecpg/__main__.py` so BLAS thread
+  caps take effect before NumPy/PyTorch import.
+- Add gap-fill diagnostics: `TECPG_SAVE_THREADS` fallback for
+  `--save-threads`; report `save_threads_effective`,
+  `prefetch_chunks_effective`, `blas_threads_effective`, logical and
+  physical CPU counts, and thread counts in the startup banner;
+  emit per-chunk `gpu_idle_between_chunks_ms`, `save_queue_depth`, and
+  `prefetch_fill` metrics with an end-of-run statistical summary.
+- Document the new performance-tuning options in `README.md`.
 
 ## 1.12.2-dev
 
