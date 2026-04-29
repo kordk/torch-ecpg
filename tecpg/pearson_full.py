@@ -349,8 +349,6 @@ def _pearson_chunk_save_tensor_inner(
         ))
         del corr_pd
 
-        while futures:
-            futures.popleft().result()
-        pool.shutdown(wait=True)
-
+    while futures:
+        futures.popleft().result()
     logger.time('Calculated pearson_chunk_tensor in {t} seconds')
