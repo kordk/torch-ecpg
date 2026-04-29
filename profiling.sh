@@ -25,6 +25,7 @@ RUN_MATRIX=0
 NO_NSYS=0
 KEEP_OUTPUT=0
 FORCE_OVERWRITE=0
+SUMMARIZE_ONLY=""
 
 declare -a SAMPLER_PIDS=()
 CURRENT_CELL_DIR=""
@@ -72,6 +73,7 @@ Options:
   -s N                     Meth chunk size for tecpg (default: depends on dataset)
   --gpu-index N            Value for CUDA_VISIBLE_DEVICES (default: 0)
   --matrix                 Run a small parameter sweep instead of single run (duration capped at 90s per cell)
+  --summarize-only DIR     Skip execution, just parse logs and print summary for existing run dir
   --no-nsys, --no-nvprof   Opt out of heavy profilers
   --keep-output            Keep regression output files (default: delete)
   --force                  Overwrite output directory if it exists
@@ -125,6 +127,10 @@ while [[ "$#" -gt 0 ]]; do
         --matrix)
             RUN_MATRIX=1
             shift 1
+            ;;
+        --summarize-only)
+            SUMMARIZE_ONLY="$2"
+            shift 2
             ;;
         --no-nsys|--no-nvprof)
             NO_NSYS=1
@@ -227,7 +233,9 @@ capture_environment() {
 
 start_samplers() {
     local cell_dir=$1
+    # shellcheck disable=SC2034
     local duration=$2
+    # shellcheck disable=SC2034
     CURRENT_CELL_DIR="$cell_dir"
     SAMPLER_PIDS=()
 
@@ -262,11 +270,30 @@ stop_samplers() {
     fi
 }
 
+# extract_metrics computes the chunk processing profile and verdict for a run.
+#
+# The verdict is evaluated in top-to-bottom priority (first match wins):
+# 1. save/D2H bound: m_write / T > 0.4
+# 2. D2H bound: m_d2h / T > 0.4
+# 3. H2D bound: m_h2d / T > 0.4
+# 4. thermal/power throttled: m_gpu / T > 0.6 AND avg_util < 70 AND masked_throttle_ratio > 0.2 AND m_gpu / T >= 0.05
+# 5. compute bound: m_gpu / T > 0.6 AND avg_util >= 70
+# 6. producer/CPU bound: m_idle / T > 0.4
+# 7. mixed / inconclusive: otherwise
+#
+# Note on Throttle Mask:
+# Real throttle bits to count are at minimum:
+#   0x2 SwPowerCap, 0x4 HwSlowdown, 0x8 SyncBoost, 0x10 SwThermalSlowdown,
+#   0x20 HwThermalSlowdown, 0x40 HwPowerBrakeSlowdown, 0x80 DisplayClockSetting.
+# Bit 0 (0x1) is GpuIdle, which is not a throttle and happens when waiting on writes.
+# We use THROTTLE_MASK = 0xFE to isolate actual throttles.
+
 extract_metrics() {
     local log_file=$1
     local tsv_file=$2
     local sum_file=$3
     local query_file=$4
+    # shellcheck disable=SC2034
     local pidstat_file=$5
 
     if [ ! -f "$log_file" ]; then
@@ -313,21 +340,30 @@ extract_metrics() {
     }
 
     echo -e "Metric\tp50\tp90\tp99\tTotal" > "$sum_file"
-    echo -e "prep_ms\t$(compute_percentiles 1)" >> "$sum_file"
-    echo -e "h2d_ms\t$(compute_percentiles 2)" >> "$sum_file"
-    echo -e "gpu_ms\t$(compute_percentiles 3)" >> "$sum_file"
-    echo -e "d2h_ms\t$(compute_percentiles 4)" >> "$sum_file"
-    echo -e "post_ms\t$(compute_percentiles 5)" >> "$sum_file"
-    echo -e "write_ms\t$(compute_percentiles 6)" >> "$sum_file"
-    echo -e "idle_ms\t$(compute_percentiles 7)" >> "$sum_file"
+    {
+        echo -e "prep_ms\t$(compute_percentiles 1)"
+        echo -e "h2d_ms\t$(compute_percentiles 2)"
+        echo -e "gpu_ms\t$(compute_percentiles 3)"
+        echo -e "d2h_ms\t$(compute_percentiles 4)"
+        echo -e "post_ms\t$(compute_percentiles 5)"
+        echo -e "write_ms\t$(compute_percentiles 6)"
+        echo -e "idle_ms\t$(compute_percentiles 7)"
+    } >> "$sum_file"
 
-    local m_prep=$(awk -v col=1 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
-    local m_h2d=$(awk -v col=2 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
-    local m_gpu=$(awk -v col=3 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
-    local m_d2h=$(awk -v col=4 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
-    local m_post=$(awk -v col=5 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
-    local m_write=$(awk -v col=6 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
-    local m_idle=$(awk -v col=7 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
+    local m_prep
+    m_prep=$(awk -v col=1 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
+    local m_h2d
+    m_h2d=$(awk -v col=2 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
+    local m_gpu
+    m_gpu=$(awk -v col=3 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
+    local m_d2h
+    m_d2h=$(awk -v col=4 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
+    local m_post
+    m_post=$(awk -v col=5 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
+    local m_write
+    m_write=$(awk -v col=6 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
+    local m_idle
+    m_idle=$(awk -v col=7 '{print $col}' "$tsv_file" | sort -n | awk -v n="$lines" 'NR == int(n*0.5)+1 {print $1}')
 
     local avg_util=0
     if [ -s "$query_file" ]; then
@@ -335,24 +371,44 @@ extract_metrics() {
     fi
 
     local throttle_pct=0
+    local raw_throttle_pct=0
     if [ -s "$query_file" ]; then
-        local throttle_count
-        throttle_count=$(tail -n +2 "$query_file" | awk -F, '
+        local counts
+        counts=$(tail -n +2 "$query_file" | awk -F, '
+            BEGIN { THROTTLE_MASK = 0xFE }
             {
                 reason=$NF;
                 gsub(/^[ \t]+|[ \t]+$/, "", reason);
-                if (reason != "None" && reason != "[Not Supported]" && reason != "0x0000000000000000" && reason != "GpuIdle" && reason != "Idle" && reason != "") count++;
+
+                if (reason != "None" && reason != "[Not Supported]" && reason != "0x0000000000000000" && reason != "GpuIdle" && reason != "Idle" && reason != "") {
+                    raw_count++;
+                }
+
+                if (reason ~ /^0x/) {
+                    if (and(strtonum(reason), THROTTLE_MASK) != 0) {
+                        masked_count++;
+                    }
+                }
             }
-            END {print count+0}
+            END { print raw_count+0, masked_count+0 }
         ')
-        local total_query=$(tail -n +2 "$query_file" | wc -l)
+        local raw_throttle_count
+        raw_throttle_count=$(echo "$counts" | awk '{print $1}')
+        local throttle_count
+        throttle_count=$(echo "$counts" | awk '{print $2}')
+        local total_query
+        total_query=$(tail -n +2 "$query_file" | wc -l)
         if [ "$total_query" -gt 0 ]; then
             throttle_pct=$(awk -v num="$throttle_count" -v den="$total_query" 'BEGIN{print (num/den)*100}')
+            raw_throttle_pct=$(awk -v num="$raw_throttle_count" -v den="$total_query" 'BEGIN{print (num/den)*100}')
         fi
     fi
 
-    echo -e "\nAvg GPU Util: ${avg_util}%" >> "$sum_file"
-    echo -e "Throttle events (non-idle): ${throttle_pct}%" >> "$sum_file"
+    {
+        echo -e "\nAvg GPU Util: ${avg_util}%"
+        echo -e "Throttle events (masked, real throttles): ${throttle_pct}%"
+        echo -e "Throttle events (raw, unmasked): ${raw_throttle_pct}%"
+    } >> "$sum_file"
 
     local reg_sec=0
     local total_wall=0
@@ -365,25 +421,31 @@ extract_metrics() {
     local T
     T=$(awk -v p="$m_prep" -v h="$m_h2d" -v g="$m_gpu" -v d="$m_d2h" -v po="$m_post" -v w="$m_write" 'BEGIN{print p+h+g+d+po+w}')
 
-    local is_starved=$(awk -v i="$m_idle" -v g="$m_gpu" -v u="$avg_util" 'BEGIN{if(i > 0.5*g && u < 30) print 1; else print 0}')
-    local is_h2d=$(awk -v h="$m_h2d" -v t="$T" 'BEGIN{if(h > 0.4*t) print 1; else print 0}')
-    local is_d2h=$(awk -v d="$m_d2h" -v w="$m_write" -v t="$T" 'BEGIN{if(d+w > 0.4*t) print 1; else print 0}')
-    local is_compute=$(awk -v g="$m_gpu" -v t="$T" -v u="$avg_util" 'BEGIN{if(g > 0.6*t && u > 70) print 1; else print 0}')
-    local is_launch=$(awk -v g="$m_gpu" -v t="$total_wall" -v chunks="$lines" 'BEGIN{if(t > 0 && g < 2 && chunks/t > 100) print 1; else print 0}')
-    local is_thermal=$(awk -v tp="$throttle_pct" 'BEGIN{if(tp > 10) print 1; else print 0}')
+    local is_save_bound
+    is_save_bound=$(awk -v w="$m_write" -v t="$T" 'BEGIN{if(t>0 && w/t > 0.4) print 1; else print 0}')
+    local is_d2h
+    is_d2h=$(awk -v d="$m_d2h" -v t="$T" 'BEGIN{if(t>0 && d/t > 0.4) print 1; else print 0}')
+    local is_h2d
+    is_h2d=$(awk -v h="$m_h2d" -v t="$T" 'BEGIN{if(t>0 && h/t > 0.4) print 1; else print 0}')
+    local is_thermal
+    is_thermal=$(awk -v g="$m_gpu" -v t="$T" -v u="$avg_util" -v tp="$throttle_pct" 'BEGIN{if(t>0 && g/t > 0.6 && u < 70 && tp > 20 && g/t >= 0.05) print 1; else print 0}')
+    local is_compute
+    is_compute=$(awk -v g="$m_gpu" -v t="$T" -v u="$avg_util" 'BEGIN{if(t>0 && g/t > 0.6 && u >= 70) print 1; else print 0}')
+    local is_starved
+    is_starved=$(awk -v i="$m_idle" -v t="$T" 'BEGIN{if(t>0 && i/t > 0.4) print 1; else print 0}')
 
-    if [ "$is_thermal" -eq 1 ]; then
-        verdict="thermal/power throttled"
-    elif [ "$is_starved" -eq 1 ]; then
-        verdict="GPU is starved (host-bound)"
+    if [ "$is_save_bound" -eq 1 ]; then
+        verdict="save/D2H bound"
+    elif [ "$is_d2h" -eq 1 ]; then
+        verdict="D2H bound"
     elif [ "$is_h2d" -eq 1 ]; then
         verdict="H2D bound"
-    elif [ "$is_d2h" -eq 1 ]; then
-        verdict="D2H/save bound"
+    elif [ "$is_thermal" -eq 1 ]; then
+        verdict="thermal/power throttled"
     elif [ "$is_compute" -eq 1 ]; then
         verdict="compute bound"
-    elif [ "$is_launch" -eq 1 ]; then
-        verdict="kernel-launch bound"
+    elif [ "$is_starved" -eq 1 ]; then
+        verdict="producer/CPU bound"
     else
         local top2
         top2=$(echo -e "$m_prep prep\n$m_h2d h2d\n$m_gpu gpu\n$m_d2h d2h\n$m_post post\n$m_write write" | sort -nr | head -n 2 | awk '{print $2}' | paste -sd "/" -)
@@ -457,11 +519,11 @@ run_workload() {
     local pyspy_pid=""
     if [ "$is_baseline" -eq 1 ] && [ "$NO_NSYS" -eq 0 ]; then
         if command -v py-spy &> /dev/null; then
-            py-spy record -o "$cell_dir/pyspy.svg" -p $TECPG_PID -F --idle -d $cap_duration > /dev/null 2>&1 &
+            py-spy record -o "$cell_dir/pyspy.svg" -p $TECPG_PID -F --idle -d "$cap_duration" > /dev/null 2>&1 &
             pyspy_pid=$!
             (
                 local elapsed=0
-                while kill -0 $TECPG_PID 2>/dev/null && [ $elapsed -lt $cap_duration ]; do
+                while kill -0 $TECPG_PID 2>/dev/null && [ $elapsed -lt "$cap_duration" ]; do
                     sleep 30
                     if kill -0 $TECPG_PID 2>/dev/null; then
                         py-spy dump -p $TECPG_PID >> "$cell_dir/pyspy_dumps.txt" 2>/dev/null || true
@@ -502,7 +564,41 @@ run_workload() {
 
 capture_environment
 
-if [ "$RUN_MATRIX" -eq 1 ]; then
+if [ -n "$SUMMARIZE_ONLY" ]; then
+    OUT_DIR="$SUMMARIZE_ONLY"
+    log "Summarizing existing run directory: $OUT_DIR"
+    if [ ! -d "$OUT_DIR" ]; then
+        log "Error: Directory $OUT_DIR does not exist."
+        # shellcheck disable=SC2317
+        return 1 2>/dev/null || kill -INT $$
+    fi
+
+    matrix_csv="$OUT_DIR/matrix_summary.csv"
+    echo "Cell,Avg GPU Util,Idle Ratio,Total Wall (s),Reg/s,Verdict" > "$matrix_csv"
+
+    for cell_dir in "$OUT_DIR"/*/; do
+        if [ ! -d "$cell_dir" ]; then continue; fi
+        name=$(basename "$cell_dir")
+        log "Extracting metrics for $name..."
+        metrics=$(extract_metrics "$cell_dir/tecpg.log" "$cell_dir/chunk_profile.tsv" "$cell_dir/chunk_profile_summary.txt" "$cell_dir/nvidia-smi-query.csv" "$cell_dir/pidstat.csv")
+        echo "$name,$metrics" >> "$matrix_csv"
+    done
+
+    if [ -f "$OUT_DIR/baseline/chunk_profile_summary.txt" ]; then
+        ln -sf "baseline/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
+        ln -sf "baseline/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
+        ln -sf "baseline/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
+        VERDICT=$(grep "Verdict:" "$OUT_DIR/baseline/chunk_profile_summary.txt" | sed 's/Verdict: //' || true)
+    elif [ -f "$OUT_DIR/run/chunk_profile_summary.txt" ]; then
+        ln -sf "run/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
+        ln -sf "run/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
+        ln -sf "run/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
+        VERDICT=$(grep "Verdict:" "$OUT_DIR/run/chunk_profile_summary.txt" | sed 's/Verdict: //' || true)
+    fi
+
+    RUN_MATRIX=1 # To trigger the matrix summary output block
+
+elif [ "$RUN_MATRIX" -eq 1 ]; then
     log "Running parameter sweep matrix..."
 
     matrix_csv="$OUT_DIR/matrix_summary.csv"
@@ -558,6 +654,7 @@ if [ "$RUN_MATRIX" -eq 1 ]; then
 else
     log "Running single workload..."
     run_workload "run" "" "" 1 "$DURATION"
+    # shellcheck disable=SC2034
     VERDICT_ROW=$(extract_metrics "$OUT_DIR/run/tecpg.log" "$OUT_DIR/run/chunk_profile.tsv" "$OUT_DIR/run/chunk_profile_summary.txt" "$OUT_DIR/run/nvidia-smi-query.csv" "$OUT_DIR/run/pidstat.csv")
     VERDICT=""
     if [ -f "$OUT_DIR/run/chunk_profile_summary.txt" ]; then
@@ -586,6 +683,7 @@ echo ""
 
 if [ "$RUN_MATRIX" -eq 1 ] && [ -f "$OUT_DIR/matrix_summary.csv" ]; then
     echo "Cell Summary:"
+    # shellcheck disable=SC2034
     tail -n +2 "$OUT_DIR/matrix_summary.csv" | while IFS=, read -r cell util idle wall reg verdict; do
         if [[ "$verdict" == *"Failed"* ]] || [[ "$verdict" == "NA" ]]; then
             echo "  - $cell: Failed"
@@ -598,7 +696,7 @@ fi
 
 echo "What to look at first:"
 echo "1. chunk_profile_summary.txt (Tells you which stage dominates)"
-echo "2. nvidia-smi-query.csv (Look at clocks_throttle_reasons.active for thermal/power capping)"
+echo "2. nvidia-smi-query.csv (Look at clocks_throttle_reasons.active for thermal/power capping; note GpuIdle is masked out in summary)"
 echo "3. pidstat.csv (Look for CPU-bound producer/save threads)"
 echo ""
 echo "Archive: $abs_tarball"
