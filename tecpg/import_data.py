@@ -1,5 +1,6 @@
 import itertools
 import os
+import time
 from typing import Callable, Dict, List, Optional
 
 import pandas
@@ -125,6 +126,16 @@ def save_dataframe_part(
         first = os.stat(file_path).st_size == 0
 
     mode = 'w' if first else 'a'
+
+    logger.debug(
+        "WRITE_START chunk={0} file={1} rows={2} mode={3}",
+        chunk_number,
+        file_path,
+        len(dataframe),
+        mode,
+    )
+
+    start_t = time.perf_counter()
     dataframe.to_csv(
         file_path,
         float_format=logger.carry_data.get(
@@ -133,4 +144,18 @@ def save_dataframe_part(
         mode=mode,
         header=first,
         chunksize=logger.carry_data.get('csv_chunksize', 100_000),
+    )
+    end_t = time.perf_counter()
+
+    ms_elapsed = (end_t - start_t) * 1000.0
+    file_size = os.path.getsize(file_path)
+
+    logger.debug(
+        "WRITE_END chunk={0} file={1} rows={2} bytes={3} ms={4:.2f} mode={5}",
+        chunk_number,
+        file_path,
+        len(dataframe),
+        file_size,
+        ms_elapsed,
+        mode,
     )
