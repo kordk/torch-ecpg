@@ -87,7 +87,9 @@ def download_encode_files(target_dir):
             files_present = False
             print(f"Downloading {key} track from {url} ...")
             try:
-                urllib.request.urlretrieve(url, filepath)
+                if not url.lower().startswith(('http://', 'https://')):
+                    raise ValueError(f"Refusing to download non-http(s) URL: {url}")
+                urllib.request.urlretrieve(url, filepath)  # nosec B310 - scheme validated above
                 if filepath.endswith('.gz'):
                     print(f"Extracting {filepath} ...")
                     with gzip.open(filepath, 'rb') as f_in:
