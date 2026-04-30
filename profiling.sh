@@ -22,7 +22,7 @@ G_CHUNK=""
 S_CHUNK=""
 GPU_INDEX=0
 RUN_MATRIX=0
-NO_NSYS=0
+NSYS=0
 KEEP_OUTPUT=0
 FORCE_OVERWRITE=0
 SUMMARIZE_ONLY=""
@@ -76,7 +76,8 @@ Options:
   --writer-microbench      Run the I/O writer microbenchmark instead of main profiling
   --local-fast-dir DIR     Local fast directory for microbenchmark (default: /tmp/tecpg-writebench)
   --summarize-only DIR     Skip execution, just parse logs and print summary for existing run dir
-  --no-nsys, --no-nvprof   Opt out of heavy profilers
+  --nsys                   Enable heavy profilers (nsys)
+  --no-nsys, --no-nvprof   Deprecated, no-op
   --keep-output            Keep regression output files (default: delete)
   --force                  Overwrite output directory if it exists
   -h, --help               Show this help
@@ -142,8 +143,12 @@ while [[ "$#" -gt 0 ]]; do
             SUMMARIZE_ONLY="$2"
             shift 2
             ;;
+        --nsys)
+            NSYS=1
+            shift 1
+            ;;
         --no-nsys|--no-nvprof)
-            NO_NSYS=1
+            echo "Warning: --no-nsys is deprecated. Profilers are disabled by default. Use --nsys to enable them." >&2
             shift 1
             ;;
         --keep-output)
@@ -183,8 +188,6 @@ if [ "${RUN_WRITER_MICROBENCH:-0}" -ne 1 ]; then
         exit 1
     fi
 fi
-
-export CUDA_VISIBLE_DEVICES="$GPU_INDEX"
 
 for tool in pidstat iostat vmstat awk sort tar mktemp; do
     if ! command -v "$tool" &> /dev/null; then
@@ -254,11 +257,14 @@ start_samplers() {
     nvidia-smi dmon -s pucvmet -d 1 -o DT > "$cell_dir/nvidia-smi-dmon.csv" 2>/dev/null &
     SAMPLER_PIDS+=($!)
 
-    nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu,clocks.sm,clocks.mem,power.draw,pstate,clocks_throttle_reasons.active --format=csv -lms 500 > "$cell_dir/nvidia-smi-query.csv" 2>/dev/null &
+    nvidia-smi pmon -s um -d 1 -o DT > "$cell_dir/nvidia-smi-pmon.csv" 2>/dev/null &
+    SAMPLER_PIDS+=($!)
+
+    nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu,clocks.sm,clocks.mem,power.draw,pstate,clocks_throttle_reasons.active --format=csv -lms 100 > "$cell_dir/nvidia-smi-query.csv" 2>/dev/null &
     SAMPLER_PIDS+=($!)
 
     if command -v pidstat &> /dev/null; then
-        pidstat -h -d -r -u -w -p ALL 1 > "$cell_dir/pidstat.csv" 2>/dev/null &
+        pidstat -h -H -l -d -r -u -w -p ALL 1 > "$cell_dir/pidstat.csv" 2>/dev/null &
         SAMPLER_PIDS+=($!)
     fi
 
@@ -499,7 +505,7 @@ run_workload() {
 
     local base_cmd="tecpg $tecpg_global_args $tecpg_args"
 
-    local env_cmd="env TECPG_PROFILE=1 CUDA_LAUNCH_BLOCKING=${TECPG_PROFILING_BLOCKING:-0} $extra_env"
+    local env_cmd="env CUDA_VISIBLE_DEVICES=$GPU_INDEX TECPG_PROFILE=1 CUDA_LAUNCH_BLOCKING=${TECPG_PROFILING_BLOCKING:-0} $extra_env"
 
     echo "Cell: $cell_name" > "$cell_dir/cell.txt"
     echo "Env: $env_cmd" >> "$cell_dir/cell.txt"
@@ -519,10 +525,10 @@ run_workload() {
     start_samplers "$cell_dir" "$cap_duration"
 
     local nsys_cmd=""
-    if [ "$is_baseline" -eq 1 ] && [ "$NO_NSYS" -eq 0 ]; then
+    if [ "$is_baseline" -eq 1 ] && [ "$NSYS" -eq 1 ]; then
         if command -v nsys &> /dev/null; then
             local nsys_dur=$(( cap_duration < 180 ? cap_duration : 180 ))
-            nsys_cmd="nsys profile -t cuda,nvtx,osrt,cudnn,cublas -o $cell_dir/nsys --force-overwrite=true --duration=$nsys_dur "
+            nsys_cmd="nsys profile -t cuda,nvtx,osrt,cudnn,cublas -o $cell_dir/nsys --force-overwrite=true --export=none --duration=$nsys_dur "
         fi
     fi
 
@@ -531,11 +537,19 @@ run_workload() {
     log "Executing: $run_cmd"
 
     set +e
+    local start_timestamp
+    start_timestamp=$(date -Iseconds)
     eval "$run_cmd" > "$cell_dir/tecpg.log" 2>&1 &
     TECPG_PID=$!
+    local captured_pid=$TECPG_PID
+
+    if command -v pidstat &> /dev/null; then
+        pidstat -t -p $TECPG_PID 1 > "$cell_dir/pidstat-threads.csv" 2>/dev/null &
+        SAMPLER_PIDS+=($!)
+    fi
 
     local pyspy_pid=""
-    if [ "$is_baseline" -eq 1 ] && [ "$NO_NSYS" -eq 0 ]; then
+    if [ "$is_baseline" -eq 1 ] && [ "$NSYS" -eq 1 ]; then
         if command -v py-spy &> /dev/null; then
             py-spy record -o "$cell_dir/pyspy.svg" -p $TECPG_PID -F --idle -d "$cap_duration" > /dev/null 2>&1 &
             pyspy_pid=$!
@@ -561,6 +575,8 @@ run_workload() {
     local tecpg_exit=$?
     TECPG_PID=""
     set -e
+    local end_timestamp
+    end_timestamp=$(date -Iseconds)
 
     if [ $tecpg_exit -eq 124 ]; then
         log "tecpg timed out after $cap_duration seconds as expected."
@@ -574,6 +590,34 @@ run_workload() {
     if [ -n "$pyspy_pid" ]; then kill $pyspy_pid 2>/dev/null || true; fi
 
     stop_samplers
+
+    local hostname_val
+    hostname_val=$(hostname)
+    local gpu_models
+    gpu_models=$(nvidia-smi -L 2>/dev/null | tr '\n' ';' || echo "Unknown GPU")
+
+    if command -v jq &> /dev/null; then
+        jq -n \
+            --arg hostname "$hostname_val" \
+            --arg start_ts "$start_timestamp" \
+            --arg end_ts "$end_timestamp" \
+            --arg cvd "$GPU_INDEX" \
+            --arg cmd "$run_cmd" \
+            --arg pid "$captured_pid" \
+            --arg gpus "$gpu_models" \
+            --arg intervals "nvidia-smi-query:100ms, nvidia-smi-pmon:1s, pidstat:1s, pidstat-threads:1s" \
+            '{hostname: $hostname, start_timestamp: $start_ts, end_timestamp: $end_ts, CUDA_VISIBLE_DEVICES: $cvd, command: $cmd, tecpg_pid: $pid, gpu_models: $gpus, intervals: $intervals}' > "$cell_dir/run-metadata.json"
+    else
+        echo "{\"hostname\": \"$hostname_val\", \"start_timestamp\": \"$start_timestamp\", \"end_timestamp\": \"$end_timestamp\", \"CUDA_VISIBLE_DEVICES\": \"$GPU_INDEX\", \"command\": \"$run_cmd\", \"tecpg_pid\": \"$captured_pid\", \"gpu_models\": \"$gpu_models\", \"intervals\": \"nvidia-smi-query:100ms, nvidia-smi-pmon:1s, pidstat:1s, pidstat-threads:1s\"}" > "$cell_dir/run-metadata.json"
+    fi
+
+    if [ "$is_baseline" -eq 1 ] && [ "$NSYS" -eq 1 ]; then
+        if command -v nsys &> /dev/null; then
+            log "Running nsys export post-hoc..."
+            # Find the generated qdstrm/nsys-rep file and export it
+            nsys export -t sqlite -o "$cell_dir/nsys.sqlite" "$cell_dir"/nsys.* 2>/dev/null || true
+        fi
+    fi
 
     if [ -f "$cell_dir/iostat.log" ]; then
         # Parse iostat into a simple CSV to keep it alongside the log
