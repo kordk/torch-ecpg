@@ -1,6 +1,7 @@
 import argparse
 import os
 import shutil
+import tempfile
 import time
 import pandas as pd
 import numpy as np
@@ -64,7 +65,7 @@ def run_bench(df, target_dir, n_iterations, logger):
 def main():
     parser = argparse.ArgumentParser(description="Microbenchmark for tecpg writer bottleneck")
     parser.add_argument('--output-dir', required=True, help="Target slow directory (e.g. network/slow FS)")
-    parser.add_argument('--local-fast-dir', default='/tmp/tecpg-writebench', help="Local fast directory (e.g. NVMe path)")
+    parser.add_argument('--local-fast-dir', default=os.path.join(tempfile.gettempdir(), 'tecpg-writebench'), help="Local fast directory (e.g. NVMe path)")
     parser.add_argument('-n', '--iterations', type=int, default=20, help="Number of write iterations")
     parser.add_argument('--rows', type=int, default=500_000, help="Number of rows per chunk")
     parser.add_argument('--keep', action='store_true', help="Keep the written test files after benchmarking")

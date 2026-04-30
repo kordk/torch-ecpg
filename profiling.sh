@@ -72,7 +72,7 @@ Options:
   -g N                     Gene chunk size for tecpg (default: depends on dataset)
   -s N                     Meth chunk size for tecpg (default: depends on dataset)
   --gpu-index N            Value for CUDA_VISIBLE_DEVICES (default: 0). The script
-                           exports CUDA_DEVICE_ORDER=PCI_BUS_ID so this index
+                           sets CUDA_DEVICE_ORDER=PCI_BUS_ID so this index
                            matches nvidia-smi's GPU index.
   --matrix                 Run a small parameter sweep instead of single run (duration capped at 90s per cell)
   --writer-microbench      Run the I/O writer microbenchmark instead of main profiling
