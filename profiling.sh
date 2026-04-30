@@ -71,7 +71,9 @@ Options:
   --blas-threads N         Pass to tecpg via env and args if set
   -g N                     Gene chunk size for tecpg (default: depends on dataset)
   -s N                     Meth chunk size for tecpg (default: depends on dataset)
-  --gpu-index N            Value for CUDA_VISIBLE_DEVICES (default: 0)
+  --gpu-index N            Value for CUDA_VISIBLE_DEVICES (default: 0). The script
+                           exports CUDA_DEVICE_ORDER=PCI_BUS_ID so this index
+                           matches nvidia-smi's GPU index.
   --matrix                 Run a small parameter sweep instead of single run (duration capped at 90s per cell)
   --writer-microbench      Run the I/O writer microbenchmark instead of main profiling
   --local-fast-dir DIR     Local fast directory for microbenchmark (default: /tmp/tecpg-writebench)
@@ -227,9 +229,9 @@ capture_environment() {
         echo -e "\n=== PyTorch ==="
         python3 -c "import torch; print('PyTorch:', torch.__version__, '| CUDA:', torch.version.cuda, '| cuDNN:', torch.backends.cudnn.version(), '| Device:', torch.cuda.get_device_name(0), '| Capability:', torch.cuda.get_device_capability(0))" || echo "PyTorch info failed"
         echo -e "\n=== PyTorch (target GPU index $GPU_INDEX) ==="
-        CUDA_VISIBLE_DEVICES="$GPU_INDEX" python3 -c "import torch; print('Device:', torch.cuda.get_device_name(0), '| Capability:', torch.cuda.get_device_capability(0))" 2>/dev/null || echo "PyTorch target-GPU info failed"
+        CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES="$GPU_INDEX" python3 -c "import torch; print('Device:', torch.cuda.get_device_name(0), '| Capability:', torch.cuda.get_device_capability(0))" 2>/dev/null || echo "PyTorch target-GPU info failed"
         echo -e "\n=== Environment Variables ==="
-        env | grep -E "CUDA_VISIBLE_DEVICES|OMP_NUM_THREADS|MKL_NUM_THREADS|OPENBLAS_NUM_THREADS|TORCH_CUDA_ARCH_LIST|PYTORCH_CUDA_ALLOC_CONF|TECPG_" || true
+        env | grep -E "CUDA_DEVICE_ORDER|CUDA_VISIBLE_DEVICES|OMP_NUM_THREADS|MKL_NUM_THREADS|OPENBLAS_NUM_THREADS|TORCH_CUDA_ARCH_LIST|PYTORCH_CUDA_ALLOC_CONF|TECPG_" || true
         echo -e "\n=== Repo State ==="
         git rev-parse HEAD 2>/dev/null || echo "Not a git repo"
         git status --porcelain 2>/dev/null || true
@@ -513,7 +515,11 @@ run_workload() {
 
     local base_cmd="tecpg $tecpg_global_args $tecpg_args"
 
-    local env_cmd="env CUDA_VISIBLE_DEVICES=$GPU_INDEX TECPG_PROFILE=1 CUDA_LAUNCH_BLOCKING=${TECPG_PROFILING_BLOCKING:-0} $extra_env"
+    # CUDA_DEVICE_ORDER=PCI_BUS_ID forces CUDA's enumeration to match nvidia-smi's
+    # (PCI bus ID) order. Without this, CUDA defaults to FASTEST_FIRST and may
+    # reorder devices, causing CUDA_VISIBLE_DEVICES=$GPU_INDEX to select a
+    # different physical GPU than the one shown at index $GPU_INDEX in nvidia-smi.
+    local env_cmd="env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=$GPU_INDEX TECPG_PROFILE=1 CUDA_LAUNCH_BLOCKING=${TECPG_PROFILING_BLOCKING:-0} $extra_env"
 
     echo "Cell: $cell_name" > "$cell_dir/cell.txt"
     echo "Env: $env_cmd" >> "$cell_dir/cell.txt"
