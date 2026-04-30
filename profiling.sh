@@ -73,6 +73,8 @@ Options:
   -s N                     Meth chunk size for tecpg (default: depends on dataset)
   --gpu-index N            Value for CUDA_VISIBLE_DEVICES (default: 0)
   --matrix                 Run a small parameter sweep instead of single run (duration capped at 90s per cell)
+  --writer-microbench      Run the I/O writer microbenchmark instead of main profiling
+  --local-fast-dir DIR     Local fast directory for microbenchmark (default: /tmp/tecpg-writebench)
   --summarize-only DIR     Skip execution, just parse logs and print summary for existing run dir
   --no-nsys, --no-nvprof   Opt out of heavy profilers
   --keep-output            Keep regression output files (default: delete)
@@ -128,6 +130,14 @@ while [[ "$#" -gt 0 ]]; do
             RUN_MATRIX=1
             shift 1
             ;;
+        --writer-microbench)
+            RUN_WRITER_MICROBENCH=1
+            shift 1
+            ;;
+        --local-fast-dir)
+            LOCAL_FAST_DIR="$2"
+            shift 2
+            ;;
         --summarize-only)
             SUMMARIZE_ONLY="$2"
             shift 2
@@ -162,14 +172,16 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-if ! command -v nvidia-smi &> /dev/null; then
-    echo "Error: nvidia-smi not found. This script requires an NVIDIA GPU and drivers."
-    exit 1
-fi
+if [ "${RUN_WRITER_MICROBENCH:-0}" -ne 1 ]; then
+    if ! command -v nvidia-smi &> /dev/null; then
+        echo "Error: nvidia-smi not found. This script requires an NVIDIA GPU and drivers."
+        exit 1
+    fi
 
-if ! nvidia-smi -i "$GPU_INDEX" &> /dev/null; then
-    echo "Error: GPU index $GPU_INDEX is not visible or invalid according to nvidia-smi."
-    exit 1
+    if ! nvidia-smi -i "$GPU_INDEX" &> /dev/null; then
+        echo "Error: GPU index $GPU_INDEX is not visible or invalid according to nvidia-smi."
+        exit 1
+    fi
 fi
 
 export CUDA_VISIBLE_DEVICES="$GPU_INDEX"
@@ -251,8 +263,14 @@ start_samplers() {
     fi
 
     if command -v iostat &> /dev/null; then
-        iostat -xmt 1 > "$cell_dir/iostat.txt" 2>/dev/null &
-        SAMPLER_PIDS+=($!)
+        if [ "$(uname)" = "Darwin" ]; then
+            # macOS iostat doesn't support -x or -t in the same way, fallback to basic disk usage stats
+            iostat -d -w 1 > "$cell_dir/iostat.log" 2>/dev/null &
+            SAMPLER_PIDS+=($!)
+        else
+            iostat -x -t 1 > "$cell_dir/iostat.log" 2>/dev/null &
+            SAMPLER_PIDS+=($!)
+        fi
     fi
 
     if command -v vmstat &> /dev/null; then
@@ -557,12 +575,45 @@ run_workload() {
 
     stop_samplers
 
+    if [ -f "$cell_dir/iostat.log" ]; then
+        # Parse iostat into a simple CSV to keep it alongside the log
+        if [ "$(uname)" = "Darwin" ]; then
+            awk 'BEGIN{OFS=","} NR>2 {print $1,$2,$3}' "$cell_dir/iostat.log" > "$cell_dir/iostat.csv" 2>/dev/null || true
+        else
+            awk 'BEGIN{OFS=","} /Device/ {if (!header_printed) {print $0; header_printed=1}} !/Device/ && NF>0 {print $0}' "$cell_dir/iostat.log" | tr -s ' ' ',' > "$cell_dir/iostat.csv" 2>/dev/null || true
+        fi
+    fi
+
     if [ "$KEEP_OUTPUT" -eq 0 ]; then
         rm -rf "$cell_dir/tecpg_out" 2>/dev/null || true
     fi
 }
 
 capture_environment
+
+if [ "${RUN_WRITER_MICROBENCH:-0}" -eq 1 ]; then
+    log "Running I/O writer microbenchmark..."
+
+    mkdir -p "$OUT_DIR"
+    out_file="$OUT_DIR/writer_microbench.txt"
+
+    # Use bash array to safely handle paths with spaces or metacharacters
+    cmd_args=("python3" "-m" "tools.io_microbench" "--output-dir" "$OUT_DIR")
+    if [ -n "${LOCAL_FAST_DIR:-}" ]; then
+        cmd_args+=("--local-fast-dir" "$LOCAL_FAST_DIR")
+    fi
+
+    log "Executing: ${cmd_args[*]}"
+    "${cmd_args[@]}" > "$out_file"
+
+    cat "$out_file"
+
+    echo "========================================================="
+    echo "Writer Microbenchmark Complete!"
+    echo "Results saved to: $out_file"
+    echo "========================================================="
+    exit 0
+fi
 
 if [ -n "$SUMMARIZE_ONLY" ]; then
     OUT_DIR="$SUMMARIZE_ONLY"
@@ -594,6 +645,15 @@ if [ -n "$SUMMARIZE_ONLY" ]; then
         ln -sf "run/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
         ln -sf "run/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
         VERDICT=$(grep "Verdict:" "$OUT_DIR/run/chunk_profile_summary.txt" | sed 's/Verdict: //' || true)
+    fi
+
+    # Try linking iostat.log and iostat.csv if available
+    if [ -f "$OUT_DIR/baseline/iostat.log" ]; then
+        ln -sf "baseline/iostat.log" "$OUT_DIR/iostat.log" 2>/dev/null || true
+        ln -sf "baseline/iostat.csv" "$OUT_DIR/iostat.csv" 2>/dev/null || true
+    elif [ -f "$OUT_DIR/run/iostat.log" ]; then
+        ln -sf "run/iostat.log" "$OUT_DIR/iostat.log" 2>/dev/null || true
+        ln -sf "run/iostat.csv" "$OUT_DIR/iostat.csv" 2>/dev/null || true
     fi
 
     RUN_MATRIX=1 # To trigger the matrix summary output block
@@ -646,6 +706,10 @@ elif [ "$RUN_MATRIX" -eq 1 ]; then
     ln -s "baseline/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
     ln -s "baseline/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
     ln -s "baseline/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
+    if [ -f "$OUT_DIR/baseline/iostat.log" ]; then
+        ln -s "baseline/iostat.log" "$OUT_DIR/iostat.log" 2>/dev/null || true
+        ln -s "baseline/iostat.csv" "$OUT_DIR/iostat.csv" 2>/dev/null || true
+    fi
     VERDICT=""
     if [ -f "$OUT_DIR/baseline/chunk_profile_summary.txt" ]; then
         VERDICT=$(grep "Verdict:" "$OUT_DIR/baseline/chunk_profile_summary.txt" | sed 's/Verdict: //' || true)
@@ -663,6 +727,10 @@ else
     ln -s "run/chunk_profile_summary.txt" "$OUT_DIR/chunk_profile_summary.txt" 2>/dev/null || true
     ln -s "run/nvidia-smi-query.csv" "$OUT_DIR/nvidia-smi-query.csv" 2>/dev/null || true
     ln -s "run/pidstat.csv" "$OUT_DIR/pidstat.csv" 2>/dev/null || true
+    if [ -f "$OUT_DIR/run/iostat.log" ]; then
+        ln -s "run/iostat.log" "$OUT_DIR/iostat.log" 2>/dev/null || true
+        ln -s "run/iostat.csv" "$OUT_DIR/iostat.csv" 2>/dev/null || true
+    fi
 fi
 
 if [ -z "${VERDICT:-}" ]; then
@@ -698,6 +766,7 @@ echo "What to look at first:"
 echo "1. chunk_profile_summary.txt (Tells you which stage dominates)"
 echo "2. nvidia-smi-query.csv (Look at clocks_throttle_reasons.active for thermal/power capping; note GpuIdle is masked out in summary)"
 echo "3. pidstat.csv (Look for CPU-bound producer/save threads)"
+echo "4. iostat.log (Look for high await/util% to check for storage bottlenecks)"
 echo ""
 echo "Archive: $abs_tarball"
 echo "SHA256:  $sha256"
