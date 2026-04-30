@@ -217,12 +217,17 @@ capture_environment() {
         nvidia-smi || true
         nvidia-smi -q || true
         nvidia-smi topo -m 2>/dev/null || true
+        echo -e "\n=== Target GPU (index $GPU_INDEX) ==="
+        nvidia-smi -i "$GPU_INDEX" -L 2>/dev/null || true
+        nvidia-smi -i "$GPU_INDEX" --query-gpu=index,name,uuid,pci.bus_id,memory.total,driver_version --format=csv 2>/dev/null || true
         echo -e "\n=== Tools ==="
         command -v nvcc >/dev/null && nvcc --version || echo "nvcc not found"
         python3 --version || true
         pip freeze || true
         echo -e "\n=== PyTorch ==="
         python3 -c "import torch; print('PyTorch:', torch.__version__, '| CUDA:', torch.version.cuda, '| cuDNN:', torch.backends.cudnn.version(), '| Device:', torch.cuda.get_device_name(0), '| Capability:', torch.cuda.get_device_capability(0))" || echo "PyTorch info failed"
+        echo -e "\n=== PyTorch (target GPU index $GPU_INDEX) ==="
+        CUDA_VISIBLE_DEVICES="$GPU_INDEX" python3 -c "import torch; print('Device:', torch.cuda.get_device_name(0), '| Capability:', torch.cuda.get_device_capability(0))" 2>/dev/null || echo "PyTorch target-GPU info failed"
         echo -e "\n=== Environment Variables ==="
         env | grep -E "CUDA_VISIBLE_DEVICES|OMP_NUM_THREADS|MKL_NUM_THREADS|OPENBLAS_NUM_THREADS|TORCH_CUDA_ARCH_LIST|PYTORCH_CUDA_ALLOC_CONF|TECPG_" || true
         echo -e "\n=== Repo State ==="
@@ -254,13 +259,16 @@ start_samplers() {
     CURRENT_CELL_DIR="$cell_dir"
     SAMPLER_PIDS=()
 
-    nvidia-smi dmon -s pucvmet -d 1 -o DT > "$cell_dir/nvidia-smi-dmon.csv" 2>/dev/null &
+    # Scope GPU samplers to the GPU index used by tecpg (CUDA_VISIBLE_DEVICES=$GPU_INDEX).
+    # Without -i, these tools default to GPU 0, which yields a misleading report on
+    # multi-GPU hosts when tecpg is pinned to a non-zero GPU.
+    nvidia-smi dmon -i "$GPU_INDEX" -s pucvmet -d 1 -o DT > "$cell_dir/nvidia-smi-dmon.csv" 2>/dev/null &
     SAMPLER_PIDS+=($!)
 
-    nvidia-smi pmon -s um -d 1 -o DT > "$cell_dir/nvidia-smi-pmon.csv" 2>/dev/null &
+    nvidia-smi pmon -i "$GPU_INDEX" -s um -d 1 -o DT > "$cell_dir/nvidia-smi-pmon.csv" 2>/dev/null &
     SAMPLER_PIDS+=($!)
 
-    nvidia-smi --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu,clocks.sm,clocks.mem,power.draw,pstate,clocks_throttle_reasons.active --format=csv -lms 100 > "$cell_dir/nvidia-smi-query.csv" 2>/dev/null &
+    nvidia-smi -i "$GPU_INDEX" --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu,clocks.sm,clocks.mem,power.draw,pstate,clocks_throttle_reasons.active --format=csv -lms 100 > "$cell_dir/nvidia-smi-query.csv" 2>/dev/null &
     SAMPLER_PIDS+=($!)
 
     if command -v pidstat &> /dev/null; then
@@ -595,6 +603,8 @@ run_workload() {
     hostname_val=$(hostname)
     local gpu_models
     gpu_models=$(nvidia-smi -L 2>/dev/null | tr '\n' ';' || echo "Unknown GPU")
+    local target_gpu_model
+    target_gpu_model=$(nvidia-smi -i "$GPU_INDEX" --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || echo "Unknown GPU")
 
     if command -v jq &> /dev/null; then
         jq -n \
@@ -605,10 +615,12 @@ run_workload() {
             --arg cmd "$run_cmd" \
             --arg pid "$captured_pid" \
             --arg gpus "$gpu_models" \
+            --arg target_gpu_index "$GPU_INDEX" \
+            --arg target_gpu_model "$target_gpu_model" \
             --arg intervals "nvidia-smi-query:100ms, nvidia-smi-pmon:1s, pidstat:1s, pidstat-threads:1s" \
-            '{hostname: $hostname, start_timestamp: $start_ts, end_timestamp: $end_ts, CUDA_VISIBLE_DEVICES: $cvd, command: $cmd, tecpg_pid: $pid, gpu_models: $gpus, intervals: $intervals}' > "$cell_dir/run-metadata.json"
+            '{hostname: $hostname, start_timestamp: $start_ts, end_timestamp: $end_ts, CUDA_VISIBLE_DEVICES: $cvd, command: $cmd, tecpg_pid: $pid, gpu_models: $gpus, target_gpu_index: $target_gpu_index, target_gpu_model: $target_gpu_model, intervals: $intervals}' > "$cell_dir/run-metadata.json"
     else
-        echo "{\"hostname\": \"$hostname_val\", \"start_timestamp\": \"$start_timestamp\", \"end_timestamp\": \"$end_timestamp\", \"CUDA_VISIBLE_DEVICES\": \"$GPU_INDEX\", \"command\": \"$run_cmd\", \"tecpg_pid\": \"$captured_pid\", \"gpu_models\": \"$gpu_models\", \"intervals\": \"nvidia-smi-query:100ms, nvidia-smi-pmon:1s, pidstat:1s, pidstat-threads:1s\"}" > "$cell_dir/run-metadata.json"
+        echo "{\"hostname\": \"$hostname_val\", \"start_timestamp\": \"$start_timestamp\", \"end_timestamp\": \"$end_timestamp\", \"CUDA_VISIBLE_DEVICES\": \"$GPU_INDEX\", \"command\": \"$run_cmd\", \"tecpg_pid\": \"$captured_pid\", \"gpu_models\": \"$gpu_models\", \"target_gpu_index\": \"$GPU_INDEX\", \"target_gpu_model\": \"$target_gpu_model\", \"intervals\": \"nvidia-smi-query:100ms, nvidia-smi-pmon:1s, pidstat:1s, pidstat-threads:1s\"}" > "$cell_dir/run-metadata.json"
     fi
 
     if [ "$is_baseline" -eq 1 ] && [ "$NSYS" -eq 1 ]; then
