@@ -9,6 +9,12 @@ from .helper import download_files, initialize_dir, read_csv
 from .import_data import save_dataframes
 from .logger import Logger
 
+
+GTP_KENNEDY_URL = (
+    'eCpGs_Kennedy2018_GTP.txt',
+    'https://static-content.springer.com/esm/art%3A10.1186%2Fs12864-018-4842-3/MediaObjects/12864_2018_4842_MOESM1_ESM.txt'
+)
+
 GTP_FILE_URLS = [
     (
         'CovariateMatrix.txt.gz',
@@ -54,6 +60,9 @@ def download_gtp_raw(
     logger.info('Downloading GTP raw data (this could take a very long time)')
     download_files(gtp_path, GTP_FILE_URLS, **kwargs, **logger)
 
+    logger.info('Downloading eCpG-transcript pairs from Kennedy et al. 2018 study (PubMed ID 29914364; DOI: 10.1186/s12864-018-4842-3)')
+    download_files(gtp_path, [GTP_KENNEDY_URL], **kwargs, **logger)
+
 
 def get_gtp_dataframes(
     gtp_path: str, *, logger: Logger = Logger()
@@ -93,7 +102,7 @@ def gtp_raw_clean(gtp_path: str, *, logger: Logger = Logger()) -> bool:
         return False
 
     files = os.listdir(gtp_path)
-    target_files = [file for file, _ in GTP_FILE_URLS]
+    target_files = [file for file, _ in GTP_FILE_URLS] + [GTP_KENNEDY_URL[0]]
     for file in files:
         if file not in target_files:
             logger.warning(f'{file} is being removed from {gtp_path}')
@@ -104,7 +113,7 @@ def gtp_raw_clean(gtp_path: str, *, logger: Logger = Logger()) -> bool:
                 os.remove(file_path)
 
     remaining = len(os.listdir(gtp_path))
-    return remaining == 4
+    return remaining == len(target_files)
 
 
 def process_gtp(
@@ -240,6 +249,14 @@ def save_gtp_data(
         save_dataframes(data, data_path, **logger)
     else:
         save_dataframes(data, data_path, file_names, **logger)
+
+    kennedy_filename = GTP_KENNEDY_URL[0]
+    kennedy_src = os.path.join(gtp_path, kennedy_filename)
+    kennedy_dst = os.path.join(data_path, kennedy_filename)
+    if os.path.exists(kennedy_src):
+        shutil.copyfile(kennedy_src, kennedy_dst)
+        logger.info('Copied {0} to {1}', kennedy_filename, data_path)
+
     logger.warning(
         'GTP methylation, gene expression, and covariates downloaded. If you'
         ' would like to use region filtration, please manually copy the'
