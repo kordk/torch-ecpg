@@ -210,7 +210,9 @@ def main():
             plt.savefig(upset_path, dpi=300)
             plt.close()
 
-        return len(tecpg_set), len(kennedy_set), len(overlap), jaccard
+        only_tecpg = len(tecpg_set - kennedy_set)
+        only_kennedy = len(kennedy_set - tecpg_set)
+        return len(tecpg_set), len(kennedy_set), len(overlap), only_tecpg, only_kennedy, jaccard
 
     logging.info("Generating overlap visualizations...")
 
@@ -229,8 +231,8 @@ def main():
 
     # Summary Output
     def format_overlap_stats(title, stats_tuple):
-        t_len, k_len, o_len, jaccard = stats_tuple
-        return f"{title}:\n  tecpg Count:   {t_len}\n  Kennedy Count: {k_len}\n  Overlap:       {o_len}\n  Jaccard Index: {jaccard:.4f}\n"
+        t_len, k_len, o_len, only_t, only_k, jaccard = stats_tuple
+        return f"{title}:\n  tecpg Count:   {t_len}\n  Kennedy Count: {k_len}\n  Overlap:       {o_len}\n  Only in tecpg: {only_t}\n  Only in Kennedy: {only_k}\n  Jaccard Index: {jaccard:.4f}\n"
 
     summary = f"""Benchmark Summary
 =================
