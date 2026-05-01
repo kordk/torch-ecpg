@@ -79,6 +79,10 @@ def main():
     logging.info(f"Loading tecpg data from {args.tecpg}...")
     try:
         df_tecpg = pq.read_table(args.tecpg).to_pandas()
+        logging.info(f"tecpg data loaded. Shape: {df_tecpg.shape}")
+        logging.info(f"tecpg columns: {list(df_tecpg.columns)}")
+        logging.info(f"tecpg distinct genes (gt_id): {df_tecpg.get('gt_id', pd.Series()).nunique()}")
+        logging.info(f"tecpg distinct CpG loci (mt_id): {df_tecpg.get('mt_id', pd.Series()).nunique()}")
     except Exception as e:
         logging.error(f"Failed to read tecpg file: {e}")
         sys.exit(1)
@@ -87,6 +91,13 @@ def main():
     try:
         # Kennedy format is likely tab or space separated
         df_kennedy = pd.read_csv(args.kennedy, sep=None, engine='python')
+        logging.info(f"Kennedy data loaded. Shape: {df_kennedy.shape}")
+        logging.info(f"Kennedy columns: {list(df_kennedy.columns)}")
+        # Check potential cpg and gene columns
+        cpg_col_initial = 'CpG.probe' if 'CpG.probe' in df_kennedy.columns else df_kennedy.columns[0]
+        gene_col_initial = 'annot.gene' if 'annot.gene' in df_kennedy.columns else ('exp.Probe' if 'exp.Probe' in df_kennedy.columns else df_kennedy.columns[1])
+        logging.info(f"Kennedy distinct genes ({gene_col_initial}): {df_kennedy.get(gene_col_initial, pd.Series()).nunique()}")
+        logging.info(f"Kennedy distinct CpG loci ({cpg_col_initial}): {df_kennedy.get(cpg_col_initial, pd.Series()).nunique()}")
     except Exception as e:
         logging.error(f"Failed to read Kennedy file: {e}")
         sys.exit(1)
@@ -94,15 +105,29 @@ def main():
     logging.info("Preprocessing and mapping IDs...")
 
     # Strip version suffix from tecpg gt_id if present
-    df_tecpg['gt_id_base'] = df_tecpg['gt_id'].astype(str).str.split('.').str[0]
+    if 'gt_id' in df_tecpg.columns:
+        df_tecpg['gt_id_base'] = df_tecpg['gt_id'].astype(str).str.split('.').str[0]
+    else:
+        logging.warning("tecpg dataset is missing 'gt_id' column.")
 
     df_kennedy = map_kennedy_ids(df_kennedy)
+
+    if 'mapped_gt_id' in df_kennedy.columns:
+        logging.info(f"Kennedy distinct genes after mapping (mapped_gt_id): {df_kennedy['mapped_gt_id'].nunique()}")
 
     # Standardize column names for merge
     # Kennedy CpG usually 'CpG.probe', tecpg 'mt_id'
     cpg_col = 'CpG.probe' if 'CpG.probe' in df_kennedy.columns else df_kennedy.columns[0]
 
     df_kennedy = df_kennedy.dropna(subset=['mapped_gt_id', cpg_col])
+
+    # Log a sample of the key columns before merging
+    if 'mt_id' in df_tecpg.columns and 'gt_id_base' in df_tecpg.columns:
+        logging.info(f"Sample of tecpg key columns (first 5 rows):\n{df_tecpg[['mt_id', 'gt_id', 'gt_id_base']].head().to_string()}")
+
+    query_col = 'exp.Probe' if 'exp.Probe' in df_kennedy.columns else ('annot.gene' if 'annot.gene' in df_kennedy.columns else df_kennedy.columns[1])
+    if cpg_col in df_kennedy.columns and 'mapped_gt_id' in df_kennedy.columns and query_col in df_kennedy.columns:
+        logging.info(f"Sample of Kennedy key columns before merge (first 5 rows):\n{df_kennedy[[cpg_col, query_col, 'mapped_gt_id']].head().to_string()}")
 
     logging.info("Merging datasets...")
     # Inner join on CpG and Gene
