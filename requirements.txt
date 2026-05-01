@@ -19,3 +19,5 @@ pyranges
 seaborn
 statsmodels
 polars
+matplotlib-venn
+upsetplot
