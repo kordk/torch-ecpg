@@ -150,49 +150,88 @@ def main():
     plt.close()
 
     # --- Comparison B: Hit Overlap and FDR Sensitivity ---
-    logging.info("Calculating hit overlap...")
-    # Assume tecpg FDR column is 'fdr_est', 'fdr_bh' or 'mt_fdr'
+    logging.info("Calculating overlap sets...")
+
+    # Calculate Sets for ALL
+    tecpg_all_mappings = set(zip(df_tecpg['mt_id'], df_tecpg['gt_id']))
+    tecpg_all_genes = set(df_tecpg['gt_id'].dropna())
+    tecpg_all_loci = set(df_tecpg['mt_id'].dropna())
+
+    kennedy_all_mappings = set(zip(df_kennedy[cpg_col], df_kennedy[query_col]))
+    kennedy_all_genes = set(df_kennedy[query_col].dropna())
+    kennedy_all_loci = set(df_kennedy[cpg_col].dropna())
+
+    # Calculate Sets for SIGNIFICANT
     tecpg_fdr_col = 'fdr_est' if 'fdr_est' in df_tecpg.columns else 'fdr_bh' if 'fdr_bh' in df_tecpg.columns else 'mt_p' if 'mt_p' in df_tecpg.columns else None
 
     if pval_col is None:
         pval_col = [c for c in df_kennedy.columns if 'p' in c.lower()][-1]
 
-    kennedy_sig = set(df_kennedy[df_kennedy[pval_col] < args.p_thresh].apply(lambda row: (row[cpg_col], row[query_col]), axis=1))
+    kennedy_sig_df = df_kennedy[df_kennedy[pval_col] < args.p_thresh]
+    kennedy_sig_mappings = set(zip(kennedy_sig_df[cpg_col], kennedy_sig_df[query_col]))
+    kennedy_sig_genes = set(kennedy_sig_df[query_col].dropna())
+    kennedy_sig_loci = set(kennedy_sig_df[cpg_col].dropna())
 
     if tecpg_fdr_col:
         # if using FDR, < 0.05
         tecpg_thresh = 0.05 if 'fdr' in tecpg_fdr_col.lower() else args.p_thresh
-        tecpg_sig = set(df_tecpg[df_tecpg[tecpg_fdr_col] < tecpg_thresh].apply(lambda row: (row['mt_id'], row['gt_id']), axis=1))
+        tecpg_sig_df = df_tecpg[df_tecpg[tecpg_fdr_col] < tecpg_thresh]
     else:
         logging.warning("Could not find FDR or p-value column in tecpg data. Using all merged pairs as tecpg hits.")
-        tecpg_sig = set(df_tecpg.apply(lambda row: (row['mt_id'], row['gt_id']), axis=1))
+        tecpg_sig_df = df_tecpg
 
-    overlap = kennedy_sig.intersection(tecpg_sig)
-    union = kennedy_sig.union(tecpg_sig)
-    jaccard = len(overlap) / len(union) if len(union) > 0 else 0
+    tecpg_sig_mappings = set(zip(tecpg_sig_df['mt_id'], tecpg_sig_df['gt_id']))
+    tecpg_sig_genes = set(tecpg_sig_df['gt_id'].dropna())
+    tecpg_sig_loci = set(tecpg_sig_df['mt_id'].dropna())
+
+    def create_plots(tecpg_set, kennedy_set, title_prefix, filename_prefix):
+        overlap = kennedy_set.intersection(tecpg_set)
+        union = kennedy_set.union(tecpg_set)
+        jaccard = len(overlap) / len(union) if len(union) > 0 else 0
+
+        # Venn diagram
+        plt.figure(figsize=(8, 6))
+        venn2([tecpg_set, kennedy_set], set_labels=('tecpg', 'Kennedy'))
+        plt.title(f'{title_prefix} Overlap')
+        venn_path = os.path.join(args.outdir, f'overlap_venn_{filename_prefix}.png')
+        plt.savefig(venn_path, dpi=300)
+        plt.close()
+
+        # UpSet plot
+        if len(tecpg_set) > 0 or len(kennedy_set) > 0:
+            upset_data = upsetplot.from_contents({
+                'tecpg': tecpg_set,
+                'Kennedy': kennedy_set
+            })
+            plt.figure(figsize=(8, 6))
+            upsetplot.plot(upset_data)
+            plt.title(f'UpSet Plot of {title_prefix}')
+            upset_path = os.path.join(args.outdir, f'overlap_upset_{filename_prefix}.png')
+            plt.savefig(upset_path, dpi=300)
+            plt.close()
+
+        return len(tecpg_set), len(kennedy_set), len(overlap), jaccard
 
     logging.info("Generating overlap visualizations...")
-    # Venn diagram
-    plt.figure(figsize=(8, 6))
-    venn2([tecpg_sig, kennedy_sig], set_labels=('tecpg Hits', 'Kennedy Hits'))
-    plt.title('Significant Hits Overlap')
-    venn_path = os.path.join(args.outdir, 'overlap_venn.png')
-    plt.savefig(venn_path, dpi=300)
-    plt.close()
 
-    # UpSet plot
-    upset_data = upsetplot.from_contents({
-        'tecpg Hits': tecpg_sig,
-        'Kennedy Hits': kennedy_sig
-    })
-    plt.figure(figsize=(8, 6))
-    upsetplot.plot(upset_data)
-    plt.title('UpSet Plot of Significant Hits')
-    upset_path = os.path.join(args.outdir, 'overlap_upset.png')
-    plt.savefig(upset_path, dpi=300)
-    plt.close()
+    comparisons = [
+        (tecpg_all_mappings, kennedy_all_mappings, 'All Mappings', 'all_mappings'),
+        (tecpg_all_genes, kennedy_all_genes, 'All Genes', 'all_genes'),
+        (tecpg_all_loci, kennedy_all_loci, 'All Loci', 'all_loci'),
+        (tecpg_sig_mappings, kennedy_sig_mappings, 'Significant Mappings', 'sig_mappings'),
+        (tecpg_sig_genes, kennedy_sig_genes, 'Significant Genes', 'sig_genes'),
+        (tecpg_sig_loci, kennedy_sig_loci, 'Significant Loci', 'sig_loci'),
+    ]
+
+    results = {}
+    for t_set, k_set, title, fname in comparisons:
+        results[title] = create_plots(t_set, k_set, title, fname)
 
     # Summary Output
+    def format_overlap_stats(title, stats_tuple):
+        t_len, k_len, o_len, jaccard = stats_tuple
+        return f"{title}:\n  tecpg Count:   {t_len}\n  Kennedy Count: {k_len}\n  Overlap:       {o_len}\n  Jaccard Index: {jaccard:.4f}\n"
+
     summary = f"""Benchmark Summary
 =================
 Input tecpg file: {args.tecpg}
@@ -217,15 +256,15 @@ Test Statistic (mt_t vs {tstat_col}):
 
 Comparison B: Hit Overlap
 -------------------------
-tecpg Significant Hits:   {len(tecpg_sig)}
-Kennedy Significant Hits: {len(kennedy_sig)}
-Overlapping Hits:         {len(overlap)}
-Jaccard Index:            {jaccard:.4f}
+"""
+    for title, fname in [comp[2:4] for comp in comparisons]:
+        summary += format_overlap_stats(title, results[title])
 
+    summary += f"""
 Outputs
 -------
 Summary saved to: benchmark_summary.txt
-Plots saved to: concordance_scatter.png, overlap_venn.png, overlap_upset.png
+Plots saved to: concordance_scatter.png, overlap_venn_*.png, overlap_upset_*.png
 """
     print(summary)
     summary_path = os.path.join(args.outdir, 'benchmark_summary.txt')
