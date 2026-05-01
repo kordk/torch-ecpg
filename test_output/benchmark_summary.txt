@@ -1,0 +1,33 @@
+Benchmark Summary
+=================
+Input tecpg file: test_tecpg.parquet
+Input Kennedy file: test_kennedy.txt
+Kennedy p-value threshold: 1e-06
+
+Mapping & Merging
+-----------------
+Overlapping Pairs Mapped: 2
+
+Comparison A: Statistical Concordance
+-------------------------------------
+Effect Size (mt_est vs beta):
+  Pearson r:  1.0000
+  Spearman rho: 1.0000
+  R^2:        1.0000
+
+Test Statistic (mt_t vs T.stat):
+  Pearson r:  1.0000
+  Spearman rho: 1.0000
+  R^2:        1.0000
+
+Comparison B: Hit Overlap
+-------------------------
+tecpg Significant Hits:   0
+Kennedy Significant Hits: 2
+Overlapping Hits:         0
+Jaccard Index:            0.0000
+
+Outputs
+-------
+Summary saved to: benchmark_summary.txt
+Plots saved to: concordance_scatter.png, overlap_venn.png, overlap_upset.png

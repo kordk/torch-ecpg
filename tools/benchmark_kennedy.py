@@ -6,64 +6,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import scipy.stats as stats
 import pyarrow.parquet as pq
-import mygene
 from matplotlib_venn import venn2
 import upsetplot
 import logging
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
-
-def map_kennedy_ids(df_kennedy):
-    # Kennedy format usually has CpG.probe, annot.gene, and/or exp.Probe
-    # We will try to map annot.gene (Gene Symbol) or exp.Probe (Illumina ID) to Ensembl ID
-
-    # We first need to check what columns exist
-    if 'exp.Probe' in df_kennedy.columns:
-        query_col = 'exp.Probe'
-        scopes = 'reporter'
-    elif 'annot.gene' in df_kennedy.columns:
-        query_col = 'annot.gene'
-        scopes = 'symbol'
-    else:
-        logging.warning("Could not find 'exp.Probe' or 'annot.gene' in Kennedy data to map. Will use whatever transcript column is available.")
-        # fallback
-        query_col = df_kennedy.columns[1] # assuming 2nd column is transcript
-        scopes = 'symbol,reporter'
-
-    logging.info(f"Querying mygene to translate {len(df_kennedy[query_col].unique())} unique IDs from '{query_col}'...")
-
-    mg = mygene.MyGeneInfo()
-    try:
-        # Use a large step or just query many
-        results = mg.querymany(df_kennedy[query_col].unique().tolist(), scopes=scopes, fields='ensembl.gene', species='human', as_dataframe=True)
-
-        # results index is the queried ID, columns include 'ensembl.gene' or 'ensembl'
-        mapping_dict = {}
-        for query_id, row in results.iterrows():
-            if isinstance(row, pd.DataFrame):
-                # Multiple hits, take the first one
-                row = row.iloc[0]
-
-            if 'ensembl' in row and isinstance(row['ensembl'], list):
-                # If ensembl is a list of dicts
-                mapping_dict[query_id] = row['ensembl'][0]['gene']
-            elif 'ensembl' in row and isinstance(row['ensembl'], dict):
-                mapping_dict[query_id] = row['ensembl']['gene']
-            elif 'ensembl.gene' in row and not pd.isna(row['ensembl.gene']):
-                mapping_dict[query_id] = row['ensembl.gene']
-
-        logging.info(f"Successfully mapped {len(mapping_dict)} IDs.")
-        df_kennedy['mapped_gt_id'] = df_kennedy[query_col].map(mapping_dict)
-
-        # Fallback to original if mapping fails?
-        # Often tecpg output has version suffixes like ENSG000001.1
-        # tecpg's summarizeOutput_parquet strips suffixes from gt_id, we will do the same on tecpg data.
-
-    except Exception as e:
-        logging.error(f"Error mapping IDs: {e}")
-        df_kennedy['mapped_gt_id'] = df_kennedy[query_col]
-
-    return df_kennedy
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark tecpg output against Kennedy 2018 baseline.")
@@ -104,38 +51,27 @@ def main():
 
     logging.info("Preprocessing and mapping IDs...")
 
-    # Strip version suffix from tecpg gt_id if present
-    if 'gt_id' in df_tecpg.columns:
-        df_tecpg['gt_id_base'] = df_tecpg['gt_id'].astype(str).str.split('.').str[0]
-    else:
-        logging.warning("tecpg dataset is missing 'gt_id' column.")
-
-    df_kennedy = map_kennedy_ids(df_kennedy)
-
-    if 'mapped_gt_id' in df_kennedy.columns:
-        logging.info(f"Kennedy distinct genes after mapping (mapped_gt_id): {df_kennedy['mapped_gt_id'].nunique()}")
-
     # Standardize column names for merge
     # Kennedy CpG usually 'CpG.probe', tecpg 'mt_id'
     cpg_col = 'CpG.probe' if 'CpG.probe' in df_kennedy.columns else df_kennedy.columns[0]
+    query_col = 'exp.Probe' if 'exp.Probe' in df_kennedy.columns else ('annot.gene' if 'annot.gene' in df_kennedy.columns else df_kennedy.columns[1])
 
-    df_kennedy = df_kennedy.dropna(subset=['mapped_gt_id', cpg_col])
+    df_kennedy = df_kennedy.dropna(subset=[query_col, cpg_col])
 
     # Log a sample of the key columns before merging
-    if 'mt_id' in df_tecpg.columns and 'gt_id_base' in df_tecpg.columns:
-        logging.info(f"Sample of tecpg key columns (first 5 rows):\n{df_tecpg[['mt_id', 'gt_id', 'gt_id_base']].head().to_string()}")
+    if 'mt_id' in df_tecpg.columns and 'gt_id' in df_tecpg.columns:
+        logging.info(f"Sample of tecpg key columns (first 5 rows):\n{df_tecpg[['mt_id', 'gt_id']].head().to_string()}")
 
-    query_col = 'exp.Probe' if 'exp.Probe' in df_kennedy.columns else ('annot.gene' if 'annot.gene' in df_kennedy.columns else df_kennedy.columns[1])
-    if cpg_col in df_kennedy.columns and 'mapped_gt_id' in df_kennedy.columns and query_col in df_kennedy.columns:
-        logging.info(f"Sample of Kennedy key columns before merge (first 5 rows):\n{df_kennedy[[cpg_col, query_col, 'mapped_gt_id']].head().to_string()}")
+    if cpg_col in df_kennedy.columns and query_col in df_kennedy.columns:
+        logging.info(f"Sample of Kennedy key columns before merge (first 5 rows):\n{df_kennedy[[cpg_col, query_col]].head().to_string()}")
 
     logging.info("Merging datasets...")
     # Inner join on CpG and Gene
     df_merged = pd.merge(
         df_tecpg,
         df_kennedy,
-        left_on=['mt_id', 'gt_id_base'],
-        right_on=[cpg_col, 'mapped_gt_id'],
+        left_on=['mt_id', 'gt_id'],
+        right_on=[cpg_col, query_col],
         how='inner',
         suffixes=('_tecpg', '_kennedy')
     )
@@ -221,15 +157,15 @@ def main():
     if pval_col is None:
         pval_col = [c for c in df_kennedy.columns if 'p' in c.lower()][-1]
 
-    kennedy_sig = set(df_kennedy[df_kennedy[pval_col] < args.p_thresh].apply(lambda row: (row[cpg_col], row['mapped_gt_id']), axis=1))
+    kennedy_sig = set(df_kennedy[df_kennedy[pval_col] < args.p_thresh].apply(lambda row: (row[cpg_col], row[query_col]), axis=1))
 
     if tecpg_fdr_col:
         # if using FDR, < 0.05
         tecpg_thresh = 0.05 if 'fdr' in tecpg_fdr_col.lower() else args.p_thresh
-        tecpg_sig = set(df_tecpg[df_tecpg[tecpg_fdr_col] < tecpg_thresh].apply(lambda row: (row['mt_id'], row['gt_id_base']), axis=1))
+        tecpg_sig = set(df_tecpg[df_tecpg[tecpg_fdr_col] < tecpg_thresh].apply(lambda row: (row['mt_id'], row['gt_id']), axis=1))
     else:
         logging.warning("Could not find FDR or p-value column in tecpg data. Using all merged pairs as tecpg hits.")
-        tecpg_sig = set(df_tecpg.apply(lambda row: (row['mt_id'], row['gt_id_base']), axis=1))
+        tecpg_sig = set(df_tecpg.apply(lambda row: (row['mt_id'], row['gt_id']), axis=1))
 
     overlap = kennedy_sig.intersection(tecpg_sig)
     union = kennedy_sig.union(tecpg_sig)
