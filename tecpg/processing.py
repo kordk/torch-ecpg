@@ -539,10 +539,14 @@ def _tecpg_mlr_lstsq_inner(
                 prof_t0 = prof_t1 = prof_t2 = prof_t3 = prof_t4 = prof_t5 = time.perf_counter()
                 prof_prep_time = prof_h2d_time = prof_gpu_time = prof_d2h_time = prof_post_time = prof_write_time = 0.0
 
-                # Prune ready futures for accurate save queue depth
+                # Prune ready futures for accurate save queue fill metric.
+                # NOTE: do not reuse the name `save_queue_depth` here -- that
+                # variable is the configured back-pressure cap consumed by the
+                # `while len(futures) >= save_queue_depth` loops below. Use a
+                # separate `save_queue_fill` for the per-chunk profile log.
                 while futures and futures[0].done():
                     futures.popleft().result()
-                save_queue_depth = len(futures)
+                save_queue_fill = len(futures)
 
                 # Calculate prefetch fill
                 prefetch_fill = len(prefetch_queue) if prefetch_executor else 0
@@ -1054,7 +1058,7 @@ def _tecpg_mlr_lstsq_inner(
                             f"prep={prof_prep_time*1000:.1f}ms h2d={prof_h2d_time*1000:.1f}ms "
                             f"gpu={prof_gpu_time*1000:.1f}ms d2h={prof_d2h_time*1000:.1f}ms "
                             f"post={prof_post_time*1000:.1f}ms write={prof_write_time*1000:.1f}ms "
-                            f"idle={gpu_idle_between_chunks_ms:.1f}ms save_q={save_queue_depth} pref_f={prefetch_fill} "
+                            f"idle={gpu_idle_between_chunks_ms:.1f}ms save_q={save_queue_fill} pref_f={prefetch_fill} "
                             f"total={prof_total*1000:.1f}ms reg/s={reg_sec:.2e} gflops={gflops:.1f} util_sm={util_sm:.1f}% ram_avail={res['ram_avail_gb']:.1f}GB"
                         )
 
