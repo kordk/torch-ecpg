@@ -267,8 +267,7 @@ def cli(
         # Floor: keep the historical minimum so small hosts behave as before.
         _floor = _resolved_save_threads + 1
         # Ceiling: 4x writer pool, but never deeper than ~1 chunk per 8 GB RAM.
-        _ceiling = max(_floor, min(4 * _resolved_save_threads, int(_ram_gb // 8)))
-        auto_queue = max(_floor, _ceiling)
+        auto_queue = max(_floor, min(4 * _resolved_save_threads, int(_ram_gb // 8)))
         logger.info('Auto-scaled save_queue_depth to {0}', auto_queue)
         logger.carry_data['save_queue_depth'] = auto_queue
 
@@ -553,7 +552,7 @@ def mlr(
     # explicitly to disable, and we have psutil/logger available.
     if prefetch_chunks < 0:
         free_ram_gb = psutil.virtual_memory().available / (1024**3)
-        prefetch_chunks = max(0, min(4, int(free_ram_gb // 8)))
+        prefetch_chunks = min(4, int(free_ram_gb // 8))
         logger.info(
             'Auto-scaled prefetch_chunks to {0} (free_ram={1:.1f} GB)',
             prefetch_chunks,
