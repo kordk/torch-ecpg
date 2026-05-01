@@ -171,8 +171,7 @@ def process_gtp(
     C.drop('tissue', axis=1, inplace=True, errors='ignore')
     C.drop('race/ethnicity', axis=1, inplace=True, errors='ignore')
 
-    C['Sex'].replace('Male', 0, inplace=True)
-    C['Sex'].replace('Female', 1, inplace=True)
+    C['Sex'] = C['Sex'].replace({'Male': 0, 'Female': 1}).astype(int)
 
     logger.info('Sorting columns')
     M = M.reindex(sorted(M.columns, key=int), axis=1)
