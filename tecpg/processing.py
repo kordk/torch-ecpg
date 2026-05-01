@@ -74,11 +74,21 @@ def tecpg_mlr_lstsq(
         gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
     )
 
-    # Use the process pool
+    # Pool selection: parquet writes via pyarrow release the GIL and
+    # benefit from a thread pool (no per-chunk DataFrame pickling across
+    # `spawn`, no spawn warm-up cost). CSV writes via pandas.to_csv hold
+    # the GIL, so we keep the historical process pool there.
     max_workers = logger.carry_data.get('save_threads', 2)
-    ctx = multiprocessing.get_context('spawn')
-    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
-        _ = list(pool.map(int, range(max_workers)))
+    if (output_format or 'csv').lower() == 'parquet':
+        pool_cm = ThreadPoolExecutor(max_workers=max_workers)
+    else:
+        ctx = multiprocessing.get_context('spawn')
+        pool_cm = ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx)
+    with pool_cm as pool:
+        if isinstance(pool, ProcessPoolExecutor):
+            # Warm up worker processes so per-chunk pool.submit doesn't
+            # pay spawn latency on the first save.
+            _ = list(pool.map(int, range(max_workers)))
         return _tecpg_mlr_lstsq_inner(
             M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
             gene_loci_per_chunk, meth_loci_per_chunk, p_thresh, output_dir,
@@ -120,7 +130,7 @@ def _tecpg_mlr_lstsq_inner(
     ig_covariates_filter: Optional[list] | str = None,
     prefetch_chunks: int = 0,
     aggressive_gc: bool = False,
-    pool: ProcessPoolExecutor = None,
+    pool=None,
     max_workers: int = 2,
     *,
     output_format: str = 'csv',

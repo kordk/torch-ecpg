@@ -5,21 +5,139 @@ from typing import Any, List, Optional
 
 import click
 
+def _host_class(physical_cores: int, ram_gb: float) -> str:
+    """Classify the host as 'minimum' (laptop-class, ~16 GB / 8 cores) or
+    'server' (workstation/research server). Used as the single source of
+    truth for default selection across save-pool sizing, output format,
+    prefetch depth, and chunk-size auto-derivation.
+    """
+    if physical_cores < 12 or ram_gb < 32:
+        return 'minimum'
+    return 'server'
+
+
 def _auto_save_threads(physical_cores: int, ram_gb: float) -> int:
     """Pick a default writer-pool size based on host resources.
 
     Small hosts (laptop-class: <12 physical cores or <32 GB RAM) keep the
     original conservative formula so the 16 GB minimum-config path is
-    unchanged. Larger hosts (workstations/servers) get a much higher
-    default so a 32-core/512 GB machine isn't capped at 8 writers.
+    unchanged. Larger hosts (workstations/servers) scale modestly above
+    that floor; profiling on RAID6/dm-crypt LUNs (klabdev) showed the
+    underlying device saturates well before 32 concurrent writers, after
+    which extra workers only add kernel-writeback CPU cost and pickle
+    traffic across `spawn`. Cap at 8.
     """
-    if physical_cores < 12 or ram_gb < 32:
+    if _host_class(physical_cores, ram_gb) == 'minimum':
         # Conservative path for laptop-class hosts.
         return max(2, min(16, min(physical_cores // 4, int(ram_gb // 8))))
     # Larger host: scale with cores and RAM, leave a couple of cores for
-    # the GPU producer / OS, and cap at 32 since CSV/Parquet writers hit
-    # diminishing returns and dm-crypt/RAID contention beyond that.
-    return max(2, min(32, min(physical_cores - 2, int(ram_gb // 4))))
+    # the GPU producer / OS, and cap at 8.
+    return max(2, min(8, min(physical_cores - 2, int(ram_gb // 4))))
+
+
+def _auto_chunk_sizes(
+    M,
+    G,
+    C,
+    p_only: bool = False,
+    full_output: bool = False,
+    region: str = 'all',
+    logger=None,
+):
+    """Derive (gene_loci_per_chunk, meth_loci_per_chunk) from data shape and
+    available device memory.
+
+    Returns a tuple of ints, or (None, None) when no chunking is required
+    (i.e. the data fits in the target memory budget). The caller decides
+    what to do with `(None, None)` -- on server-class hosts we treat that
+    as "let the inner kernel run un-chunked", matching historical
+    behavior when the user supplies neither -g nor -m.
+
+    The target memory budget is 80% of free GPU memory when CUDA is
+    available, otherwise 80% of total system RAM. This matches the
+    convention used by the existing `tecpg chunks` subcommand.
+    """
+    # Local imports keep the click-parse-time cost of cli.py low and
+    # avoid importing torch at module import time (it's already imported
+    # below for the cli body, but this helper may be called from tests).
+    import torch as _torch
+
+    samples = len(C)
+    mt_count = len(M)
+    gt_count = len(G)
+    covar_count = len(C.columns)
+    datum_bytes = _torch.ones(1, dtype=DTYPE).element_size()
+
+    if _torch.cuda.is_available():
+        target_bytes = int(_torch.cuda.mem_get_info()[0] * 0.8)
+        target_label = 'CUDA free memory'
+    else:
+        target_bytes = int(psutil.virtual_memory().available * 0.8)
+        target_label = 'system RAM available'
+
+    # The lstsq path used by the server profile produces "p-only-like"
+    # output regardless of whether p_only/full_output flags are set,
+    # because the inner kernel only realizes the active K columns; we
+    # use the more conservative of the E-peak and results-peak estimates.
+    # Region filtration shrinks the result; we don't model that here
+    # (estimates stay conservative when --cis/--distal/--trans is set).
+    estimate_e = estimate_loci_per_chunk_e_peak(
+        target_bytes,
+        samples,
+        mt_count,
+        gt_count,
+        covar_count,
+        datum_bytes,
+        filtration=1.0,
+        full_output=full_output,
+        p_only=p_only,
+        p_filtration=False,
+        region_filtration=False,
+    )
+    estimate_results = estimate_loci_per_chunk_results_peak(
+        target_bytes,
+        samples,
+        mt_count,
+        gt_count,
+        covar_count,
+        datum_bytes,
+        filtration=1.0,
+        full_output=full_output,
+        p_only=p_only,
+        region_filtration=False,
+    )
+
+    estimate = min(estimate_e, estimate_results)
+
+    if logger is not None:
+        logger.info(
+            'Chunk-size estimator: target={0:.1f} MB ({1}), '
+            'estimate_e={2:.0f}, estimate_results={3:.0f}',
+            target_bytes / 1_000_000,
+            target_label,
+            estimate_e,
+            estimate_results,
+        )
+
+    if estimate >= gt_count:
+        # Whole-G fits in budget: no chunking needed.
+        return (None, None)
+    if estimate < 1:
+        # Cannot fit even one gene with the current methylation count;
+        # split methylation as well. This is rare on server-class hosts
+        # but we fall back to a safe (small) chunk.
+        meth_chunk = max(1, mt_count // 4)
+        gene_chunk = max(1, gt_count // 4)
+        return (gene_chunk, meth_chunk)
+
+    gene_chunk = max(1, int(estimate))
+    # Use the full methylation set per chunk by default; the inner loop
+    # iterates methylation chunks as the outer loop, so a larger -m means
+    # fewer outer iterations and better amortization. Profiling on
+    # klabdev showed -m 40000 was beneficial; cap at 40000 to stay
+    # within reasonable index-build cost on the producer thread.
+    meth_chunk = min(mt_count, 40000)
+    return (gene_chunk, meth_chunk)
 
 import pandas
 import psutil
@@ -195,6 +313,23 @@ from .tool import (
     type=int,
     help='Number of threads for BLAS/OpenMP operations. Env var TECPG_BLAS_THREADS is preferred. This CLI flag works via a pre-import shim.',
 )
+@click.option(
+    '--host-profile',
+    show_default=True,
+    default='auto',
+    envvar='TECPG_HOST_PROFILE',
+    type=click.Choice(['auto', 'minimum', 'server'], case_sensitive=False),
+    help=(
+        "Host-class preset that drives defaults for save-pool size, output "
+        "format, and chunk auto-sizing. 'auto' (default) detects from "
+        "physical CPU count and total RAM: <12 cores or <32 GB RAM is "
+        "treated as 'minimum' (laptop-class), otherwise 'server'. "
+        "'minimum' preserves the conservative 16 GB / 8-core defaults. "
+        "'server' enables Parquet output, a thread-pool writer, and "
+        "auto-derived chunk sizes. Explicit per-flag overrides "
+        "(e.g. --save-threads, --output-format, -g, -m) always win."
+    ),
+)
 @click.pass_context
 def cli(
     ctx: Optional[click.Context] = None,
@@ -217,6 +352,7 @@ def cli(
     save_threads: Optional[int] = None,
     save_queue_depth: Optional[int] = None,
     blas_threads: Optional[int] = None,
+    host_profile: Optional[str] = None,
     obj: Optional[dict] = None,
 ) -> None:
     """The root cli group"""
@@ -245,13 +381,40 @@ def cli(
     logger.carry_data['float_format'] = (
         DEFAULT_FLOAT_FORMAT if float_format is None else float_format
     )
+
+    # Resolve host-class profile. 'auto' detects from physical CPU count
+    # and total RAM; explicit 'minimum'/'server' wins. The resolved value
+    # is the single source of truth consumed by other defaults below
+    # (save_threads, save_queue, output_format, chunk auto-sizing).
+    physical = psutil.cpu_count(logical=False) or os.cpu_count() or 2
+    ram_gb = psutil.virtual_memory().total / (1024**3)
+    requested_profile = (host_profile or 'auto').lower()
+    if requested_profile == 'auto':
+        resolved_profile = _host_class(physical, ram_gb)
+        logger.info(
+            'Auto-detected host_profile={0} (physical_cores={1}, ram_gb={2:.1f})',
+            resolved_profile, physical, ram_gb,
+        )
+    else:
+        resolved_profile = requested_profile
+        logger.info(
+            'User-supplied host_profile={0} (physical_cores={1}, ram_gb={2:.1f})',
+            resolved_profile, physical, ram_gb,
+        )
+    logger.carry_data['host_profile'] = resolved_profile
+
     if save_threads is not None:
         logger.info('User-supplied save_threads: {0}', save_threads)
         logger.carry_data['save_threads'] = save_threads
     else:
-        physical = psutil.cpu_count(logical=False) or os.cpu_count() or 2
-        ram_gb = psutil.virtual_memory().total / (1024**3)
-        auto_threads = _auto_save_threads(physical, ram_gb)
+        if resolved_profile == 'minimum':
+            # Force the conservative formula even on big hardware when the
+            # user explicitly asked for the minimum profile.
+            auto_threads = max(
+                2, min(16, min(physical // 4, int(ram_gb // 8)))
+            )
+        else:
+            auto_threads = _auto_save_threads(physical, ram_gb)
         logger.info('Auto-scaled save_threads to {0}', auto_threads)
         logger.carry_data['save_threads'] = auto_threads
 
@@ -494,14 +657,16 @@ def corr(
 )
 @click.option(
     '--output-format',
-    type=click.Choice(['csv', 'parquet'], case_sensitive=False),
-    default='csv',
+    type=click.Choice(['auto', 'csv', 'parquet'], case_sensitive=False),
+    default='auto',
     show_default=True,
     help=(
         "Output format for chunked regression results. 'parquet' uses pyarrow + "
         "snappy compression and is typically 5-10x smaller and 5-10x faster to "
         "write than CSV; recommended on slow filesystems (e.g. dm-crypt/RAID6). "
-        "'csv' preserves the previous behavior for downstream tooling."
+        "'csv' preserves the previous behavior for downstream tooling. "
+        "'auto' (default) selects 'parquet' on server-class hosts and 'csv' on "
+        "minimum-class hosts (controlled by --host-profile)."
     ),
 )
 @click.option(
@@ -547,19 +712,47 @@ def mlr(
 ) -> None:
     logger: Logger = ctx.obj['logger']
 
-    # Auto-resolve prefetch_chunks (-1 sentinel) based on free RAM. Done here
-    # rather than as a click default so users can still env-set TECPG_PREFETCH=0
-    # explicitly to disable, and we have psutil/logger available.
+    # Auto-resolve prefetch_chunks (-1 sentinel) based on free RAM and the
+    # host profile. Prefetch only makes sense when there's a real CUDA
+    # device to overlap with -- on CPU-only minimum-config hosts, the
+    # prefetch path tries to call .pin_memory() and fails. Done here
+    # rather than as a click default so users can still env-set
+    # TECPG_PREFETCH=0 explicitly to disable, and we have psutil/logger
+    # available.
     if prefetch_chunks < 0:
-        free_ram_gb = psutil.virtual_memory().available / (1024**3)
-        prefetch_chunks = min(4, int(free_ram_gb // 8))
-        logger.info(
-            'Auto-scaled prefetch_chunks to {0} (free_ram={1:.1f} GB)',
-            prefetch_chunks,
-            free_ram_gb,
-        )
+        if not torch.cuda.is_available():
+            prefetch_chunks = 0
+            logger.info(
+                'Auto-scaled prefetch_chunks to 0 (no CUDA device)',
+            )
+        elif logger.carry_data.get('host_profile') == 'minimum':
+            # The minimum profile asks for the conservative path even
+            # when a GPU is present.
+            prefetch_chunks = 0
+            logger.info(
+                'Auto-scaled prefetch_chunks to 0 (host_profile=minimum)',
+            )
+        else:
+            free_ram_gb = psutil.virtual_memory().available / (1024**3)
+            prefetch_chunks = min(4, int(free_ram_gb // 8))
+            logger.info(
+                'Auto-scaled prefetch_chunks to {0} (free_ram={1:.1f} GB)',
+                prefetch_chunks,
+                free_ram_gb,
+            )
 
     output_format = output_format.lower()
+    if output_format == 'auto':
+        host_profile = logger.carry_data.get('host_profile', 'minimum')
+        # Server-class hosts default to parquet (faster + far smaller on
+        # RAID6/dm-crypt). Minimum-class hosts keep the historical CSV
+        # default so downstream tooling and small-fixture tests are
+        # unchanged. Explicit --output-format always wins.
+        output_format = 'parquet' if host_profile == 'server' else 'csv'
+        logger.info(
+            'Auto-resolved output_format={0} (host_profile={1})',
+            output_format, host_profile,
+        )
     logger.carry_data['output_format'] = output_format
 
     chunking = (
@@ -573,6 +766,43 @@ def mlr(
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
+
+    # Auto-derive chunk sizes on server-class hosts when the user did not
+    # supply -g / -m. We use the same memory heuristics as the `tecpg
+    # chunks` subcommand. On minimum-class hosts we never auto-set chunk
+    # sizes -- the user's explicit choice (or no chunking) is preserved.
+    host_profile = logger.carry_data.get('host_profile', 'minimum')
+    if (
+        host_profile == 'server'
+        and gene_loci_per_chunk is None
+        and meth_loci_per_chunk is None
+    ):
+        try:
+            auto_g, auto_m = _auto_chunk_sizes(
+                M, G, C,
+                p_only=p_only,
+                full_output=full_output,
+                region=region,
+                logger=logger,
+            )
+        except Exception as exc:
+            # Heuristic estimation is best-effort. If it fails for any
+            # reason (tiny data, unexpected dtype, etc.) fall back to the
+            # historical "no chunking" default rather than aborting.
+            logger.warning(
+                'chunk auto-sizing failed ({0}); falling back to no chunking',
+                exc,
+            )
+            auto_g = auto_m = None
+        if auto_g is not None and auto_m is not None:
+            gene_loci_per_chunk = auto_g
+            meth_loci_per_chunk = auto_m
+            chunking = True
+            logger.info(
+                'Auto-scaled chunk sizes: gene_loci_per_chunk={0}, '
+                'meth_loci_per_chunk={1} (host_profile=server)',
+                gene_loci_per_chunk, meth_loci_per_chunk,
+            )
 
     if region != 'all':
         annot_path = os.path.join(data['root_path'], data['annot_dir'])
