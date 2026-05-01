@@ -70,6 +70,7 @@ def regression_full(
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
     aggressive_gc: bool = False,
+    output_format: str = 'csv',
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -151,7 +152,8 @@ def regression_full(
             M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
             gene_loci_per_chunk, meth_loci_per_chunk, p_thresh, output_dir,
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
-            file_format, aggressive_gc, pool, max_workers, logger=logger, chunking=chunking
+            file_format, aggressive_gc, pool, max_workers,
+            output_format=output_format, logger=logger, chunking=chunking
         )
 
 
@@ -179,6 +181,7 @@ def _regression_full_inner(
     pool: ProcessPoolExecutor = None,
     max_workers: int = 2,
     *,
+    output_format: str = 'csv',
     logger: Logger = Logger(),
     chunking: bool = False,
 ) -> Optional[pandas.DataFrame]:
@@ -329,6 +332,10 @@ def _regression_full_inner(
 
     # Use the process pool
     futures = deque()
+    save_queue_depth = max(
+        max_workers + 1,
+        int(logger.carry_data.get('save_queue_depth', max_workers + 1)),
+    )
     with gpu_guardian(logger, thermal_threshold) as gpu_monitor:
         # Loop for methylation chunks or ran once with index 0 if no
         # methylation chunking
@@ -563,11 +570,13 @@ def _regression_full_inner(
                         'Saving part {i}/{0}',
                         chunk_count,
                     )
-                    while len(futures) >= max_workers + 1:
+                    while len(futures) >= save_queue_depth:
                         futures.popleft().result()
                     futures.append(pool.submit(
                         save_dataframe_part,
                         out, file_path, mc_logger.current_count,
+                        first=None,
+                        output_format=output_format,
                         **dict(mc_logger),
                     ))
                     del out, gt_sites, mt_sites, index_chunk
@@ -648,11 +657,13 @@ def _regression_full_inner(
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )
-                    while len(futures) >= max_workers + 1:
+                    while len(futures) >= save_queue_depth:
                         futures.popleft().result()
                     futures.append(pool.submit(
                         save_dataframe_part,
                         out, file_path, meth_chunk_index + 1,
+                        first=None,
+                        output_format=output_format,
                         **dict(mc_logger),
                     ))
                     del out, gt_sites, mt_sites, index_chunk
