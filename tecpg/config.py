@@ -24,7 +24,10 @@ DEFAULT_DISTAL_UPSTREAM = 500_000_000  # To the end of the chromosome
 DEFAULT_DISTAL_WINDOW_BASE = 50_000  # 50 Kb
 
 DTYPE = torch.float32
-DEFAULT_FLOAT_FORMAT = '%.16f'
+# Float32 carries only ~7 significant decimal digits, so '%.7g' preserves
+# all precision while roughly halving CSV bytes vs the previous '%.16f'.
+# Override at the CLI with -F/--float-format.
+DEFAULT_FLOAT_FORMAT = '%.7g'
 
 
 def get_device(*, logger: Logger = Logger()) -> torch.device:

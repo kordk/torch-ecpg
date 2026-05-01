@@ -6,7 +6,20 @@ from typing import Any, List, Optional
 import click
 
 def _auto_save_threads(physical_cores: int, ram_gb: float) -> int:
-    return max(2, min(16, min(physical_cores // 4, int(ram_gb // 8))))
+    """Pick a default writer-pool size based on host resources.
+
+    Small hosts (laptop-class: <12 physical cores or <32 GB RAM) keep the
+    original conservative formula so the 16 GB minimum-config path is
+    unchanged. Larger hosts (workstations/servers) get a much higher
+    default so a 32-core/512 GB machine isn't capped at 8 writers.
+    """
+    if physical_cores < 12 or ram_gb < 32:
+        # Conservative path for laptop-class hosts.
+        return max(2, min(16, min(physical_cores // 4, int(ram_gb // 8))))
+    # Larger host: scale with cores and RAM, leave a couple of cores for
+    # the GPU producer / OS, and cap at 32 since CSV/Parquet writers hit
+    # diminishing returns and dm-crypt/RAID contention beyond that.
+    return max(2, min(32, min(physical_cores - 2, int(ram_gb // 4))))
 
 import pandas
 import psutil
@@ -163,6 +176,18 @@ from .tool import (
     help='Number of writer processes for saving output. If unset, auto-scales based on physical CPU count and available RAM. Set explicitly (or via TECPG_SAVE_THREADS) to override.',
 )
 @click.option(
+    '--save-queue-depth',
+    show_default=True,
+    default=0,
+    envvar='TECPG_SAVE_QUEUE',
+    type=int,
+    help=(
+        'Maximum number of save tasks allowed in flight at once. 0 (default) auto-scales to '
+        '~4x save_threads, bounded by available RAM. Increasing this hides slow writers (e.g. '
+        'CSV over dm-crypt/RAID6) at the cost of more buffered DataFrames in CPU memory.'
+    ),
+)
+@click.option(
     '--blas-threads',
     show_default=True,
     default=0,
@@ -190,6 +215,7 @@ def cli(
     no_log_file: Optional[bool] = None,
     float_format: Optional[str] = None,
     save_threads: Optional[int] = None,
+    save_queue_depth: Optional[int] = None,
     blas_threads: Optional[int] = None,
     obj: Optional[dict] = None,
 ) -> None:
@@ -220,8 +246,6 @@ def cli(
         DEFAULT_FLOAT_FORMAT if float_format is None else float_format
     )
     if save_threads is not None:
-        if save_threads > 2:
-            logger.warning('Warning: increasing save threads can result in an increase in performance with the cost of a large increase in CPU memory, use caution when increasing.')
         logger.info('User-supplied save_threads: {0}', save_threads)
         logger.carry_data['save_threads'] = save_threads
     else:
@@ -230,6 +254,23 @@ def cli(
         auto_threads = _auto_save_threads(physical, ram_gb)
         logger.info('Auto-scaled save_threads to {0}', auto_threads)
         logger.carry_data['save_threads'] = auto_threads
+
+    # Resolve save-queue-depth: 0 means auto. Auto scales with save_threads
+    # but is bounded by RAM (each in-flight save buffers a result DataFrame
+    # in CPU memory until written) so 16 GB hosts aren't pushed into swap.
+    _resolved_save_threads = logger.carry_data['save_threads']
+    if save_queue_depth and save_queue_depth > 0:
+        logger.info('User-supplied save_queue_depth: {0}', save_queue_depth)
+        logger.carry_data['save_queue_depth'] = save_queue_depth
+    else:
+        _ram_gb = psutil.virtual_memory().total / (1024**3)
+        # Floor: keep the historical minimum so small hosts behave as before.
+        _floor = _resolved_save_threads + 1
+        # Ceiling: 4x writer pool, but never deeper than ~1 chunk per 8 GB RAM.
+        _ceiling = max(_floor, min(4 * _resolved_save_threads, int(_ram_gb // 8)))
+        auto_queue = max(_floor, _ceiling)
+        logger.info('Auto-scaled save_queue_depth to {0}', auto_queue)
+        logger.carry_data['save_queue_depth'] = auto_queue
 
     if blas_threads and blas_threads > 0:
         env_omp = os.environ.get('OMP_NUM_THREADS')
@@ -443,10 +484,26 @@ def corr(
 @click.option(
     '--prefetch-chunks',
     show_default=True,
-    default=0,
+    default=-1,
     envvar='TECPG_PREFETCH',
     type=int,
-    help='Number of chunks to prefetch to the GPU to overlap with compute (default 0).',
+    help=(
+        'Number of chunks to prefetch to the GPU to overlap H2D with compute. '
+        '-1 (default) auto-scales: ~min(4, free_ram_gb // 8), so a 16 GB host '
+        'gets 0-1 and a server with hundreds of GB gets ~4. Set 0 to disable.'
+    ),
+)
+@click.option(
+    '--output-format',
+    type=click.Choice(['csv', 'parquet'], case_sensitive=False),
+    default='csv',
+    show_default=True,
+    help=(
+        "Output format for chunked regression results. 'parquet' uses pyarrow + "
+        "snappy compression and is typically 5-10x smaller and 5-10x faster to "
+        "write than CSV; recommended on slow filesystems (e.g. dm-crypt/RAID6). "
+        "'csv' preserves the previous behavior for downstream tooling."
+    ),
 )
 @click.option(
     '--aggressive-gc',
@@ -486,9 +543,25 @@ def mlr(
     bootstrap_iterations: int,
     bootstrap_batch_size: int,
     prefetch_chunks: int,
+    output_format: str,
     aggressive_gc: bool,
 ) -> None:
     logger: Logger = ctx.obj['logger']
+
+    # Auto-resolve prefetch_chunks (-1 sentinel) based on free RAM. Done here
+    # rather than as a click default so users can still env-set TECPG_PREFETCH=0
+    # explicitly to disable, and we have psutil/logger available.
+    if prefetch_chunks < 0:
+        free_ram_gb = psutil.virtual_memory().available / (1024**3)
+        prefetch_chunks = max(0, min(4, int(free_ram_gb // 8)))
+        logger.info(
+            'Auto-scaled prefetch_chunks to {0} (free_ram={1:.1f} GB)',
+            prefetch_chunks,
+            free_ram_gb,
+        )
+
+    output_format = output_format.lower()
+    logger.carry_data['output_format'] = output_format
 
     chunking = (
         gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
@@ -585,6 +658,7 @@ def mlr(
         'ig_covariates_filter': ig_covariates_filter,
         'prefetch_chunks': prefetch_chunks,
         'aggressive_gc': aggressive_gc,
+        'output_format': output_format,
     }
 
     logger.info(

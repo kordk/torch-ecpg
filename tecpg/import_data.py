@@ -114,9 +114,48 @@ def save_dataframe_part(
     file_path: str,
     chunk_number: Optional[int] = None,
     first: Optional[bool] = None,
+    output_format: str = 'csv',
     *,
     logger: Logger = Logger(),
 ) -> None:
+    output_format = (output_format or 'csv').lower()
+
+    if output_format == 'parquet':
+        # Parquet is one file per call: rewrite the extension if the caller
+        # passed a CSV-style file_format string. This keeps callers (and the
+        # existing --file-format default '{meth_chunk}-{gene_chunk}.csv')
+        # agnostic to the chosen output format.
+        root, ext = os.path.splitext(file_path)
+        if ext.lower() != '.parquet':
+            file_path = root + '.parquet'
+
+        logger.debug(
+            "WRITE_START chunk={0} file={1} rows={2} mode=parquet",
+            chunk_number,
+            file_path,
+            len(dataframe),
+        )
+        start_t = time.perf_counter()
+        # pyarrow handles MultiIndex on rows correctly; snappy is the standard
+        # fast/lightly-compressed codec and is the pyarrow default.
+        dataframe.to_parquet(
+            file_path,
+            engine='pyarrow',
+            compression='snappy',
+        )
+        end_t = time.perf_counter()
+        ms_elapsed = (end_t - start_t) * 1000.0
+        file_size = os.path.getsize(file_path)
+        logger.debug(
+            "WRITE_END chunk={0} file={1} rows={2} bytes={3} ms={4:.2f} mode=parquet",
+            chunk_number,
+            file_path,
+            len(dataframe),
+            file_size,
+            ms_elapsed,
+        )
+        return
+
     if not os.path.isfile(file_path):
         with open(file_path, 'w') as _:
             pass

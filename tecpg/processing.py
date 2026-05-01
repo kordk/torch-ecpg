@@ -62,6 +62,7 @@ def tecpg_mlr_lstsq(
     ig_covariates_filter: Optional[list] | str = None,
     prefetch_chunks: int = 0,
     aggressive_gc: bool = False,
+    output_format: str = 'csv',
     *,
     logger: Logger = Logger(),
 ) -> Optional[pandas.DataFrame]:
@@ -84,7 +85,8 @@ def tecpg_mlr_lstsq(
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
             file_format, reservoir_count, subsample_mt_count, subsample_g_count, seed,
             permute_label_test, compute_ig, compute_ig_deep, ig_baseline,
-            ig_covariates_filter, prefetch_chunks, aggressive_gc, pool, max_workers, logger=logger, chunking=chunking
+            ig_covariates_filter, prefetch_chunks, aggressive_gc, pool, max_workers,
+            output_format=output_format, logger=logger, chunking=chunking
         )
 
 def _tecpg_mlr_lstsq_inner(
@@ -121,6 +123,7 @@ def _tecpg_mlr_lstsq_inner(
     pool: ProcessPoolExecutor = None,
     max_workers: int = 2,
     *,
+    output_format: str = 'csv',
     logger: Logger = Logger(),
     chunking: bool = False,
 ) -> Optional[pandas.DataFrame]:
@@ -362,6 +365,13 @@ def _tecpg_mlr_lstsq_inner(
 
     # Use the process pool
     futures = deque()
+    # Save-queue depth: how many save tasks can be in flight before the GPU
+    # producer thread is blocked. carry_data is set in cli; default to the
+    # historical (max_workers + 1) for direct programmatic callers.
+    save_queue_depth = max(
+        max_workers + 1,
+        int(logger.carry_data.get('save_queue_depth', max_workers + 1)),
+    )
 
     # Run summary diagnostics
     total_chunks_saved = 0
@@ -491,7 +501,11 @@ def _tecpg_mlr_lstsq_inner(
                     torch.cuda.get_device_properties(0)
                 )
                 total_memory: int = device_properties.total_memory
-                torch.cuda.empty_cache()
+                # empty_cache() is a global GPU-side sync. Only invoke it
+                # under memory pressure (or when the user explicitly asked
+                # for aggressive GC), matching the gated paths elsewhere.
+                if aggressive_gc or (total_memory and torch.cuda.memory_allocated() / total_memory > HIGH_WATER):
+                    torch.cuda.empty_cache()
                 mc_logger.info(
                     (
                         'CUDA device memory: {0} MB allocated by constants out'
@@ -1056,12 +1070,14 @@ def _tecpg_mlr_lstsq_inner(
                         'Saving part {i}/{0}',
                         gene_chunk_count,
                     )
-                    # Backpressure: keep at most max_workers + 1 tasks in flight
-                    while len(futures) >= max_workers + 1:
+                    # Backpressure: bounded by save_queue_depth (auto-scales)
+                    while len(futures) >= save_queue_depth:
                         futures.popleft().result()
                     futures.append(pool.submit(
                         save_dataframe_part,
                         out, file_path, gene_chunk_index + 1,
+                        first=None,
+                        output_format=output_format,
                         **dict(mc_logger),
                     ))
                     del out, gt_sites, mt_sites, index_chunk
@@ -1119,12 +1135,14 @@ def _tecpg_mlr_lstsq_inner(
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )
-                    # Backpressure: keep at most max_workers + 1 tasks in flight
-                    while len(futures) >= max_workers + 1:
+                    # Backpressure: bounded by save_queue_depth (auto-scales)
+                    while len(futures) >= save_queue_depth:
                         futures.popleft().result()
                     futures.append(pool.submit(
                         save_dataframe_part,
                         out, file_path, meth_chunk_index + 1,
+                        first=None,
+                        output_format=output_format,
                         **dict(mc_logger),
                     ))
                     del out, gt_sites, mt_sites, index_chunk
