@@ -4,6 +4,14 @@ import os
 from typing import Any, List, Optional
 
 import click
+import psutil
+
+from .config import DTYPE
+from .tool import (
+    estimate_loci_per_chunk_e_peak,
+    estimate_loci_per_chunk_results_peak,
+)
+
 
 def _host_class(physical_cores: int, ram_gb: float) -> str:
     """Classify the host as 'minimum' (laptop-class, ~16 GB / 8 cores) or

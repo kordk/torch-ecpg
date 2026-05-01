@@ -99,7 +99,7 @@ assert_files_present() {
     count=$(find "$out" -type f -name "$pattern" | wc -l)
     if [ "$count" -lt 1 ]; then
         echo "[test_minimal_config] FAIL: no '$pattern' files in $out"
-        find "$out" -type f -maxdepth 2 | sed 's/^/    /'
+        find "$out" -maxdepth 2 -type f | sed 's/^/    /'
         exit 1
     fi
     # At least one of those files must be non-empty.
