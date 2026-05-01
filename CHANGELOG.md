@@ -12,6 +12,49 @@ changes. Each version section is organized into **Features**,
 
 ---
 
+## 1.16.1-dev
+
+### Features
+- Add `--host-profile {auto,minimum,server}` (envvar `TECPG_HOST_PROFILE`)
+  to the top-level CLI. `auto` (default) detects the host class from
+  physical CPU count and total RAM (`<12 cores or <32 GB` ⇒ `minimum`,
+  otherwise `server`). The resolved profile drives defaults for
+  save-pool size, output format, prefetch depth, and chunk auto-sizing.
+  Explicit per-flag overrides (`--save-threads`, `--output-format`,
+  `-g`, `-m`, `--prefetch-chunks`) always win.
+
+### Improvements / Performance
+- `--output-format` gains an `auto` default that resolves to `parquet`
+  on server-class hosts and `csv` on minimum-class hosts. CSV behavior
+  on laptop-class hosts is unchanged.
+- The chunked save pool now uses a `ThreadPoolExecutor` for the
+  parquet path (pyarrow releases the GIL, so per-chunk DataFrames no
+  longer have to be pickled across `spawn`-mode workers). The CSV path
+  keeps the historical `ProcessPoolExecutor`.
+- `_auto_save_threads`: cap on server-class hosts lowered from 32 to
+  8. Profiling on RAID6/dm-crypt LUNs (klabdev) showed the underlying
+  device saturates well before 32 concurrent writers; extra workers
+  only added kernel-writeback CPU cost and cross-process pickle
+  traffic.
+- Auto-scale `gene_loci_per_chunk` and `meth_loci_per_chunk` on
+  server-class hosts when the user does not supply `-g`/`-m`. Uses the
+  same memory heuristics as the existing `tecpg chunks` subcommand
+  (80% of free GPU memory, or 80% of available system RAM in CPU
+  mode). Minimum-class hosts never auto-set chunk sizes.
+- `--prefetch-chunks` auto-resolution now reports `0` when CUDA is
+  unavailable or `--host-profile=minimum`, fixing a `pin_memory()`
+  crash on CPU-only systems.
+
+### Tests
+- `tests/test_minimal_config.sh`: end-to-end smoke test verifying the
+  pipeline still runs on a simulated minimum-config host (8 cores /
+  16 GB RAM, CPU-only) under `--host-profile minimum` for auto-,
+  CSV-, and Parquet-format output.
+- `tests/test_host_profile.py`: unit tests for `_host_class`,
+  `_auto_save_threads`, and `_auto_chunk_sizes`.
+- `tests/test_auto_scale.py`: updated for the new save-thread cap and
+  gains coverage for `_host_class`.
+
 ## 1.15.1-dev
 
 ### Bug Fixes
