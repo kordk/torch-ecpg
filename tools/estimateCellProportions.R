@@ -26,11 +26,15 @@ library(EpiDISH)
 # Load data
 cat(paste("Loading methylation data from", meth_file, "\n"))
 # Assuming CpGs as rows, samples as columns for EpiDISH based on standard input
-beta_matrix <- read.csv(meth_file, row.names=1)
+beta_matrix <- read.csv(meth_file, row.names=1, check.names=FALSE)
+cat("Methylation matrix first 5 column names (sample IDs):\n")
+print(head(colnames(beta_matrix), 5))
 
 cat(paste("Loading covariate data from", cov_file, "\n"))
 # Assuming samples as rows for covariate matrix
-cov_matrix <- read.csv(cov_file, row.names=1)
+cov_matrix <- read.csv(cov_file, row.names=1, check.names=FALSE)
+cat("Covariate matrix first 5 row names (sample IDs):\n")
+print(head(rownames(cov_matrix), 5))
 
 # Load reference panel
 data(centDHSbloodDMC.m)
@@ -41,6 +45,8 @@ out.l <- epidish(beta.m = as.matrix(beta_matrix), ref.m = centDHSbloodDMC.m, met
 
 # Extract fractions
 cell_fractions <- as.data.frame(out.l$estF)
+cat("Cell fractions first 5 row names (sample IDs) before merge:\n")
+print(head(rownames(cell_fractions), 5))
 
 # Merge based on row names
 # EpiDISH returns sample IDs as row names in cell_fractions
