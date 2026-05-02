@@ -130,13 +130,13 @@ else
     ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_with_celltypes.csv"
 fi
 
-# Stage 2: Preprocess PCA Covariates
-log "[2/9] Preprocessing PCA Covariates..."
+# Stage 2: Generate PEER Factors with Known Biological Covariates
+log "[2/9] Generating PEER Factors..."
 if [ -s "$DATA_DIR/C.csv" ]; then
-    log "C.csv already exists. Skipping PCA covariate preprocessing."
+    log "C.csv already exists. Skipping PEER factor generation."
 else
-    log "Running PCA to append top $NUM_PCS components from gene expression data to covariates..."
-    python3 tools/preprocessPcaCovariates.py -g "$DATA_DIR/G.csv" -c "$DATA_DIR/C_with_celltypes.csv" -o "$DATA_DIR/C.csv" -n "$NUM_PCS"
+    log "Running PEER to append 30 hidden factors from gene expression data to covariates..."
+    ./tools/generatePeerFactors.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_with_celltypes.csv" "$DATA_DIR/C.csv"
 fi
 
 # Determine Degrees of Freedom for P-value calculation
