@@ -65,6 +65,15 @@ def main():
     if cpg_col in df_kennedy.columns and query_col in df_kennedy.columns:
         logging.info(f"Sample of Kennedy key columns before merge (first 5 rows):\n{df_kennedy[[cpg_col, query_col]].head().to_string()}")
 
+    # Calculate overlaps before merging
+    if 'mt_id' in df_tecpg.columns and cpg_col in df_kennedy.columns:
+        loci_overlap = len(set(df_tecpg['mt_id'].dropna()).intersection(set(df_kennedy[cpg_col].dropna())))
+        logging.info(f"Overlapping distinct CpG loci: {loci_overlap}")
+
+    if 'gt_id' in df_tecpg.columns and query_col in df_kennedy.columns:
+        genes_overlap = len(set(df_tecpg['gt_id'].dropna()).intersection(set(df_kennedy[query_col].dropna())))
+        logging.info(f"Overlapping distinct genes: {genes_overlap}")
+
     logging.info("Merging datasets...")
     # Inner join on CpG and Gene
     df_merged = pd.merge(
