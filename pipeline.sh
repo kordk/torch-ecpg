@@ -121,13 +121,22 @@ else
     fi
 fi
 
+# Stage 1.5: Estimate Immune Cell Proportions
+log "[1.5/9] Estimating immune cell proportions using EpiDISH..."
+if [ -s "$DATA_DIR/C_with_celltypes.csv" ]; then
+    log "C_with_celltypes.csv already exists. Skipping cell proportion estimation."
+else
+    log "Running EpiDISH to estimate cell proportions..."
+    ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_with_celltypes.csv"
+fi
+
 # Stage 2: Preprocess PCA Covariates
 log "[2/9] Preprocessing PCA Covariates..."
 if [ -s "$DATA_DIR/C.csv" ]; then
     log "C.csv already exists. Skipping PCA covariate preprocessing."
 else
     log "Running PCA to append top $NUM_PCS components from gene expression data to covariates..."
-    python3 tools/preprocessPcaCovariates.py -g "$DATA_DIR/G.csv" -c "$DATA_DIR/C_orig.csv" -o "$DATA_DIR/C.csv" -n "$NUM_PCS"
+    python3 tools/preprocessPcaCovariates.py -g "$DATA_DIR/G.csv" -c "$DATA_DIR/C_with_celltypes.csv" -o "$DATA_DIR/C.csv" -n "$NUM_PCS"
 fi
 
 # Determine Degrees of Freedom for P-value calculation
