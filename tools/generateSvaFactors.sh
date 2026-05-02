@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# generatePeerFactors.sh
-# Wrapper to run the PEER factors R script.
+# generateSvaFactors.sh
+# Wrapper to run the SVA factors R script.
 
 if [ "$#" -ne 3 ]; then
-    echo "Usage: ./generatePeerFactors.sh <gene_expression_file.csv> <covariates_file.csv> <output_file.csv>"
+    echo "Usage: ./generateSvaFactors.sh <gene_expression_file.csv> <covariates_file.csv> <output_file.csv>"
     exit 1
 fi
 
@@ -21,6 +21,6 @@ fi
 
 # Run the R script, assuming it's in the same directory as this wrapper
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-RSCRIPT_PATH="$DIR/generatePeerFactors.R"
+RSCRIPT_PATH="$DIR/generateSvaFactors.R"
 
 Rscript "$RSCRIPT_PATH" "$EXPR_FILE" "$COV_FILE" "$OUT_FILE"
