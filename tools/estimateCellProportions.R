@@ -1,13 +1,14 @@
 #!/usr/bin/env Rscript
 
 args <- commandArgs(trailingOnly=TRUE)
-if (length(args) != 3) {
-  stop("Usage: Rscript estimateCellProportions.R <methylation_file.csv> <covariates_file.csv> <output_file.csv>")
+if (length(args) < 3 || length(args) > 4) {
+  stop("Usage: Rscript estimateCellProportions.R <methylation_file.csv> <covariates_file.csv> <output_file.csv> [cohort_name]")
 }
 
 meth_file <- args[1]
 cov_file <- args[2]
 out_file <- args[3]
+cohort_name <- if (length(args) == 4) args[4] else ""
 
 # Install BiocManager if not present
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
@@ -53,10 +54,30 @@ out.l <- epidish(beta.m = as.matrix(beta_matrix), ref.m = centDHSbloodDMC.m, met
 # Extract fractions
 cell_fractions <- as.data.frame(out.l$estF)
 
-# Print a brief summary report of cell type proportions
-cat("\nSummary report of overall cell type proportions:\n")
+# Print a brief summary report of cell type proportions before filtering
+cat("\nSummary report of overall cell type proportions (Before Filtering):\n")
 print(summary(cell_fractions))
 cat("\n")
+
+# MESA cohort specific filtering
+if (tolower(cohort_name) == "mesa") {
+    cat("MESA cohort detected. Applying strict pre-filtering (Mono >= 0.80)...\n")
+    if ("Mono" %in% colnames(cell_fractions)) {
+        excluded_samples <- rownames(cell_fractions)[cell_fractions$Mono < 0.80]
+        if (length(excluded_samples) > 0) {
+            cat(paste("Excluding", length(excluded_samples), "samples with Mono < 80%:\n"))
+            print(excluded_samples)
+            cell_fractions <- cell_fractions[cell_fractions$Mono >= 0.80, , drop=FALSE]
+            cat("\nSummary report of overall cell type proportions (After Filtering):\n")
+            print(summary(cell_fractions))
+            cat("\n")
+        } else {
+            cat("No samples met the exclusion criteria (Mono < 80%).\n")
+        }
+    } else {
+        cat("Warning: 'Mono' column not found in cell fractions. Skipping filtering.\n")
+    }
+}
 
 # Generate Heatmaps
 out_basename <- tools::file_path_sans_ext(out_file)
@@ -64,33 +85,54 @@ heatmap_fully_clustered_file <- paste0(out_basename, "_heatmap_fully_clustered.p
 heatmap_celltype_clustered_file <- paste0(out_basename, "_heatmap_celltype_clustered.png")
 
 cat("Generating heatmaps...\n")
-# Calculate an appropriate height based on the number of samples (rows)
-# Minimum 400px height or 10px per row, width can be fixed or scaling
 n_samples <- nrow(cell_fractions)
 
-# Fully clustered heatmap
-pheatmap(
-    as.matrix(cell_fractions),
-    cluster_rows = TRUE,
-    cluster_cols = TRUE,
-    cellheight = 10,
-    cellwidth = 40,
-    filename = heatmap_fully_clustered_file,
-    main = "Cell Type Proportions (Fully Clustered)"
-)
-cat(paste("Saved fully clustered heatmap to", heatmap_fully_clustered_file, "\n"))
+# Dynamically calculate cellheight to avoid Cairo max limit
+# Cairo generally crashes around 32767 pixels (approx 109 inches at 300dpi).
+# We want total height = cellheight * n_samples to be safe. Let's aim for max 30000 pixels.
+# pheatmap height unit is pt (1/72 inch). Actually, cellheight is in pt.
+# 32000 pt is very large. Let's cap cellheight such that it never exceeds a very safe value.
+# Also if cellheight is too small (< 1), pheatmap might just look bad or throw warnings.
+# In those cases, we omit cellheight and let it automatically determine based on fixed overall height.
+if (n_samples > 1000) {
+    # Drop cellheight/cellwidth, rely on automatic scaling to fit the page
+    pheatmap_args <- list(
+        mat = as.matrix(cell_fractions),
+        cluster_cols = TRUE
+    )
+    pheatmap_args_fully <- c(pheatmap_args, list(cluster_rows = TRUE, filename = heatmap_fully_clustered_file, main = "Cell Type Proportions (Fully Clustered)"))
+    pheatmap_args_celltype <- c(pheatmap_args, list(cluster_rows = FALSE, filename = heatmap_celltype_clustered_file, main = "Cell Type Proportions (Cell Type Clustered)"))
 
-# Cell type clustered heatmap (samples in original order)
-pheatmap(
-    as.matrix(cell_fractions),
-    cluster_rows = FALSE,
-    cluster_cols = TRUE,
-    cellheight = 10,
-    cellwidth = 40,
-    filename = heatmap_celltype_clustered_file,
-    main = "Cell Type Proportions (Cell Type Clustered)"
-)
-cat(paste("Saved cell type clustered heatmap to", heatmap_celltype_clustered_file, "\n"))
+    do.call(pheatmap, pheatmap_args_fully)
+    cat(paste("Saved fully clustered heatmap to", heatmap_fully_clustered_file, "\n"))
+
+    do.call(pheatmap, pheatmap_args_celltype)
+    cat(paste("Saved cell type clustered heatmap to", heatmap_celltype_clustered_file, "\n"))
+
+} else {
+    # For smaller sample sizes, use the explicit cell sizes
+    pheatmap(
+        as.matrix(cell_fractions),
+        cluster_rows = TRUE,
+        cluster_cols = TRUE,
+        cellheight = 10,
+        cellwidth = 40,
+        filename = heatmap_fully_clustered_file,
+        main = "Cell Type Proportions (Fully Clustered)"
+    )
+    cat(paste("Saved fully clustered heatmap to", heatmap_fully_clustered_file, "\n"))
+
+    pheatmap(
+        as.matrix(cell_fractions),
+        cluster_rows = FALSE,
+        cluster_cols = TRUE,
+        cellheight = 10,
+        cellwidth = 40,
+        filename = heatmap_celltype_clustered_file,
+        main = "Cell Type Proportions (Cell Type Clustered)"
+    )
+    cat(paste("Saved cell type clustered heatmap to", heatmap_celltype_clustered_file, "\n"))
+}
 
 cat("Cell fractions first 5 row names (sample IDs) before merge:\n")
 print(head(rownames(cell_fractions), 5))
@@ -98,7 +140,7 @@ print(head(rownames(cell_fractions), 5))
 # Merge based on row names
 # EpiDISH returns sample IDs as row names in cell_fractions
 cat("Merging cell fractions with covariates...\n")
-merged_cov <- merge(cov_matrix, cell_fractions, by="row.names", all.x=TRUE)
+merged_cov <- merge(cov_matrix, cell_fractions, by="row.names", all.x=FALSE) # only keep samples present in filtered fractions
 
 # Restore row names and remove the temporary 'Row.names' column
 rownames(merged_cov) <- merged_cov$Row.names
