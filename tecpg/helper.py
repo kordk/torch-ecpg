@@ -71,7 +71,14 @@ def read_csv(
         file_name,
         '[tab]' if sep == '\t' else sep,
     )
-    return pandas.read_csv(file_name, sep=sep, index_col=[0])
+    df = pandas.read_csv(file_name, sep=sep, index_col=[0])
+    if df.index.dtype == 'object':
+        logger.info(
+            'The index for file {0} was loaded as an object type. '
+            'This may indicate mixed types (e.g. integers and strings).',
+            file_name,
+        )
+    return df
 
 
 def trim_dataframes(
