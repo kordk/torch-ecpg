@@ -21,7 +21,14 @@ if (!requireNamespace("EpiDISH", quietly = TRUE)) {
     BiocManager::install("EpiDISH", ask = FALSE, update = FALSE)
 }
 
+# Install pheatmap if not present
+if (!requireNamespace("pheatmap", quietly = TRUE)) {
+    cat("Installing pheatmap...\n")
+    install.packages("pheatmap", repos = "https://cloud.r-project.org")
+}
+
 library(EpiDISH)
+library(pheatmap)
 
 # Load data
 cat(paste("Loading methylation data from", meth_file, "\n"))
@@ -45,6 +52,46 @@ out.l <- epidish(beta.m = as.matrix(beta_matrix), ref.m = centDHSbloodDMC.m, met
 
 # Extract fractions
 cell_fractions <- as.data.frame(out.l$estF)
+
+# Print a brief summary report of cell type proportions
+cat("\nSummary report of overall cell type proportions:\n")
+print(summary(cell_fractions))
+cat("\n")
+
+# Generate Heatmaps
+out_basename <- tools::file_path_sans_ext(out_file)
+heatmap_fully_clustered_file <- paste0(out_basename, "_heatmap_fully_clustered.png")
+heatmap_celltype_clustered_file <- paste0(out_basename, "_heatmap_celltype_clustered.png")
+
+cat("Generating heatmaps...\n")
+# Calculate an appropriate height based on the number of samples (rows)
+# Minimum 400px height or 10px per row, width can be fixed or scaling
+n_samples <- nrow(cell_fractions)
+
+# Fully clustered heatmap
+pheatmap(
+    as.matrix(cell_fractions),
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    cellheight = 10,
+    cellwidth = 40,
+    filename = heatmap_fully_clustered_file,
+    main = "Cell Type Proportions (Fully Clustered)"
+)
+cat(paste("Saved fully clustered heatmap to", heatmap_fully_clustered_file, "\n"))
+
+# Cell type clustered heatmap (samples in original order)
+pheatmap(
+    as.matrix(cell_fractions),
+    cluster_rows = FALSE,
+    cluster_cols = TRUE,
+    cellheight = 10,
+    cellwidth = 40,
+    filename = heatmap_celltype_clustered_file,
+    main = "Cell Type Proportions (Cell Type Clustered)"
+)
+cat(paste("Saved cell type clustered heatmap to", heatmap_celltype_clustered_file, "\n"))
+
 cat("Cell fractions first 5 row names (sample IDs) before merge:\n")
 print(head(rownames(cell_fractions), 5))
 
