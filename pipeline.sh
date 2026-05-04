@@ -94,14 +94,14 @@ else
     if [ "$DATASET" == "dummy" ]; then
         # Generate small synthetic data for testing
         log "Generating synthetic dummy data..."
-        echo "10" | tecpg data dummy -s 100 -m 1000 -g 1000
+        echo "10" | python3 -m tecpg data dummy -s 100 -m 1000 -g 1000
         mv data/* "$DATA_DIR/"
         mv annot/* "$ANNOT_DIR/"
         rmdir data annot
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
     elif [ "$DATASET" == "gtp" ]; then
         log "Downloading GTP data..."
-        echo "y" | tecpg data gtp --yes
+        echo "y" | python3 -m tecpg data gtp --yes
         mv data/* "$DATA_DIR/"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
         # For GTP, assuming the demo annots are used
@@ -110,7 +110,7 @@ else
         rmdir data
     elif [ "$DATASET" == "mesa" ]; then
         log "Downloading MESA data..."
-        echo "y" | tecpg data mesa
+        echo "y" | python3 -m tecpg data mesa
         mv data/* "$DATA_DIR/"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
         # For MESA, assuming appropriate demo annots are used if available
@@ -123,20 +123,39 @@ fi
 
 # Stage 1.5: Estimate Immune Cell Proportions
 log "[1.5/9] Estimating immune cell proportions using EpiDISH..."
-if [ -s "$DATA_DIR/C_with_celltypes.csv" ]; then
+if [ "$DATASET" == "mesa" ]; then
+    log "Skipping cell proportion estimation for MESA dataset."
+    cp "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_with_celltypes.csv"
+elif [ -s "$DATA_DIR/C_with_celltypes.csv" ]; then
     log "C_with_celltypes.csv already exists. Skipping cell proportion estimation."
 else
     log "Running EpiDISH to estimate cell proportions..."
     ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_with_celltypes.csv"
 fi
 
-# Stage 2: Generate SVA Factors with Known Biological Covariates
-log "[2/9] Generating SVA Factors..."
+# Stage 2: Residualization & PCA
+log "[2/9] Generating Expression and Methylation PCs..."
 if [ -s "$DATA_DIR/C.csv" ]; then
-    log "C.csv already exists. Skipping SVA factor generation."
+    log "C.csv already exists. Skipping Residualization and PCA generation."
 else
-    log "Running SVA to append hidden surrogate variables from gene expression data to covariates..."
-    ./tools/generateSvaFactors.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_with_celltypes.csv" "$DATA_DIR/C.csv"
+    log "Running Expression Residualization & PCA..."
+    ./tools/residualize_pca.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_with_celltypes.csv" "$DATA_DIR/G_PCs.csv" "Exp_PC"
+
+    log "Running Methylation Residualization & PCA..."
+    ./tools/residualize_pca.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_with_celltypes.csv" "$DATA_DIR/M_PCs.csv" "Meth_PC"
+
+    log "Merging Covariates with PCs..."
+    python3 -c "
+import pandas as pd
+C = pd.read_csv('$DATA_DIR/C_with_celltypes.csv', dtype={0: str})
+C.set_index(C.columns[0], inplace=True)
+G_PCs = pd.read_csv('$DATA_DIR/G_PCs.csv', dtype={0: str})
+G_PCs.set_index(G_PCs.columns[0], inplace=True)
+M_PCs = pd.read_csv('$DATA_DIR/M_PCs.csv', dtype={0: str})
+M_PCs.set_index(M_PCs.columns[0], inplace=True)
+C_final = pd.concat([C, G_PCs, M_PCs], axis=1)
+C_final.to_csv('$DATA_DIR/C.csv')
+"
 fi
 
 # Determine Degrees of Freedom for P-value calculation
@@ -154,7 +173,7 @@ log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
 log "[3/9] Performing eQTM Mapping (lstsq + IG)..."
 log "This stage runs the multiple linear regression (mlr) model and computes Integrated Gradients (IG)."
 log "Using chunks: M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
-tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig
 
 # Stage 4: Merge chunked outputs
 log "[4/9] Merging chunked outputs to Parquet..."
@@ -202,7 +221,7 @@ python3 tools/createBootstrapList.py --input "$SUMMARIZED_PARQUET" --output "$BO
 log "[9/9] Bootstrapping top hits..."
 log "Running bootstrap analysis on the top candidates to validate association robustness."
 log "Pairs File: $BOOTSTRAP_LIST, Master Parquet: $SUMMARIZED_PARQUET"
-tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 100 --bootstrap-batch-size 10 --compute-ig
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 100 --bootstrap-batch-size 10 --compute-ig
 
 log "======================================"
 log "Pipeline completed successfully!"
