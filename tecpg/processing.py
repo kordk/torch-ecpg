@@ -276,6 +276,10 @@ def _tecpg_mlr_lstsq_inner(
 
     gt_count = len(G)
     gt_site_names = numpy.array(G.index.values)
+    if gt_site_names.dtype == object:
+        logger.info('Gene (G) index array was inferred as object. Enforcing string type to prevent serialization errors.')
+        gt_site_names = gt_site_names.astype(str)
+
     df = nrows - ncols - 1
     logger.info(
         'Statistical Power Audit: df = {0} (calculated as {1} subjects - {2} covariates - 1 methylation - 1 intercept)',
@@ -424,6 +428,10 @@ def _tecpg_mlr_lstsq_inner(
             mt_count = len(M_chunk)
             Ct = Ct_base.expand(mt_count, -1, -1)
             mt_site_names = numpy.array(M_chunk.index.values)
+            if mt_site_names.dtype == object:
+                logger.info('Methylation (M) chunk index array was inferred as object. Enforcing string type to prevent serialization errors.')
+                mt_site_names = mt_site_names.astype(str)
+
             if region == 'all' and p_thresh is None:
                 # If no filtration, output size is constant per gene chunk
                 pass # Calculated later
