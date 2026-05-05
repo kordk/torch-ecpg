@@ -146,6 +146,13 @@ merged_cov <- merge(cov_matrix, cell_fractions, by="row.names", all.x=FALSE) # o
 rownames(merged_cov) <- merged_cov$Row.names
 merged_cov$Row.names <- NULL
 
+if (tolower(cohort_name) == "mesa") {
+    cat("MESA cohort detected. Omitting cell fraction columns from output.\n")
+    # Remove all columns that came from cell_fractions
+    cols_to_remove <- colnames(cell_fractions)
+    merged_cov <- merged_cov[, !(colnames(merged_cov) %in% cols_to_remove), drop=FALSE]
+}
+
 cat(paste("Saving updated covariates to", out_file, "\n"))
 write.csv(merged_cov, out_file, row.names=TRUE)
 cat("Done.\n")

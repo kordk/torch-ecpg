@@ -52,11 +52,11 @@ fi
 
 if [ "$DATASET" == "gtp" ]; then
     TOTAL_TESTS=13744315260 # Approximate full GTP size
-    M_CHUNK=100000
+    M_CHUNK=40000
     G_CHUNK=1000
 elif [ "$DATASET" == "mesa" ]; then
     TOTAL_TESTS=10000000000 # Placeholder for MESA
-    M_CHUNK=100000
+    M_CHUNK=20000
     G_CHUNK=1000
 elif [ "$DATASET" == "dummy" ]; then
     TOTAL_TESTS=1000000 # 1000 M * 1000 G
@@ -123,14 +123,11 @@ fi
 
 # Stage 1.5: Estimate Immune Cell Proportions
 log "[1.5/9] Estimating immune cell proportions using EpiDISH..."
-if [ "$DATASET" == "mesa" ]; then
-    log "Skipping cell proportion estimation for MESA dataset."
-    cp "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_with_celltypes.csv"
-elif [ -s "$DATA_DIR/C_with_celltypes.csv" ]; then
-    log "C_with_celltypes.csv already exists. Skipping cell proportion estimation."
+if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
+    log "C_post_cellTypes.csv already exists. Skipping cell proportion estimation."
 else
     log "Running EpiDISH to estimate cell proportions..."
-    ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_with_celltypes.csv"
+    ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATASET"
 fi
 
 # Stage 2: Residualization & PCA
@@ -139,15 +136,15 @@ if [ -s "$DATA_DIR/C.csv" ]; then
     log "C.csv already exists. Skipping Residualization and PCA generation."
 else
     log "Running Expression Residualization & PCA..."
-    ./tools/residualize_pca.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_with_celltypes.csv" "$DATA_DIR/G_PCs.csv" "Exp_PC"
+    ./tools/residualize_pca.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATA_DIR/G_PCs.csv" "Exp_PC"
 
     log "Running Methylation Residualization & PCA..."
-    ./tools/residualize_pca.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_with_celltypes.csv" "$DATA_DIR/M_PCs.csv" "Meth_PC"
+    ./tools/residualize_pca.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATA_DIR/M_PCs.csv" "Meth_PC"
 
     log "Merging Covariates with PCs..."
     python3 -c "
 import pandas as pd
-C = pd.read_csv('$DATA_DIR/C_with_celltypes.csv', dtype={0: str})
+C = pd.read_csv('$DATA_DIR/C_post_cellTypes.csv', dtype={0: str})
 C.set_index(C.columns[0], inplace=True)
 G_PCs = pd.read_csv('$DATA_DIR/G_PCs.csv', dtype={0: str})
 G_PCs.set_index(G_PCs.columns[0], inplace=True)
