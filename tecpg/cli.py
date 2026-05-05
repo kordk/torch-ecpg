@@ -166,7 +166,7 @@ from .config import (
 )
 from .gtp import save_gtp_data
 from .mesa import save_mesa_data
-from .helper import default_region_parameter, initialize_dir
+from .helper import default_region_parameter, initialize_dir, verify_and_trim_samples
 from .import_data import read_dataframes, save_dataframes
 from .logger import Logger
 from .pearson_full import (
@@ -493,6 +493,8 @@ def corr(
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
 
+    M, G = verify_and_trim_samples(M, G, logger=logger)
+
     output_path = os.path.join(data['root_path'], data['output_dir'])
     output = None
     if chunks == 0:
@@ -774,6 +776,8 @@ def mlr(
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
+
+    M, G, C = verify_and_trim_samples(M, G, C, logger=logger)
 
     # Auto-derive chunk sizes on server-class hosts when the user did not
     # supply -g / -m. We use the same memory heuristics as the `tecpg
@@ -1067,6 +1071,9 @@ def mlr_single(
     M = dataframes[data['meth_file']]
     G = dataframes[data['gene_file']]
     C = dataframes[data['covar_file']]
+
+    M, G, C = verify_and_trim_samples(M, G, C, logger=logger)
+
     include = (not no_est, not no_err, not no_t, not no_p)
 
     if region != 'all':
