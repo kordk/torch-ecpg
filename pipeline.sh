@@ -83,11 +83,15 @@ mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
 log "[1/9] Preparing data..."
 log "Checking if dataset files already exist in $DATA_DIR..."
 
-if [ -s "$DATA_DIR/M.csv" ] && [ -s "$DATA_DIR/G.csv" ] && ( [ -s "$DATA_DIR/C_orig.csv" ] || [ -s "$DATA_DIR/C.csv" ] ); then
-    log "Data files (M.csv, G.csv, and C_orig.csv/C.csv) already exist and are not empty. Skipping download/generation."
+if ( [ -s "$DATA_DIR/M_orig.csv" ] || [ -s "$DATA_DIR/M.csv" ] ) && [ -s "$DATA_DIR/G.csv" ] && ( [ -s "$DATA_DIR/C_orig.csv" ] || [ -s "$DATA_DIR/C.csv" ] ); then
+    log "Data files (M_orig.csv/M.csv, G.csv, and C_orig.csv/C.csv) already exist and are not empty. Skipping download/generation."
     if [ -s "$DATA_DIR/C.csv" ] && [ ! -s "$DATA_DIR/C_orig.csv" ]; then
         log "Found C.csv but not C_orig.csv. Renaming C.csv to C_orig.csv for backwards compatibility."
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
+    fi
+    if [ -s "$DATA_DIR/M.csv" ] && [ ! -s "$DATA_DIR/M_orig.csv" ]; then
+        log "Found M.csv but not M_orig.csv. Renaming M.csv to M_orig.csv for backwards compatibility."
+        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
     fi
 else
     log "Data files not found or empty. Proceeding with data generation/download for $DATASET..."
@@ -99,11 +103,13 @@ else
         mv annot/* "$ANNOT_DIR/"
         rmdir data annot
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
+        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
     elif [ "$DATASET" == "gtp" ]; then
         log "Downloading GTP data..."
         echo "y" | python3 -m tecpg data gtp --yes
         mv data/* "$DATA_DIR/"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
+        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
         # For GTP, assuming the demo annots are used
         cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6"
         cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6"
@@ -113,12 +119,24 @@ else
         echo "y" | python3 -m tecpg data mesa
         mv data/* "$DATA_DIR/"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
+        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
         # For MESA, assuming appropriate demo annots are used if available
         # Or fall back to EPIC/HT12 for now
         cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6" 2>/dev/null || true
         cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6" 2>/dev/null || true
         rmdir data
     fi
+fi
+
+# Apply EPIC probe blacklist filter
+if [ -s "$DATA_DIR/M.csv" ]; then
+    log "M.csv already exists. Skipping probe blacklist filtering."
+else
+    log "Generating EPIC probe blacklist..."
+    ./tools/generateEpicProbeBlacklist.sh "$DATA_DIR"
+
+    log "Applying blacklist filter to M_orig.csv..."
+    python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/epic_probes_blacklist.csv" "$DATA_DIR/M.csv"
 fi
 
 # Stage 1.5: Estimate Immune Cell Proportions
