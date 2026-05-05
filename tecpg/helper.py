@@ -1,6 +1,6 @@
 import os
 import shutil
-from typing import Dict, List, Tuple, TypeVar
+from typing import Dict, List, Tuple, TypeVar, Optional
 
 import numpy as np
 import pandas
@@ -79,6 +79,84 @@ def read_csv(
             file_name,
         )
     return df
+
+
+def verify_and_trim_samples(
+    M: pandas.DataFrame,
+    G: pandas.DataFrame,
+    C: Optional[pandas.DataFrame] = None,
+    *,
+    logger: Optional[Logger] = None,
+) -> Tuple[pandas.DataFrame, ...]:
+    """
+    Verifies that sample labels match across M, G, and optionally C matrices.
+    Sample labels are the columns of M and G, and the index of C.
+    If they do not match perfectly, logs the discrepancies and trims them
+    to the shared intersection of samples.
+    """
+    if logger is None:
+        logger = Logger()
+
+    M_samples = set(M.columns.astype(str))
+    G_samples = set(G.columns.astype(str))
+
+    if C is not None:
+        C_samples = set(C.index.astype(str))
+        shared = M_samples.intersection(G_samples, C_samples)
+    else:
+        shared = M_samples.intersection(G_samples)
+
+    if len(shared) == len(M_samples) == len(G_samples) and (C is None or len(shared) == len(C_samples)):
+        logger.info('Sample verification: All {0} samples match across matrices.', len(shared))
+        if C is not None:
+            return M, G, C
+        return M, G
+
+    # Report discrepancies
+    m_diff = len(M_samples) - len(shared)
+    g_diff = len(G_samples) - len(shared)
+
+    logger.info(
+        'Sample mismatch detected: M has {0} non-overlapping samples, G has {1} non-overlapping samples.',
+        m_diff, g_diff
+    )
+    if C is not None:
+        c_diff = len(C_samples) - len(shared)
+        logger.info('Sample mismatch detected: C has {0} non-overlapping samples.', c_diff)
+
+    logger.info('Trimming matrices to {0} shared samples.', len(shared))
+
+    # Use the order from M to ensure consistent column ordering
+    shared_list = [s for s in M.columns if str(s) in shared]
+
+    M_out = M.loc[:, shared_list]
+
+    # Match G columns efficiently without deep copying entire matrix
+    # Identify which columns correspond to the shared list by converting to string
+    shared_str_set = {str(s) for s in shared_list}
+    g_shared_cols = [c for c in G.columns if str(c) in shared_str_set]
+
+    # Sort g_shared_cols according to the order in shared_list
+    g_col_map = {str(c): c for c in g_shared_cols}
+    g_ordered_cols = [g_col_map[str(s)] for s in shared_list if str(s) in g_col_map]
+
+    G_out = G.loc[:, g_ordered_cols]
+
+    # Rename the columns of G_out to match the original types from M
+    G_out.columns = shared_list
+
+    if C is not None:
+        # Avoid pandas.errors.InvalidIndexError by casting index temporarily if needed,
+        # but C.index is probably fine.
+        original_index_name = C.index.name
+        C_str_index = C.copy()
+        C_str_index.index = C_str_index.index.astype(str)
+        C_out = C_str_index.loc[[str(s) for s in shared_list]]
+        C_out.index = shared_list
+        C_out.index.name = original_index_name
+        return M_out, G_out, C_out
+
+    return M_out, G_out
 
 
 def trim_dataframes(
