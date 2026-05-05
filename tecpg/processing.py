@@ -257,6 +257,7 @@ def _tecpg_mlr_lstsq_inner(
             if k not in ['M', 'G', 'C', 'M_annot', 'G_annot', 'logger']
         },
     )
+    logger.info('Final count prior to analysis: {0} genes and {1} methylation loci.', len(G), len(M))
     logger.info('Initializing regression variables (lstsq)')
     device = get_device(**logger)
     dtype = DTYPE
@@ -390,6 +391,8 @@ def _tecpg_mlr_lstsq_inner(
     # Run summary diagnostics
     total_chunks_saved = 0
     total_bytes_written = 0
+    total_tests_evaluated = 0
+    total_tests_passed_filter = 0
     run_metrics = {
         'prep_ms': [], 'h2d_ms': [], 'compute_ms': [], 'd2h_ms': [], 'post_ms': [],
         'write_enqueue_ms': [], 'gpu_idle_between_chunks_ms': []
@@ -748,6 +751,8 @@ def _tecpg_mlr_lstsq_inner(
                     # Reshape to (G*M).
                     region_mask = region_mask.permute(1, 0).reshape(-1)
 
+                    total_tests_evaluated += region_mask.sum().item()
+
                     B = B[region_mask]
                     S = S[region_mask]
                     T = T[region_mask]
@@ -757,6 +762,8 @@ def _tecpg_mlr_lstsq_inner(
                         IG_analytical = IG_analytical[region_mask]
 
                     region_indices_list.append(region_mask) # Need to save for index generation
+                else:
+                    total_tests_evaluated += B.shape[0]
 
                 # Save the full B for Deep IG if needed
                 B_full = B if compute_ig_deep else None
@@ -1057,6 +1064,7 @@ def _tecpg_mlr_lstsq_inner(
                     run_metrics['gpu_idle_between_chunks_ms'].append(gpu_idle_between_chunks_ms)
                     total_chunks_saved += 1
                     total_bytes_written += out.memory_usage(deep=True).sum()
+                    total_tests_passed_filter += len(out)
                     last_chunk_end_time = time.perf_counter()
 
                     if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
@@ -1144,6 +1152,8 @@ def _tecpg_mlr_lstsq_inner(
                 )
                 out.index.set_names(index_names, inplace=True)
 
+                total_tests_passed_filter += len(out)
+
                 if meth_loci_per_chunk is not None:
                     gene_index_str = '1'
                     meth_index_str = str(meth_chunk_index + 1)
@@ -1199,6 +1209,10 @@ def _tecpg_mlr_lstsq_inner(
         if len(run_metrics['prep_ms']) > 0:
             import numpy as np
             summary_str = ["--- END OF RUN SUMMARY ---"]
+            summary_str.append(f"Genes evaluated: {len(G)}")
+            summary_str.append(f"Methylation loci evaluated: {len(M)}")
+            summary_str.append(f"Total tests evaluated: {total_tests_evaluated} (TOTAL_TESTS={total_tests_evaluated})")
+            summary_str.append(f"Tests passed p-value filter and saved: {total_tests_passed_filter}")
             summary_str.append(f"Chunks saved: {total_chunks_saved}")
             summary_str.append(f"Total bytes written: {total_bytes_written} ({total_bytes_written/1024/1024:.2f} MB)")
             for metric, vals in run_metrics.items():

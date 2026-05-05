@@ -86,6 +86,11 @@ def read_dataframes(
             out[file_name] = get_func(file_path, **logger)
             logger.time_check('Read {i}/{0} in {l} seconds', n)
 
+            if file_name == 'M.csv':
+                logger.info('Read in {0} methylation loci from M.csv', len(out[file_name]))
+            elif file_name == 'G.csv':
+                logger.info('Read in {0} genes from G.csv', len(out[file_name]))
+
         logger.time_check('Finished reading {0} dataframes in {t} seconds.', n)
         return out
 
@@ -104,6 +109,11 @@ def read_dataframes(
         file_path = os.path.join(input_dir, file_name)
         out[file_name] = get_func(file_path, **logger)
         logger.time_check('Read {i}/{0} in {l} seconds', n)
+
+        if file_name == 'M.csv':
+            logger.info('Read in {0} methylation loci from M.csv', len(out[file_name]))
+        elif file_name == 'G.csv':
+            logger.info('Read in {0} genes from G.csv', len(out[file_name]))
 
     logger.time_check('Finished reading {0} dataframes in {t} seconds.', n)
     return out
