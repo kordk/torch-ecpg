@@ -503,6 +503,15 @@ def _tecpg_mlr_lstsq_inner(
             # So `K = X.shape[2]`
             K = X.shape[2]
 
+            # PR1/A6: free the (M, S, K) design tensor as soon as QR is done.
+            # X is only re-read inside the gene loop by the Deep IG path
+            # (per-hit slices `X[m_idx]` / `X_baseline[m_idx]`); analytical IG
+            # has already consumed it via X_diff_mean above. Keeping X alive
+            # across the whole gene loop otherwise wastes (M * S * K) * dtype
+            # bytes on every chunk.
+            if not compute_ig_deep:
+                del X
+
             # Calculate R_inv. R is upper triangular.
             R_inv = torch.linalg.solve_triangular(
                 R,
@@ -668,6 +677,23 @@ def _tecpg_mlr_lstsq_inner(
                 # We need to permute to (M, G, K).
                 B = B.permute(0, 2, 1) # (M, G, K)
                 S = S.permute(0, 2, 1)
+
+                # PR1/A1-A2: when only the methylation coefficient is kept and
+                # neither analytical nor deep IG needs the other K-1 columns,
+                # slice B and S to the meth column (index 1) before forming
+                # T and P. This is bit-equivalent — division and normal_p are
+                # element-wise on K — but builds the per-CpG S/T/P tensors at
+                # 1/K of the memory and skips work on columns the late
+                # `[:, 1:2]` slice would discard anyway.
+                early_meth_slice = (
+                    methylation_only
+                    and not compute_ig
+                    and not compute_ig_deep
+                )
+                if early_meth_slice:
+                    B = B[:, :, 1:2]
+                    S = S[:, :, 1:2]
+
                 T = B / S
                 P = normal_p(T)
                 inner_logger.memory_check('tecpg_mlr_lstsq - pvals')
@@ -768,9 +794,11 @@ def _tecpg_mlr_lstsq_inner(
                 # Save the full B for Deep IG if needed
                 B_full = B if compute_ig_deep else None
 
-                if methylation_only:
+                if methylation_only and not early_meth_slice:
                     # B is (N, K). Columns: Const, Meth, Covars...
                     # Meth is index 1.
+                    # Skipped when early_meth_slice already trimmed the K
+                    # axis above; B/S/T/P are already (N, 1) in that case.
                     B = B[:, 1:2]
                     S = S[:, 1:2]
                     T = T[:, 1:2]
