@@ -52,7 +52,7 @@ fi
 
 if [ "$DATASET" == "gtp" ]; then
     TOTAL_TESTS=13744315260 # Approximate full GTP size
-    M_CHUNK=40000
+    M_CHUNK=25000
     G_CHUNK=1000
 elif [ "$DATASET" == "mesa" ]; then
     TOTAL_TESTS=10000000000 # Placeholder for MESA
