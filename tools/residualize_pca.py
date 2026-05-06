@@ -21,6 +21,7 @@ def main():
     parser.add_argument("-n", "--n-components", type=int, default=5, help="Number of top principal components to extract. Default is 5.")
     parser.add_argument("--transpose", action="store_true", help="Transpose input matrix before processing. Use if input has samples as rows.")
     parser.add_argument("-D", "--debug", action="store_true", help="Enable debug logging.")
+    parser.add_argument("--log2-transform", action="store_true", help="Apply log2(x + 1) transform to the input matrix before residualization.")
 
     args = parser.parse_args()
 
@@ -49,6 +50,10 @@ def main():
         M = M_raw.transpose()
     else:
         M = M_raw
+
+    if args.log2_transform:
+        logger.info("Applying log2(x + 1) transformation to the input matrix.")
+        M = np.log2(M.astype(float) + 1)
 
     logger.info(f"Loading base covariates from {args.covar_file}")
     C = pd.read_csv(args.covar_file, dtype={0: str})

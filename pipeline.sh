@@ -154,7 +154,7 @@ if [ -s "$DATA_DIR/C.csv" ]; then
     log "C.csv already exists. Skipping Residualization and PCA generation."
 else
     log "Running Expression Residualization & PCA..."
-    ./tools/residualize_pca.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATA_DIR/G_PCs.csv" "Exp_PC"
+    ./tools/residualize_pca.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATA_DIR/G_PCs.csv" "Exp_PC" --log2-transform
 
     log "Running Methylation Residualization & PCA..."
     ./tools/residualize_pca.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATA_DIR/M_PCs.csv" "Meth_PC"
