@@ -765,7 +765,7 @@ def corr(
 @run.command()
 @click.option('--gene-loci-per-chunk', show_default=True, type=int)
 @click.option('--meth-loci-per-chunk', show_default=True, type=int)
-@click.option('-p', '--p-thresh', show_default=True, type=float)
+@click.option('-p', '--p-thresh', show_default=True, default=0.00001, type=float)
 @click.option(
     '--all', 'region', show_default=True, flag_value='all', default=True
 )
@@ -1193,6 +1193,9 @@ def mlr(
         },
     )
 
+    if p_thresh is not None:
+        logger.info('Using p-value threshold: {0}', p_thresh)
+
     if mlr_method == 'lstsq_bootstrap':
         if not pairs_file or not master_parquet:
             error = '--pairs-file and --master-parquet are required for lstsq_bootstrap.'
@@ -1251,7 +1254,7 @@ def mlr(
 @click.option(
     '-r', '--regressions-per-chunk', show_default=True, default=0, type=int
 )
-@click.option('-p', '--p-thresh', show_default=True, type=float)
+@click.option('-p', '--p-thresh', show_default=True, default=0.00001, type=float)
 @click.option(
     '--all', 'region', show_default=True, flag_value='all', default=True
 )
@@ -1421,6 +1424,9 @@ def mlr_single(
             if k not in ['M', 'G', 'C', 'M_annot', 'G_annot']
         },
     )
+
+    if p_thresh is not None:
+        logger.info('Using p-value threshold: {0}', p_thresh)
 
     output = regression_single(**kwargs, **logger)
     if not regressions_per_chunk:
