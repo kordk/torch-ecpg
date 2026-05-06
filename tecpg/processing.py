@@ -9,7 +9,17 @@ from typing import Literal, Optional
 import numpy
 import pandas
 
-HIGH_WATER = 0.85
+# GPU caching-allocator high-water mark. When >75% of total VRAM is held
+# by PyTorch's caching allocator, fall back to torch.cuda.empty_cache()
+# between gene chunks. Lowered from 0.85 to 0.75 in the CUDA-only
+# memory-pressure tuning pass: empty_cache() is a global GPU-side sync
+# (expensive), but at >85% allocated PyTorch is already so close to OOM
+# that fragmentation routinely tips chunks over before the next chunk is
+# scheduled. Triggering one chunk earlier costs a single sync but
+# materially reduces OOM risk on memory-constrained GPUs (e.g. the
+# 24 GB klabdev L4 path). This branch is only ever hit when
+# torch.cuda.memory_allocated() is non-zero, so CPU runs are unaffected.
+HIGH_WATER = 0.75
 import torch
 from colorama import Fore as colors
 

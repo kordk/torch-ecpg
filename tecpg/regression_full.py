@@ -9,7 +9,11 @@ from typing import Literal, Optional
 import numpy
 import pandas
 
-HIGH_WATER = 0.85
+# GPU caching-allocator high-water mark; see tecpg/processing.py for the
+# rationale. Lowered from 0.85 to 0.75 alongside the processing.py copy
+# in the CUDA-only memory-pressure tuning pass. CPU runs never reach
+# this branch (gated on torch.cuda.memory_allocated()).
+HIGH_WATER = 0.75
 import torch
 from colorama import Fore as colors
 
