@@ -52,7 +52,7 @@ fi
 
 if [ "$DATASET" == "gtp" ]; then
     TOTAL_TESTS=13744315260 # Placeholder for full GTP size, will be dynamically updated
-    M_CHUNK=25000
+    M_CHUNK=15000
     G_CHUNK=1000
 elif [ "$DATASET" == "mesa" ]; then
     TOTAL_TESTS=10000000000 # Placeholder for MESA, will be dynamically updated
