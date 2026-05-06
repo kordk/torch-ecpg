@@ -30,6 +30,39 @@ def apply_blas_threads():
 
 apply_blas_threads()
 
+
+def apply_cuda_alloc_conf():
+    """Set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True at process
+    start, before torch is imported, so PyTorch's caching allocator
+    picks it up when it initializes.
+
+    expandable_segments reduces GPU memory fragmentation by letting the
+    caching allocator grow individual segments on demand instead of
+    rounding every block up to a fixed segment size. On the chunked
+    lstsq path used by tecpg this measurably lowers peak VRAM held by
+    the allocator after a few gene-chunk iterations.
+
+    The flag is harmless on CPU-only hosts: the env var is only
+    consulted by PyTorch when the CUDA caching allocator is
+    initialized, which never happens without a CUDA device. We
+    therefore set it unconditionally rather than spinning up torch
+    here just to call torch.cuda.is_available().
+
+    User overrides are honored:
+      - If PYTORCH_CUDA_ALLOC_CONF is already set in the environment,
+        we leave it alone (the user knows what they want).
+      - If TECPG_DISABLE_EXPANDABLE_SEGMENTS is truthy, skip the
+        configuration entirely.
+    """
+    if os.environ.get('TECPG_DISABLE_EXPANDABLE_SEGMENTS', '').strip().lower() in ('1', 'true', 'yes'):
+        return
+    if 'PYTORCH_CUDA_ALLOC_CONF' in os.environ:
+        return
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+
+apply_cuda_alloc_conf()
+
 from .cli import start
 
 

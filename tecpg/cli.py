@@ -777,7 +777,7 @@ def corr(
     is_flag=True,
     show_default=True,
     default=False,
-    help='Call torch.cuda.empty_cache() after every gene chunk. Default is to only empty the cache under memory pressure (> 85% allocated). Useful on memory-constrained GPUs.',
+    help='Call torch.cuda.empty_cache() after every gene chunk. Default is to only empty the cache under memory pressure (> 75% allocated). Useful on memory-constrained GPUs.',
 )
 @click.pass_context
 def mlr(
