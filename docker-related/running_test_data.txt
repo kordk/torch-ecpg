@@ -37,5 +37,5 @@ Finally the test itself is run:
 
 $ docker run -it --rm -w /usr/src/app/test --name my-running-app \
   -v "$(pwd)/test":/usr/src/app/test tecpg-container \
-  tecpg run mlr --cis -p 0.00001 -g 10000 -m 10000
+  tecpg run mlr --cis -p 0.00001 --gene-loci-per-chunk 10000 --meth-loci-per-chunk 10000
 

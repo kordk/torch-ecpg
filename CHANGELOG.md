@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **1.15.1-dev**.
+The current development version on the `dev` branch is **1.21.0-dev**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 Entries below describe the work accumulated on `dev` since the last
@@ -12,7 +12,76 @@ changes. Each version section is organized into **Features**,
 
 ---
 
-## 1.16.1-dev
+## 1.21.0-dev
+
+### Breaking Changes
+- The `tecpg run mlr` subcommand's `--gene-loci-per-chunk` and
+  `--meth-loci-per-chunk` options no longer accept the `-g` / `-m`
+  short forms. The short forms collided visually with the top-level
+  group's `-g, --gene-file` / `-m, --meth-file` flags, and with the
+  new anchoring semantics (PR 2 lets the user pin one of the two
+  chunk dimensions and auto-derive the other) the overlap was
+  becoming a real source of confusion. Picking different single
+  letters (e.g. `-G` / `-M`) would only have shifted the collision —
+  those are already taken by `--gene-annot` / `--meth-annot` at the
+  top level — so the short forms are dropped and only the
+  unambiguous long forms remain. Users who passed `-g <N> -m <N>` to
+  `tecpg run mlr ...` need to replace those with
+  `--gene-loci-per-chunk <N> --meth-loci-per-chunk <N>`. The
+  `pipeline.sh`, `profiling.sh`, `tests/test_minimal_config.sh`,
+  `docker-related/running_test_data.txt`, and `README.md` examples
+  in this repo have been updated. The unrelated `data dummy` and
+  `chunks` subcommands' own `-g`/`-m` short flags are unchanged.
+
+### Improvements / Performance
+- `_auto_chunk_sizes` (`tecpg/cli.py`) gains anchored-mode support:
+  when the user supplies exactly one of `-g` / `-m` the helper now
+  honors that anchor and auto-derives the other dimension from the
+  same 80%-of-budget memory target used for the fully-automatic case
+  (CUDA `mem_get_info` on GPU, `psutil.virtual_memory().available` on
+  CPU). Anchoring is honored on any host class because it is an
+  explicit user request; the historical "minimum hosts never auto-set
+  chunk sizes when the user supplies neither flag" invariant is
+  preserved unchanged. `pinned_g` is satisfied via bisection over
+  `mt_count` against the existing peak-memory estimators in
+  `tecpg.tool`; `pinned_m` is satisfied directly by feeding the
+  anchored value in as `mt_count`.
+- Drop the `meth_chunk = min(mt_count, 40000)` ceiling on the
+  fully-automatic path: the RAM/GPU budget is the binding constraint
+  (the estimator is already keyed on `mt_count`), and the ceiling
+  could only force extra outer iterations on hosts where a larger
+  `-m` fit fine. Combined with PR 1's smaller post-PR-1 inner-kernel
+  footprint this lets the auto-sizer pick more aggressive `-m`
+  values when the budget allows.
+- Estimator docs (`_auto_chunk_sizes`) updated to reflect the
+  post-PR-1 inner-kernel footprint: the per-CpG `(B, S, T, P)`
+  tensors are now realized at the active methylation column only
+  (K=1) when `methylation_only=True` and no IG is requested, which
+  is what the `full_output=False` branch of the estimator already
+  implicitly modeled. The `2 *` factor in the results-peak formula
+  is preserved as a conservative upper bound on transient overlap
+  during the in-place buffer assembly.
+
+### Tests
+- `tests/test_host_profile.py` gains coverage for the anchored modes
+  (`pinned_m`, `pinned_g`, both pinned), and for the absence of the
+  old `40000` methylation ceiling on the auto path.
+
+## 1.20.1-dev
+
+### Improvements / Performance
+- PR 1 (Inner-kernel peak-memory reduction): drop the late
+  `torch.cat([B, S, T, P])` in the lstsq path in favor of an
+  in-place pre-allocated buffer that is filled and freed
+  incrementally (A5); free `X` immediately after QR when deep IG is
+  not requested (A6); and slice `B`/`S` to the active methylation
+  column before forming `T = B / S` and `P = normal_p(T)` when
+  `methylation_only=True` and neither analytical nor deep IG is
+  requested (A1–A2). Bit-equivalent output verified against the
+  pre-PR-1 baseline on CPU via `tests/test_mlr_comparison.py` and
+  the "All Region" demo variants.
+
+
 
 ### Features
 - Add `--host-profile {auto,minimum,server}` (envvar `TECPG_HOST_PROFILE`)
@@ -21,7 +90,8 @@ changes. Each version section is organized into **Features**,
   otherwise `server`). The resolved profile drives defaults for
   save-pool size, output format, prefetch depth, and chunk auto-sizing.
   Explicit per-flag overrides (`--save-threads`, `--output-format`,
-  `-g`, `-m`, `--prefetch-chunks`) always win.
+  `--gene-loci-per-chunk`, `--meth-loci-per-chunk`,
+  `--prefetch-chunks`) always win.
 
 ### Improvements / Performance
 - `--output-format` gains an `auto` default that resolves to `parquet`

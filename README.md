@@ -237,8 +237,8 @@ tecpg run mlr --help
 Usage: tecpg run mlr [OPTIONS]
 
 Options:
-  -g, --gene-loci-per-chunk INTEGER
-  -m, --meth-loci-per-chunk INTEGER
+  --gene-loci-per-chunk INTEGER
+  --meth-loci-per-chunk INTEGER
   -p, --p-thresh FLOAT
   --all                           [default: all]
   -w, --window INTEGER
@@ -250,7 +250,7 @@ Options:
   --help                          Show this message and exit.
 ```
 ```bash
-tecpg run mlr --cis -p 0.00001 -g 10000 -m 10000
+tecpg run mlr --cis -p 0.00001 --gene-loci-per-chunk 10000 --meth-loci-per-chunk 10000
 ```
 
 ## Alternative annotation and assignment of regions
@@ -259,7 +259,7 @@ There are times when we may want to define our own classifications for a region 
 
 In these cases, we first run the mapping for all eCpG gene combinations:
 ```bash
-tecpg run mlr --all -g 100 -m 100000
+tecpg run mlr --all --gene-loci-per-chunk 100 --meth-loci-per-chunk 100000
 ```
 
 This analsis will produce a large number of mapping results:
@@ -448,12 +448,12 @@ The the environment variable CUDA_VISIBLE_DEVICES can be set when you call pytho
  
 To use the A2 GPU, the following re-mapping works:
 ```bash
-CUDA_VISIBLE_DEVICES=1,0 python tecpg run mlr --all --p-thresh 0.000001 -g 100 -m 100000
+CUDA_VISIBLE_DEVICES=1,0 python tecpg run mlr --all --p-thresh 0.000001 --gene-loci-per-chunk 100 --meth-loci-per-chunk 100000
 ```
 
 To use the L4 GPU, the following re-mapping works:
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 python tecpg run mlr --all --p-thresh 0.000001 -g 100 -m 100000
+CUDA_VISIBLE_DEVICES=0,1 python tecpg run mlr --all --p-thresh 0.000001 --gene-loci-per-chunk 100 --meth-loci-per-chunk 100000
 ```
 
 ## Performance tuning
