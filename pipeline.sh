@@ -12,9 +12,19 @@ log() {
 DATASET="dummy"
 MAPPING="all"
 TOTAL_TESTS=1000000
-M_CHUNK=500
-G_CHUNK=500
 NUM_PCS=5
+
+# Chunk sizes for `tecpg run mlr` are intentionally NOT set here. As of
+# tecpg 1.21.0-dev the CLI's anchored auto-sizer (`_auto_chunk_sizes` in
+# tecpg/cli.py) picks `--gene-loci-per-chunk` and `--meth-loci-per-chunk`
+# from the live RAM/GPU budget on server-class hosts when the user
+# supplies neither flag, and honors anchored mode when exactly one is
+# supplied. Combined with the post-PR1 inner-kernel memory reductions
+# (commits 24e96a6, b0f3a15) and the dropped 40k methylation ceiling
+# (commit 0a35dbb), the auto-sizer chooses chunk sizes that are tuned to
+# the actual host, so we no longer hardcode stale per-dataset values.
+# Override by exporting TECPG_M_CHUNK / TECPG_G_CHUNK before invoking
+# this script if you need to pin a specific chunking.
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -52,25 +62,33 @@ fi
 
 if [ "$DATASET" == "gtp" ]; then
     TOTAL_TESTS=13744315260 # Placeholder for full GTP size, will be dynamically updated
-    M_CHUNK=15000
-    G_CHUNK=1000
 elif [ "$DATASET" == "mesa" ]; then
     TOTAL_TESTS=10000000000 # Placeholder for MESA, will be dynamically updated
-    M_CHUNK=20000
-    G_CHUNK=1000
 elif [ "$DATASET" == "dummy" ]; then
     TOTAL_TESTS=1000000 # Placeholder for 1000 M * 1000 G, will be dynamically updated
-    M_CHUNK=500
-    G_CHUNK=500
 else
     log "Error: Unknown dataset: $DATASET"
     log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|promoter]"
     exit 1
 fi
 
+# Optional pinning of chunk sizes via env vars; otherwise the tecpg CLI
+# auto-sizer picks both from the host budget.
+MLR_CHUNK_ARGS=()
+if [ -n "${TECPG_M_CHUNK:-}" ]; then
+    MLR_CHUNK_ARGS+=(--meth-loci-per-chunk "$TECPG_M_CHUNK")
+fi
+if [ -n "${TECPG_G_CHUNK:-}" ]; then
+    MLR_CHUNK_ARGS+=(--gene-loci-per-chunk "$TECPG_G_CHUNK")
+fi
+
 log "======================================"
 log "Starting eQTM Pipeline for: $DATASET (Mapping: $MAPPING)"
-log "Dataset configurations: TOTAL_TESTS=$TOTAL_TESTS, M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK"
+if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
+    log "Dataset configurations: TOTAL_TESTS=$TOTAL_TESTS, chunk overrides=${MLR_CHUNK_ARGS[*]}"
+else
+    log "Dataset configurations: TOTAL_TESTS=$TOTAL_TESTS, chunk sizes=auto (tecpg CLI)"
+fi
 log "======================================"
 
 # Setup directories
@@ -187,11 +205,15 @@ log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
 # Stage 3: Mapping (lstsq + ig)
 log "[3/9] Performing eQTM Mapping (lstsq + IG)..."
 log "This stage runs the multiple linear regression (mlr) model and computes Integrated Gradients (IG)."
-log "Using chunks: M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
+if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
+    log "Chunk overrides: ${MLR_CHUNK_ARGS[*]}. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
+else
+    log "Chunk sizes auto-selected by tecpg CLI from host budget. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
+fi
 
 # Ensure pipefail is set so pipeline errors (like in mlr) are not masked by tee
 set -o pipefail
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING --meth-loci-per-chunk "$M_CHUNK" --gene-loci-per-chunk "$G_CHUNK" --compute-ig 2>&1 | tee "$OUT_DIR/mlr_run.log"
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig 2>&1 | tee "$OUT_DIR/mlr_run.log"
 set +o pipefail
 
 # Extract dynamically evaluated TOTAL_TESTS
