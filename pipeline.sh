@@ -35,7 +35,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "Options:"
             echo "  -h, --help               Show this help message and exit"
             echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, mesa"
-            echo "  -m, --mapping MAPPING    Specify the mapping method for tecpg. Options: all (default), promoter"
+            echo "  -m, --mapping MAPPING    Specify the mapping method for tecpg. Options: all (default), cis"
             exit 0
             ;;
         -d|--dataset)
@@ -54,9 +54,9 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
-if [ "$MAPPING" != "all" ] && [ "$MAPPING" != "promoter" ]; then
+if [ "$MAPPING" != "all" ] && [ "$MAPPING" != "cis" ]; then
     log "Error: Unknown mapping: $MAPPING"
-    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|promoter]"
+    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis]"
     exit 1
 fi
 
@@ -68,7 +68,7 @@ elif [ "$DATASET" == "dummy" ]; then
     TOTAL_TESTS=1000000 # Placeholder for 1000 M * 1000 G, will be dynamically updated
 else
     log "Error: Unknown dataset: $DATASET"
-    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|promoter]"
+    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis]"
     exit 1
 fi
 
