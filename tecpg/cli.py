@@ -43,6 +43,43 @@ def _auto_save_threads(physical_cores: int, ram_gb: float) -> int:
     return max(2, min(8, min(physical_cores - 2, int(ram_gb // 4))))
 
 
+def _ig_safety_ceiling(
+    target_bytes: int,
+    compute_ig: bool,
+    compute_ig_deep: bool,
+):
+    """Return ``(gene_max, meth_max)`` belt-and-suspenders ceiling for the
+    no-anchor auto path when IG is enabled, or ``None`` when no clamp
+    applies.
+
+    The estimator in ``tecpg.tool`` is conservative but cannot model
+    every torch allocator/fragmentation effect. On modest GPUs with IG
+    enabled we therefore clamp the auto-sized pair to a known-safe
+    ceiling that mirrors the previously-validated static settings
+    (``meth=15000, gene=1000``) used by ``pipeline.sh`` before
+    auto-sizing. Larger GPUs scale the ceiling up.
+
+    The clamp does *not* apply when the user has explicitly anchored
+    one or both chunk dimensions: anchoring is an explicit user
+    request and must be honored verbatim.
+    """
+    if not (compute_ig or compute_ig_deep):
+        return None
+
+    # `target_bytes` is already 80% of free VRAM (or system RAM in CPU
+    # mode). Translate back to a rough "free GB" view for the buckets.
+    free_gb = (target_bytes / 0.8) / 1_000_000_000
+
+    # Buckets are intentionally coarse: the goal is to never silently
+    # exceed values that have been observed to OOM on the same class
+    # of host.
+    if free_gb <= 24:
+        return (2000, 20000)
+    if free_gb <= 48:
+        return (4000, 40000)
+    return None
+
+
 def _auto_chunk_sizes(
     M,
     G,
@@ -53,6 +90,9 @@ def _auto_chunk_sizes(
     logger=None,
     pinned_g: Optional[int] = None,
     pinned_m: Optional[int] = None,
+    compute_ig: bool = False,
+    compute_ig_deep: bool = False,
+    target_bytes: Optional[int] = None,
 ):
     """Derive (gene_loci_per_chunk, meth_loci_per_chunk) from data shape and
     available device memory.
@@ -66,7 +106,8 @@ def _auto_chunk_sizes(
 
     The target memory budget is 80% of free GPU memory when CUDA is
     available, otherwise 80% of total system RAM. This matches the
-    convention used by the existing `tecpg chunks` subcommand.
+    convention used by the existing `tecpg chunks` subcommand. Tests
+    may override the budget directly via `target_bytes`.
 
     The estimators in `tecpg.tool` (`estimate_loci_per_chunk_e_peak` /
     `estimate_loci_per_chunk_results_peak`) reflect the post-PR-1 inner
@@ -80,6 +121,14 @@ def _auto_chunk_sizes(
     results-peak formula is preserved as a conservative upper bound on
     transient overlap during buffer assembly (4 * K * N pre-allocated
     buffer plus B/S/T/P still live until each is incrementally freed).
+
+    IG awareness:
+      - When `compute_ig` or `compute_ig_deep` is true, the estimators
+        receive an extra `(M, S, K)`-equivalent constants term plus a
+        per-locus IG factor. Without this term, on tight budgets (e.g.
+        an L4 with ~22 GB free VRAM and a 336k x 39k x 340 dataset)
+        the estimator returned a negative chunk size and the no-anchor
+        fallback below silently quartered the inputs, OOM-ing the GPU.
 
     Anchor mode:
       - If `pinned_m` is supplied, it is treated as the methylation
@@ -103,7 +152,9 @@ def _auto_chunk_sizes(
     covar_count = len(C.columns)
     datum_bytes = _torch.ones(1, dtype=DTYPE).element_size()
 
-    if _torch.cuda.is_available():
+    if target_bytes is not None:
+        target_label = 'caller-supplied target'
+    elif _torch.cuda.is_available():
         target_bytes = int(_torch.cuda.mem_get_info()[0] * 0.8)
         target_label = 'CUDA free memory'
     else:
@@ -130,6 +181,8 @@ def _auto_chunk_sizes(
             p_only=p_only,
             p_filtration=False,
             region_filtration=False,
+            compute_ig=compute_ig,
+            compute_ig_deep=compute_ig_deep,
         )
         est_r = estimate_loci_per_chunk_results_peak(
             target_bytes,
@@ -142,8 +195,26 @@ def _auto_chunk_sizes(
             full_output=full_output,
             p_only=p_only,
             region_filtration=False,
+            compute_ig=compute_ig,
+            compute_ig_deep=compute_ig_deep,
         )
         return min(est_e, est_r)
+
+    def _bisect_largest_mt_for_g(target_g: int) -> int:
+        """Return the largest mt in [1, mt_count] for which the
+        estimator admits at least `target_g` genes. Returns 0 if even
+        mt=1 cannot accommodate `target_g` (caller decides fallback).
+        """
+        lo, hi = 1, mt_count
+        best_mt = 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if _estimate_for(mid) >= target_g:
+                best_mt = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return best_mt
 
     # Both anchored: nothing to derive.
     if pinned_g is not None and pinned_m is not None:
@@ -167,7 +238,27 @@ def _auto_chunk_sizes(
             # no --gene-loci-per-chunk chunking required.
             return (None, anchored_mt)
         if estimate < 1:
-            return (max(1, gt_count // 4), anchored_mt)
+            # The user's anchored --meth-loci-per-chunk does not leave
+            # room for even a single gene at the current budget. We
+            # cannot bisect over mt (it is anchored), so degrade
+            # gracefully to gene_chunk=1 with a loud warning rather
+            # than silently picking `gt_count // 4`, which has no
+            # relationship to the budget and was the source of the
+            # 1.22.x OOM regression on tight GPUs.
+            if logger is not None:
+                logger.warning(
+                    'Chunk-size estimator: anchored '
+                    '--meth-loci-per-chunk={0} exceeds budget '
+                    '(target={1:.1f} MB ({2}), samples={3}, mt={4}, '
+                    'gt={5}, covars={6}, compute_ig={7}, '
+                    'compute_ig_deep={8}); falling back to '
+                    '--gene-loci-per-chunk=1. Consider lowering '
+                    '--meth-loci-per-chunk or disabling IG.',
+                    anchored_mt, target_bytes / 1_000_000, target_label,
+                    samples, mt_count, gt_count, covar_count,
+                    compute_ig, compute_ig_deep,
+                )
+            return (1, anchored_mt)
         return (max(1, int(estimate)), anchored_mt)
 
     # Anchor gene, derive methylation chunk via bisection over mt.
@@ -175,28 +266,22 @@ def _auto_chunk_sizes(
         anchored_g = max(1, min(int(pinned_g), gt_count))
         # Find the largest mt in [1, mt_count] such that the
         # estimator's gene-loci-per-chunk is >= anchored_g.
-        lo, hi = 1, mt_count
-        best_mt = 0
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if _estimate_for(mid) >= anchored_g:
-                best_mt = mid
-                lo = mid + 1
-            else:
-                hi = mid - 1
+        best_mt = _bisect_largest_mt_for_g(anchored_g)
         if best_mt == 0:
             # Even mt=1 cannot accommodate the requested
-            # --gene-loci-per-chunk; fall back to a small meth chunk and
-            # let the runtime decide. This is a corner case (very tight
-            # budget); we degrade gracefully rather than refuse.
-            best_mt = max(1, mt_count // 4)
+            # --gene-loci-per-chunk; degrade gracefully.
+            best_mt = 1
             if logger is not None:
                 logger.warning(
-                    'Chunk-size estimator: requested '
+                    'Chunk-size estimator: anchored '
                     '--gene-loci-per-chunk={0} exceeds budget even at '
-                    '--meth-loci-per-chunk=1; falling back to '
-                    '--meth-loci-per-chunk={1}.',
-                    anchored_g, best_mt,
+                    '--meth-loci-per-chunk=1 (target={1:.1f} MB ({2}), '
+                    'samples={3}, mt={4}, gt={5}, covars={6}, '
+                    'compute_ig={7}, compute_ig_deep={8}); falling '
+                    'back to --meth-loci-per-chunk=1.',
+                    anchored_g, target_bytes / 1_000_000, target_label,
+                    samples, mt_count, gt_count, covar_count,
+                    compute_ig, compute_ig_deep,
                 )
         if logger is not None:
             logger.info(
@@ -220,23 +305,93 @@ def _auto_chunk_sizes(
 
     if estimate >= gt_count:
         # Whole-G fits in budget: no chunking needed.
-        return (None, None)
-    if estimate < 1:
-        # Cannot fit even one gene with the current methylation count;
-        # split methylation as well. This is rare on server-class hosts
-        # but we fall back to a safe (small) chunk.
-        meth_chunk = max(1, mt_count // 4)
-        gene_chunk = max(1, gt_count // 4)
-        return (gene_chunk, meth_chunk)
+        gene_chunk: Optional[int] = None
+        meth_chunk: Optional[int] = None
+    elif estimate < 1:
+        # Cannot fit even one gene at the current methylation count.
+        # Bisect over mt to find a balanced (mt, g) pair that fits the
+        # budget: the largest mt for which the estimator admits a
+        # non-trivial gene chunk. This replaces the previous naive
+        # `(gt_count // 4, mt_count // 4)` fallback which was not
+        # budget-aware and caused the 1.22.x OOM regression on tight
+        # GPUs (see CHANGELOG 1.22.2-dev).
+        #
+        # `g_floor` keeps the gene chunk above a small minimum so we do
+        # not pick `mt_count`-style oversized meth chunks in exchange
+        # for `gene_chunk=1` (essentially serial). 64 is a small power
+        # of two that mirrors typical GPU warp/wave scheduling and is
+        # negligible relative to realistic gene counts.
+        if logger is not None:
+            logger.warning(
+                'Chunk-size estimator: budget too tight at '
+                'mt_count={0} (target={1:.1f} MB ({2}), samples={3}, '
+                'gt={4}, covars={5}, compute_ig={6}, '
+                'compute_ig_deep={7}); bisecting over mt for a '
+                'safe chunk pair.',
+                mt_count, target_bytes / 1_000_000, target_label,
+                samples, gt_count, covar_count,
+                compute_ig, compute_ig_deep,
+            )
+        g_floor = min(64, gt_count)
+        best_mt = _bisect_largest_mt_for_g(g_floor)
+        if best_mt == 0:
+            # Even at g_floor we cannot fit; relax to g=1.
+            best_mt = _bisect_largest_mt_for_g(1)
+        if best_mt == 0:
+            # Pathological: even (mt=1, gene=1) does not fit. This
+            # would mean constants alone exceed budget; we cannot
+            # recover. Pick the smallest possible pair and let the
+            # runtime surface the OOM at a known-tiny size rather
+            # than at the previous oversized fallback.
+            if logger is not None:
+                logger.warning(
+                    'Chunk-size estimator: even (mt=1, gene=1) '
+                    'exceeds the budget; returning minimal '
+                    '(gene_chunk=1, meth_chunk=1). The run may OOM; '
+                    'consider running on a host with more memory.',
+                )
+            gene_chunk = 1
+            meth_chunk = 1
+        else:
+            gene_chunk = max(1, min(int(_estimate_for(best_mt)), gt_count))
+            meth_chunk = best_mt
+    else:
+        gene_chunk = max(1, int(estimate))
+        # Use the full methylation set per chunk: the RAM/GPU budget is
+        # the binding constraint (the estimator above is keyed on
+        # `mt_count`), so capping at 40000 was redundant pessimism that
+        # could only force extra outer iterations on hosts where a
+        # larger --meth-loci-per-chunk fit fine. The post-PR-1
+        # footprint makes the un-capped value safer still.
+        meth_chunk = mt_count
 
-    gene_chunk = max(1, int(estimate))
-    # Use the full methylation set per chunk: the RAM/GPU budget is the
-    # binding constraint (the estimator above is keyed on `mt_count`),
-    # so capping at 40000 was redundant pessimism that could only force
-    # extra outer iterations on hosts where a larger
-    # --meth-loci-per-chunk fit fine. The
-    # post-PR-1 footprint makes the un-capped value safer still.
-    meth_chunk = mt_count
+    # Belt-and-suspenders: when IG is enabled on a modest GPU, clamp
+    # the no-anchor auto pair to a known-safe ceiling. The clamp does
+    # nothing when both values are already within the ceiling or when
+    # IG is disabled. It is intentionally not applied to anchored
+    # modes -- anchoring is an explicit user request.
+    if gene_chunk is not None and meth_chunk is not None:
+        ceiling = _ig_safety_ceiling(
+            target_bytes, compute_ig, compute_ig_deep,
+        )
+        if ceiling is not None:
+            gene_max, meth_max = ceiling
+            clamped_g = min(gene_chunk, gene_max)
+            clamped_m = min(meth_chunk, meth_max)
+            if (
+                logger is not None
+                and (clamped_g != gene_chunk or clamped_m != meth_chunk)
+            ):
+                logger.warning(
+                    'Chunk-size estimator: IG enabled with tight VRAM '
+                    '(target={0:.1f} MB ({1})); clamping auto-sized '
+                    '(gene={2}, meth={3}) to safety ceiling '
+                    '(gene<={4}, meth<={5}).',
+                    target_bytes / 1_000_000, target_label,
+                    gene_chunk, meth_chunk, gene_max, meth_max,
+                )
+            gene_chunk, meth_chunk = clamped_g, clamped_m
+
     return (gene_chunk, meth_chunk)
 
 import pandas
@@ -906,6 +1061,8 @@ def mlr(
                 logger=logger,
                 pinned_g=gene_loci_per_chunk,
                 pinned_m=meth_loci_per_chunk,
+                compute_ig=compute_ig,
+                compute_ig_deep=compute_ig_deep,
             )
         except Exception as exc:
             # Heuristic estimation is best-effort. If it fails for any

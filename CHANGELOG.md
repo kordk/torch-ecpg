@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **1.21.0-dev**.
+The current development version on the `dev` branch is **1.22.2-dev**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 Entries below describe the work accumulated on `dev` since the last
@@ -11,6 +11,57 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 1.22.2-dev
+
+### Bug Fixes
+- Fix severe OOM regression in the `_auto_chunk_sizes` chunk auto-sizer
+  (`tecpg/cli.py`) when Integrated Gradients is enabled on tight GPUs.
+  On the GTP-scale dataset (336341 methylation × 39352 gene × 340
+  samples) running on an L4 (~22 GB free VRAM) with `--compute-ig`,
+  the estimator's `constants_bytes` term alone exceeded the 80%-of-VRAM
+  budget, so the no-anchor branch of `_auto_chunk_sizes` returned a
+  negative chunk size and silently fell back to
+  `(gt_count // 4, mt_count // 4) = (9838, 84085)` — roughly 5–10×
+  larger than the previously-known-safe `(15000, 1000)` static values
+  — causing OOM on the first chunk. Three coordinated changes:
+  - **IG-aware estimator.** `estimate_loci_per_chunk_e_peak` and
+    `estimate_loci_per_chunk_results_peak` (`tecpg/tool.py`) gain
+    `compute_ig` / `compute_ig_deep` parameters. Analytical IG charges
+    one extra `(M, S, K)`-equivalent constants term (for the
+    `X_diff_mean` transient before reduction) plus a 1.5× per-locus
+    factor; deep IG additionally charges another two `(M, S, K)`
+    equivalents and a 4× per-locus factor (for the retained autograd
+    graph and per-step interpolated activations). Factors are
+    conservative on purpose — under-estimating peak causes OOM,
+    over-estimating only forces extra outer iterations.
+  - **Bisection-based fallback.** When the estimator returns < 1 at
+    `mt_count` (no-anchor branch), instead of `(gt_count // 4,
+    mt_count // 4)` the helper now bisects over `mt ∈ [1, mt_count]`
+    for the largest meth chunk that admits a non-trivial gene chunk
+    (g_floor=64, falling back to 1 only on extreme tightness). The
+    same bisection helper is reused in the anchor-g branch (replacing
+    its previous `mt_count // 4` fallback). The anchor-m branch's
+    naive `gt_count // 4` fallback is replaced with `gene_chunk=1`
+    plus a loud warning, since the user has anchored mt and there is
+    nothing to bisect.
+  - **Loud diagnostics + VRAM safety ceiling.** The "estimate < 1"
+    log line is upgraded from `info` to `warning` and now names all
+    the estimator inputs (target bytes, samples, mt, gt, covars,
+    `compute_ig`, `compute_ig_deep`) so this regression cannot recur
+    silently. As belt-and-suspenders, when IG is enabled and effective
+    free VRAM is ≤ 24 GB the no-anchor pair is clamped to
+    `(gene ≤ 2000, meth ≤ 20000)`, and at ≤ 48 GB to
+    `(gene ≤ 4000, meth ≤ 40000)`. The clamp is not applied to
+    anchored modes — anchoring is an explicit user request.
+
+### Tests
+- `tests/test_host_profile.py` gains five new tests covering the
+  IG-aware estimator, the bisection-based fallback (vs. the old
+  naive `// 4` quartering), and the safety ceiling (clamps with IG
+  on tight VRAM, no-op without IG, no-op when anchored). The helper
+  signature gains an optional `target_bytes=` parameter so the
+  tests are deterministic on CPU.
 
 ## 1.21.0-dev
 
