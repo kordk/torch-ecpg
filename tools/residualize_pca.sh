@@ -12,8 +12,9 @@ INPUT_FILE="$1"
 COV_FILE="$2"
 OUT_FILE="$3"
 PREFIX="$4"
+shift 4
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PYTHON_SCRIPT="$DIR/residualize_pca.py"
 
-python3 "$PYTHON_SCRIPT" -i "$INPUT_FILE" -c "$COV_FILE" -o "$OUT_FILE" -p "$PREFIX" -n 5
+python3 "$PYTHON_SCRIPT" -i "$INPUT_FILE" -c "$COV_FILE" -o "$OUT_FILE" -p "$PREFIX" -n 5 "$@"
