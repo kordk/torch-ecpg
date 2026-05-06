@@ -779,7 +779,24 @@ def _tecpg_mlr_lstsq_inner(
                 if p_only:
                     current_results = P
                 else:
-                    current_results = torch.cat((B, S, T, P), dim=1)
+                    # Assemble (N, 4*K) output by writing B, S, T, P into a
+                    # pre-allocated buffer and freeing each slice as it is
+                    # copied. Equivalent to torch.cat((B, S, T, P), dim=1),
+                    # but avoids holding all four tensors plus the
+                    # concatenated result alive simultaneously (which roughly
+                    # doubled peak memory at this point). P is kept because
+                    # downstream code still indexes it for p-value filtering.
+                    n_rows, k_cols = B.shape
+                    current_results = torch.empty(
+                        (n_rows, 4 * k_cols), device=B.device, dtype=B.dtype
+                    )
+                    current_results[:, 0:k_cols] = B
+                    del B
+                    current_results[:, k_cols:2 * k_cols] = S
+                    del S
+                    current_results[:, 2 * k_cols:3 * k_cols] = T
+                    del T
+                    current_results[:, 3 * k_cols:4 * k_cols] = P
 
                 if compute_ig:
                     current_results = torch.cat((current_results, IG_analytical), dim=1)
@@ -885,10 +902,11 @@ def _tecpg_mlr_lstsq_inner(
                     p_indices_list.append(p_indices)
 
                     P = P[p_indices]
-                    if not p_only:
-                        B = B[p_indices]
-                        S = S[p_indices]
-                        T = T[p_indices]
+                    # Note: B, S, T are no longer kept around as separate
+                    # tensors at this point -- they have been written into
+                    # current_results above and freed. Filtering of the
+                    # combined block happens via current_results[p_indices]
+                    # below.
 
                 if filtration:
                     output_sizes.append(len(P))
