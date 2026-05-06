@@ -213,11 +213,11 @@ fi
 
 # Ensure pipefail is set so pipeline errors (like in mlr) are not masked by tee
 set -o pipefail
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig 2>&1 | tee "$OUT_DIR/mlr_run.log"
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig 2>&1 | tee "mlr_run_${DATASET}.log"
 set +o pipefail
 
 # Extract dynamically evaluated TOTAL_TESTS
-EXTRACTED_TOTALS=$(grep -o 'TOTAL_TESTS=[0-9]*' "$OUT_DIR/mlr_run.log" | tail -n 1 | cut -d= -f2 || true)
+EXTRACTED_TOTALS=$(grep -o 'TOTAL_TESTS=[0-9]*' "mlr_run_${DATASET}.log" | tail -n 1 | cut -d= -f2 || true)
 if [ -n "$EXTRACTED_TOTALS" ]; then
     TOTAL_TESTS=$EXTRACTED_TOTALS
     log "Dynamically extracted TOTAL_TESTS=$TOTAL_TESTS from mlr output."
