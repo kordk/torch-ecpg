@@ -191,7 +191,7 @@ log "Using chunks: M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK. Input: $DATA_DIR, Annotat
 
 # Ensure pipefail is set so pipeline errors (like in mlr) are not masked by tee
 set -o pipefail
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig 2>&1 | tee "$OUT_DIR/mlr_run.log"
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING --meth-loci-per-chunk "$M_CHUNK" --gene-loci-per-chunk "$G_CHUNK" --compute-ig 2>&1 | tee "$OUT_DIR/mlr_run.log"
 set +o pipefail
 
 # Extract dynamically evaluated TOTAL_TESTS

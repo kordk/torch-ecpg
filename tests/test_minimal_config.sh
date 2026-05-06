@@ -74,7 +74,7 @@ run_mlr() {
     # --cpu-threads 1 forces the CPU code path (no CUDA dependency).
     # --host-profile minimum forces the conservative defaults regardless
     # of the actual hardware running CI.
-    # -g 20 -m 40 forces the chunked save path.
+    # --gene-loci-per-chunk 20 --meth-loci-per-chunk 40 forces the chunked save path.
     tecpg \
         -r "$WORK_DIR" \
         -i data \
@@ -86,8 +86,8 @@ run_mlr() {
         run mlr \
             --mlr-method lstsq \
             --all \
-            -g 20 \
-            -m 40 \
+            --gene-loci-per-chunk 20 \
+            --meth-loci-per-chunk 40 \
             "$@"
 }
 

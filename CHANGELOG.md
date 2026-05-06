@@ -14,6 +14,25 @@ changes. Each version section is organized into **Features**,
 
 ## 1.21.0-dev
 
+### Breaking Changes
+- The `tecpg run mlr` subcommand's `--gene-loci-per-chunk` and
+  `--meth-loci-per-chunk` options no longer accept the `-g` / `-m`
+  short forms. The short forms collided visually with the top-level
+  group's `-g, --gene-file` / `-m, --meth-file` flags, and with the
+  new anchoring semantics (PR 2 lets the user pin one of the two
+  chunk dimensions and auto-derive the other) the overlap was
+  becoming a real source of confusion. Picking different single
+  letters (e.g. `-G` / `-M`) would only have shifted the collision —
+  those are already taken by `--gene-annot` / `--meth-annot` at the
+  top level — so the short forms are dropped and only the
+  unambiguous long forms remain. Users who passed `-g <N> -m <N>` to
+  `tecpg run mlr ...` need to replace those with
+  `--gene-loci-per-chunk <N> --meth-loci-per-chunk <N>`. The
+  `pipeline.sh`, `profiling.sh`, `tests/test_minimal_config.sh`,
+  `docker-related/running_test_data.txt`, and `README.md` examples
+  in this repo have been updated. The unrelated `data dummy` and
+  `chunks` subcommands' own `-g`/`-m` short flags are unchanged.
+
 ### Improvements / Performance
 - `_auto_chunk_sizes` (`tecpg/cli.py`) gains anchored-mode support:
   when the user supplies exactly one of `-g` / `-m` the helper now
@@ -71,7 +90,8 @@ changes. Each version section is organized into **Features**,
   otherwise `server`). The resolved profile drives defaults for
   save-pool size, output format, prefetch depth, and chunk auto-sizing.
   Explicit per-flag overrides (`--save-threads`, `--output-format`,
-  `-g`, `-m`, `--prefetch-chunks`) always win.
+  `--gene-loci-per-chunk`, `--meth-loci-per-chunk`,
+  `--prefetch-chunks`) always win.
 
 ### Improvements / Performance
 - `--output-format` gains an `auto` default that resolves to `parquet`

@@ -61,7 +61,8 @@ def _auto_chunk_sizes(
     (i.e. the data fits in the target memory budget). The caller decides
     what to do with `(None, None)` -- on server-class hosts we treat that
     as "let the inner kernel run un-chunked", matching historical
-    behavior when the user supplies neither -g nor -m.
+    behavior when the user supplies neither --gene-loci-per-chunk nor
+    --meth-loci-per-chunk.
 
     The target memory budget is 80% of free GPU memory when CUDA is
     available, otherwise 80% of total system RAM. This matches the
@@ -154,15 +155,16 @@ def _auto_chunk_sizes(
         estimate = _estimate_for(anchored_mt)
         if logger is not None:
             logger.info(
-                'Chunk-size estimator (anchored -m={0}): target={1:.1f} MB '
-                '({2}), estimate={3:.0f}',
+                'Chunk-size estimator (anchored --meth-loci-per-chunk={0}): '
+                'target={1:.1f} MB ({2}), estimate={3:.0f}',
                 anchored_mt,
                 target_bytes / 1_000_000,
                 target_label,
                 estimate,
             )
         if estimate >= gt_count:
-            # Whole-G fits in budget at the user's -m: no -g chunking.
+            # Whole-G fits in budget at the user's --meth-loci-per-chunk:
+            # no --gene-loci-per-chunk chunking required.
             return (None, anchored_mt)
         if estimate < 1:
             return (max(1, gt_count // 4), anchored_mt)
@@ -183,21 +185,24 @@ def _auto_chunk_sizes(
             else:
                 hi = mid - 1
         if best_mt == 0:
-            # Even mt=1 cannot accommodate the requested -g; fall back
-            # to a small meth chunk and let the runtime decide. This is
-            # a corner case (very tight budget); we degrade gracefully
-            # rather than refuse.
+            # Even mt=1 cannot accommodate the requested
+            # --gene-loci-per-chunk; fall back to a small meth chunk and
+            # let the runtime decide. This is a corner case (very tight
+            # budget); we degrade gracefully rather than refuse.
             best_mt = max(1, mt_count // 4)
             if logger is not None:
                 logger.warning(
-                    'Chunk-size estimator: requested -g={0} exceeds budget '
-                    'even at -m=1; falling back to -m={1}.',
+                    'Chunk-size estimator: requested '
+                    '--gene-loci-per-chunk={0} exceeds budget even at '
+                    '--meth-loci-per-chunk=1; falling back to '
+                    '--meth-loci-per-chunk={1}.',
                     anchored_g, best_mt,
                 )
         if logger is not None:
             logger.info(
-                'Chunk-size estimator (anchored -g={0}): target={1:.1f} MB '
-                '({2}), derived -m={3}',
+                'Chunk-size estimator (anchored --gene-loci-per-chunk={0}): '
+                'target={1:.1f} MB ({2}), derived '
+                '--meth-loci-per-chunk={3}',
                 anchored_g, target_bytes / 1_000_000, target_label, best_mt,
             )
         return (anchored_g, best_mt)
@@ -228,7 +233,8 @@ def _auto_chunk_sizes(
     # Use the full methylation set per chunk: the RAM/GPU budget is the
     # binding constraint (the estimator above is keyed on `mt_count`),
     # so capping at 40000 was redundant pessimism that could only force
-    # extra outer iterations on hosts where a larger -m fit fine. The
+    # extra outer iterations on hosts where a larger
+    # --meth-loci-per-chunk fit fine. The
     # post-PR-1 footprint makes the un-capped value safer still.
     meth_chunk = mt_count
     return (gene_chunk, meth_chunk)
@@ -421,7 +427,8 @@ from .tool import (
         "'minimum' preserves the conservative 16 GB / 8-core defaults. "
         "'server' enables Parquet output, a thread-pool writer, and "
         "auto-derived chunk sizes. Explicit per-flag overrides "
-        "(e.g. --save-threads, --output-format, -g, -m) always win."
+        "(e.g. --save-threads, --output-format, --gene-loci-per-chunk, "
+        "--meth-loci-per-chunk) always win."
     ),
 )
 @click.pass_context
@@ -598,8 +605,8 @@ def corr(
 
 
 @run.command()
-@click.option('-g', '--gene-loci-per-chunk', show_default=True, type=int)
-@click.option('-m', '--meth-loci-per-chunk', show_default=True, type=int)
+@click.option('--gene-loci-per-chunk', show_default=True, type=int)
+@click.option('--meth-loci-per-chunk', show_default=True, type=int)
 @click.option('-p', '--p-thresh', show_default=True, type=float)
 @click.option(
     '--all', 'region', show_default=True, flag_value='all', default=True
@@ -654,7 +661,7 @@ def corr(
     show_default=True,
     default=10,
     type=int,
-    help='Number of pairs to process simultaneously in the bootstrap loop. Note: -g and -m chunks are ignored for bootstraps.',
+    help='Number of pairs to process simultaneously in the bootstrap loop. Note: --gene-loci-per-chunk and --meth-loci-per-chunk chunks are ignored for bootstraps.',
 )
 @click.option(
     '--logit-transform',
@@ -866,10 +873,11 @@ def mlr(
     M, G, C = verify_and_trim_samples(M, G, C, logger=logger)
 
     # Auto-derive chunk sizes when (a) on a server-class host and the
-    # user supplied neither -g nor -m, or (b) the user anchored exactly
-    # one of -g / -m and wants the other auto-derived from the budget.
-    # We use the same memory heuristics as the `tecpg chunks` subcommand.
-    # On minimum-class hosts the no-anchor branch is intentionally
+    # user supplied neither --gene-loci-per-chunk nor
+    # --meth-loci-per-chunk, or (b) the user anchored exactly one of
+    # them and wants the other auto-derived from the budget. We use the
+    # same memory heuristics as the `tecpg chunks` subcommand. On
+    # minimum-class hosts the no-anchor branch is intentionally
     # disabled -- the user's explicit choice (or no chunking) is
     # preserved -- but the anchor branch is honored on any host because
     # it is an explicit user request.
@@ -919,12 +927,14 @@ def mlr(
                 anchor_label,
             )
         elif auto_g is None and auto_m is not None:
-            # No -g chunking needed at the user's anchored -m.
+            # No --gene-loci-per-chunk chunking needed at the user's
+            # anchored --meth-loci-per-chunk.
             meth_loci_per_chunk = auto_m
             chunking = True
             logger.info(
                 'Auto-scaled chunk sizes: meth_loci_per_chunk={0} '
-                '(no -g chunking required at this -m, host_profile={1})',
+                '(no --gene-loci-per-chunk chunking required at this '
+                '--meth-loci-per-chunk, host_profile={1})',
                 meth_loci_per_chunk, host_profile,
             )
 

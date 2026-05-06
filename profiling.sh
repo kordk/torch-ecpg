@@ -508,8 +508,8 @@ run_workload() {
     if [ -n "$BLAS_THREADS" ]; then tecpg_global_args+=" --blas-threads $BLAS_THREADS"; fi
 
     local tecpg_args="run mlr --mlr-method lstsq --$MAPPING --compute-ig"
-    if [ -n "$S_CHUNK" ]; then tecpg_args+=" -m $S_CHUNK"; fi
-    if [ -n "$G_CHUNK" ]; then tecpg_args+=" -g $G_CHUNK"; fi
+    if [ -n "$S_CHUNK" ]; then tecpg_args+=" --meth-loci-per-chunk $S_CHUNK"; fi
+    if [ -n "$G_CHUNK" ]; then tecpg_args+=" --gene-loci-per-chunk $G_CHUNK"; fi
     if [ -n "$PREFETCH_CHUNKS" ] && [ "$PREFETCH_CHUNKS" -ne 0 ]; then tecpg_args+=" --prefetch-chunks $PREFETCH_CHUNKS"; fi
     tecpg_args+=" $extra_args"
 

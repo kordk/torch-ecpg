@@ -55,11 +55,12 @@ def test_auto_chunk_sizes_returns_positive_when_budget_is_tight():
 
 
 def test_auto_chunk_sizes_anchor_meth():
-    # When the user pins -m, the helper must echo it back as the
-    # methylation chunk size and return either a gene chunk or None
-    # (None = whole-G fits in budget at this -m). The minimum-config
-    # invariant: anchoring is honored on any host class because it is
-    # an explicit user request.
+    # When the user pins --meth-loci-per-chunk, the helper must echo
+    # it back as the methylation chunk size and return either a gene
+    # chunk or None (None = whole-G fits in budget at this
+    # --meth-loci-per-chunk). The minimum-config invariant: anchoring
+    # is honored on any host class because it is an explicit user
+    # request.
     M, G, C = generate_data(sample_size=20, m_rows=50, g_rows=10)
     g, m = _auto_chunk_sizes(M, G, C, pinned_m=25)
     assert m == 25
@@ -67,8 +68,9 @@ def test_auto_chunk_sizes_anchor_meth():
 
 
 def test_auto_chunk_sizes_anchor_gene():
-    # When the user pins -g, the helper must echo it back as the gene
-    # chunk size and return a derived methylation chunk in [1, mt_count].
+    # When the user pins --gene-loci-per-chunk, the helper must echo
+    # it back as the gene chunk size and return a derived methylation
+    # chunk in [1, mt_count].
     M, G, C = generate_data(sample_size=20, m_rows=50, g_rows=10)
     g, m = _auto_chunk_sizes(M, G, C, pinned_g=5)
     assert g == 5
