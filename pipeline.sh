@@ -51,15 +51,15 @@ if [ "$MAPPING" != "all" ] && [ "$MAPPING" != "promoter" ]; then
 fi
 
 if [ "$DATASET" == "gtp" ]; then
-    TOTAL_TESTS=13744315260 # Approximate full GTP size
+    TOTAL_TESTS=13744315260 # Placeholder for full GTP size, will be dynamically updated
     M_CHUNK=25000
     G_CHUNK=1000
 elif [ "$DATASET" == "mesa" ]; then
-    TOTAL_TESTS=10000000000 # Placeholder for MESA
+    TOTAL_TESTS=10000000000 # Placeholder for MESA, will be dynamically updated
     M_CHUNK=20000
     G_CHUNK=1000
 elif [ "$DATASET" == "dummy" ]; then
-    TOTAL_TESTS=1000000 # 1000 M * 1000 G
+    TOTAL_TESTS=1000000 # Placeholder for 1000 M * 1000 G, will be dynamically updated
     M_CHUNK=500
     G_CHUNK=500
 else
@@ -188,7 +188,20 @@ log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
 log "[3/9] Performing eQTM Mapping (lstsq + IG)..."
 log "This stage runs the multiple linear regression (mlr) model and computes Integrated Gradients (IG)."
 log "Using chunks: M_CHUNK=$M_CHUNK, G_CHUNK=$G_CHUNK. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig
+
+# Ensure pipefail is set so pipeline errors (like in mlr) are not masked by tee
+set -o pipefail
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING -m "$M_CHUNK" -g "$G_CHUNK" --compute-ig 2>&1 | tee "$OUT_DIR/mlr_run.log"
+set +o pipefail
+
+# Extract dynamically evaluated TOTAL_TESTS
+EXTRACTED_TOTALS=$(grep -o 'TOTAL_TESTS=[0-9]*' "$OUT_DIR/mlr_run.log" | tail -n 1 | cut -d= -f2 || true)
+if [ -n "$EXTRACTED_TOTALS" ]; then
+    TOTAL_TESTS=$EXTRACTED_TOTALS
+    log "Dynamically extracted TOTAL_TESTS=$TOTAL_TESTS from mlr output."
+else
+    log "Warning: Could not extract TOTAL_TESTS from mlr output. Falling back to placeholder value ($TOTAL_TESTS)."
+fi
 
 # Stage 4: Merge chunked outputs
 log "[4/9] Merging chunked outputs to Parquet..."
