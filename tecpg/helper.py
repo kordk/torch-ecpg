@@ -108,52 +108,72 @@ def verify_and_trim_samples(
 
     if len(shared) == len(M_samples) == len(G_samples) and (C is None or len(shared) == len(C_samples)):
         logger.info('Sample verification: All {0} samples match across matrices.', len(shared))
+        M_out, G_out = M, G
         if C is not None:
-            return M, G, C
-        return M, G
+            C_out = C
+        else:
+            C_out = None
+    else:
+        # Report discrepancies
+        m_diff = len(M_samples) - len(shared)
+        g_diff = len(G_samples) - len(shared)
 
-    # Report discrepancies
-    m_diff = len(M_samples) - len(shared)
-    g_diff = len(G_samples) - len(shared)
+        logger.info(
+            'Sample mismatch detected: M has {0} non-overlapping samples, G has {1} non-overlapping samples.',
+            m_diff, g_diff
+        )
+        if C is not None:
+            c_diff = len(C_samples) - len(shared)
+            logger.info('Sample mismatch detected: C has {0} non-overlapping samples.', c_diff)
 
-    logger.info(
-        'Sample mismatch detected: M has {0} non-overlapping samples, G has {1} non-overlapping samples.',
-        m_diff, g_diff
-    )
-    if C is not None:
-        c_diff = len(C_samples) - len(shared)
-        logger.info('Sample mismatch detected: C has {0} non-overlapping samples.', c_diff)
+        logger.info('Trimming matrices to {0} shared samples.', len(shared))
 
-    logger.info('Trimming matrices to {0} shared samples.', len(shared))
+        # Use the order from M to ensure consistent column ordering
+        shared_list = [s for s in M.columns if str(s) in shared]
 
-    # Use the order from M to ensure consistent column ordering
-    shared_list = [s for s in M.columns if str(s) in shared]
+        M_out = M.loc[:, shared_list]
 
-    M_out = M.loc[:, shared_list]
+        # Match G columns efficiently without deep copying entire matrix
+        # Identify which columns correspond to the shared list by converting to string
+        shared_str_set = {str(s) for s in shared_list}
+        g_shared_cols = [c for c in G.columns if str(c) in shared_str_set]
 
-    # Match G columns efficiently without deep copying entire matrix
-    # Identify which columns correspond to the shared list by converting to string
-    shared_str_set = {str(s) for s in shared_list}
-    g_shared_cols = [c for c in G.columns if str(c) in shared_str_set]
+        # Sort g_shared_cols according to the order in shared_list
+        g_col_map = {str(c): c for c in g_shared_cols}
+        g_ordered_cols = [g_col_map[str(s)] for s in shared_list if str(s) in g_col_map]
 
-    # Sort g_shared_cols according to the order in shared_list
-    g_col_map = {str(c): c for c in g_shared_cols}
-    g_ordered_cols = [g_col_map[str(s)] for s in shared_list if str(s) in g_col_map]
+        G_out = G.loc[:, g_ordered_cols]
 
-    G_out = G.loc[:, g_ordered_cols]
+        # Rename the columns of G_out to match the original types from M
+        G_out.columns = shared_list
 
-    # Rename the columns of G_out to match the original types from M
-    G_out.columns = shared_list
+        if C is not None:
+            # Avoid pandas.errors.InvalidIndexError by casting index temporarily if needed,
+            # but C.index is probably fine.
+            original_index_name = C.index.name
+            C_str_index = C.copy()
+            C_str_index.index = C_str_index.index.astype(str)
+            C_out = C_str_index.loc[[str(s) for s in shared_list]]
+            C_out.index = shared_list
+            C_out.index.name = original_index_name
+        else:
+            C_out = None
 
-    if C is not None:
-        # Avoid pandas.errors.InvalidIndexError by casting index temporarily if needed,
-        # but C.index is probably fine.
-        original_index_name = C.index.name
-        C_str_index = C.copy()
-        C_str_index.index = C_str_index.index.astype(str)
-        C_out = C_str_index.loc[[str(s) for s in shared_list]]
-        C_out.index = shared_list
-        C_out.index.name = original_index_name
+    if C_out is not None:
+        # Calculate column variances for C
+        variances = C_out.var()
+        zero_var_mask = variances < 1e-8
+        zero_var_cols = C_out.columns[zero_var_mask].tolist()
+
+        if zero_var_cols:
+            logger.info(
+                'Found {0} covariate columns with zero variance (< 1e-8): {1}. Dropping them.',
+                len(zero_var_cols), zero_var_cols
+            )
+            C_out = C_out.drop(columns=zero_var_cols)
+            if C_out.empty:
+                raise ValueError("All columns in the covariate matrix C were dropped due to zero variance. The resulting matrix is empty.")
+
         return M_out, G_out, C_out
 
     return M_out, G_out
