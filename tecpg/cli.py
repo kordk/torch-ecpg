@@ -204,6 +204,9 @@ def _auto_chunk_sizes(
         """Return the largest mt in [1, mt_count] for which the
         estimator admits at least `target_g` genes. Returns 0 if even
         mt=1 cannot accommodate `target_g` (caller decides fallback).
+
+        Closure over `mt_count` and `_estimate_for` from the enclosing
+        `_auto_chunk_sizes` scope.
         """
         lo, hi = 1, mt_count
         best_mt = 0
