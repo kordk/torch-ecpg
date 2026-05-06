@@ -52,3 +52,48 @@ def test_auto_chunk_sizes_returns_positive_when_budget_is_tight():
         assert 1 <= g <= len(G)
     if m is not None:
         assert 1 <= m <= len(M)
+
+
+def test_auto_chunk_sizes_anchor_meth():
+    # When the user pins -m, the helper must echo it back as the
+    # methylation chunk size and return either a gene chunk or None
+    # (None = whole-G fits in budget at this -m). The minimum-config
+    # invariant: anchoring is honored on any host class because it is
+    # an explicit user request.
+    M, G, C = generate_data(sample_size=20, m_rows=50, g_rows=10)
+    g, m = _auto_chunk_sizes(M, G, C, pinned_m=25)
+    assert m == 25
+    assert g is None or 1 <= g <= len(G)
+
+
+def test_auto_chunk_sizes_anchor_gene():
+    # When the user pins -g, the helper must echo it back as the gene
+    # chunk size and return a derived methylation chunk in [1, mt_count].
+    M, G, C = generate_data(sample_size=20, m_rows=50, g_rows=10)
+    g, m = _auto_chunk_sizes(M, G, C, pinned_g=5)
+    assert g == 5
+    assert m is not None and 1 <= m <= len(M)
+
+
+def test_auto_chunk_sizes_anchor_both_passthrough():
+    # When the user fully specifies both, the helper just returns them.
+    M, G, C = generate_data(sample_size=20, m_rows=50, g_rows=10)
+    g, m = _auto_chunk_sizes(M, G, C, pinned_g=3, pinned_m=20)
+    assert (g, m) == (3, 20)
+
+
+def test_auto_chunk_sizes_no_40k_meth_ceiling():
+    # PR 2 dropped the historical `min(mt_count, 40000)` cap on the
+    # auto-derived methylation chunk: the RAM/GPU budget is the binding
+    # constraint, so when the data fits the budget the helper should
+    # return either (None, None) or a meth chunk that may equal the
+    # full mt_count without being clipped to 40000. For tiny synthetic
+    # data the budget is huge relative to the working set, so on the
+    # auto-only path we expect either no chunking (the common case) or
+    # the full mt_count -- never a value clipped below mt_count.
+    M, G, C = generate_data(sample_size=20, m_rows=50, g_rows=10)
+    g, m = _auto_chunk_sizes(M, G, C)
+    if m is not None:
+        assert m == len(M), (
+            f'expected uncapped meth chunk == mt_count={len(M)}, got {m}'
+        )

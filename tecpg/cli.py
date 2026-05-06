@@ -51,6 +51,8 @@ def _auto_chunk_sizes(
     full_output: bool = False,
     region: str = 'all',
     logger=None,
+    pinned_g: Optional[int] = None,
+    pinned_m: Optional[int] = None,
 ):
     """Derive (gene_loci_per_chunk, meth_loci_per_chunk) from data shape and
     available device memory.
@@ -64,6 +66,30 @@ def _auto_chunk_sizes(
     The target memory budget is 80% of free GPU memory when CUDA is
     available, otherwise 80% of total system RAM. This matches the
     convention used by the existing `tecpg chunks` subcommand.
+
+    The estimators in `tecpg.tool` (`estimate_loci_per_chunk_e_peak` /
+    `estimate_loci_per_chunk_results_peak`) reflect the post-PR-1 inner
+    kernel: when `methylation_only=True` and no IG is requested, the
+    per-CpG `(B, S, T, P)` tensors are realized at the active
+    methylation column only (K=1), and the late `torch.cat([...])` that
+    used to roughly double peak in the non-`p_only` path has been
+    replaced by an in-place buffer assembly. The formulas do not need
+    new terms for those changes -- the `full_output=False` branch
+    already implicitly modeled K=1, and the `2 *` factor in the
+    results-peak formula is preserved as a conservative upper bound on
+    transient overlap during buffer assembly (4 * K * N pre-allocated
+    buffer plus B/S/T/P still live until each is incrementally freed).
+
+    Anchor mode:
+      - If `pinned_m` is supplied, it is treated as the methylation
+        chunk size and the gene-loci-per-chunk is auto-derived from the
+        budget given that anchor.
+      - If `pinned_g` is supplied (and not `pinned_m`), it is treated
+        as the gene-loci-per-chunk and `meth_loci_per_chunk` is sized
+        down (via bisection over `mt_count`) until the per-chunk peak
+        fits the budget at the requested `pinned_g`.
+      - If both are supplied, the helper returns them unchanged (the
+        user has fully specified chunking).
     """
     # Local imports keep the click-parse-time cost of cli.py low and
     # avoid importing torch at module import time (it's already imported
@@ -83,48 +109,108 @@ def _auto_chunk_sizes(
         target_bytes = int(psutil.virtual_memory().available * 0.8)
         target_label = 'system RAM available'
 
-    # The lstsq path used by the server profile produces "p-only-like"
-    # output regardless of whether p_only/full_output flags are set,
-    # because the inner kernel only realizes the active K columns; we
-    # use the more conservative of the E-peak and results-peak estimates.
-    # Region filtration shrinks the result; we don't model that here
-    # (estimates stay conservative when --cis/--distal/--trans is set).
-    estimate_e = estimate_loci_per_chunk_e_peak(
-        target_bytes,
-        samples,
-        mt_count,
-        gt_count,
-        covar_count,
-        datum_bytes,
-        filtration=1.0,
-        full_output=full_output,
-        p_only=p_only,
-        p_filtration=False,
-        region_filtration=False,
-    )
-    estimate_results = estimate_loci_per_chunk_results_peak(
-        target_bytes,
-        samples,
-        mt_count,
-        gt_count,
-        covar_count,
-        datum_bytes,
-        filtration=1.0,
-        full_output=full_output,
-        p_only=p_only,
-        region_filtration=False,
-    )
+    def _estimate_for(mt: int) -> float:
+        # The lstsq path used by the server profile produces
+        # "p-only-like" output regardless of whether p_only/full_output
+        # flags are set, because the inner kernel only realizes the
+        # active K columns; we use the more conservative of the E-peak
+        # and results-peak estimates. Region filtration shrinks the
+        # result; we don't model that here (estimates stay conservative
+        # when --cis/--distal/--trans is set).
+        est_e = estimate_loci_per_chunk_e_peak(
+            target_bytes,
+            samples,
+            mt,
+            gt_count,
+            covar_count,
+            datum_bytes,
+            filtration=1.0,
+            full_output=full_output,
+            p_only=p_only,
+            p_filtration=False,
+            region_filtration=False,
+        )
+        est_r = estimate_loci_per_chunk_results_peak(
+            target_bytes,
+            samples,
+            mt,
+            gt_count,
+            covar_count,
+            datum_bytes,
+            filtration=1.0,
+            full_output=full_output,
+            p_only=p_only,
+            region_filtration=False,
+        )
+        return min(est_e, est_r)
 
-    estimate = min(estimate_e, estimate_results)
+    # Both anchored: nothing to derive.
+    if pinned_g is not None and pinned_m is not None:
+        return (pinned_g, pinned_m)
 
+    # Anchor methylation, derive gene chunk.
+    if pinned_m is not None:
+        anchored_mt = max(1, min(int(pinned_m), mt_count))
+        estimate = _estimate_for(anchored_mt)
+        if logger is not None:
+            logger.info(
+                'Chunk-size estimator (anchored -m={0}): target={1:.1f} MB '
+                '({2}), estimate={3:.0f}',
+                anchored_mt,
+                target_bytes / 1_000_000,
+                target_label,
+                estimate,
+            )
+        if estimate >= gt_count:
+            # Whole-G fits in budget at the user's -m: no -g chunking.
+            return (None, anchored_mt)
+        if estimate < 1:
+            return (max(1, gt_count // 4), anchored_mt)
+        return (max(1, int(estimate)), anchored_mt)
+
+    # Anchor gene, derive methylation chunk via bisection over mt.
+    if pinned_g is not None:
+        anchored_g = max(1, min(int(pinned_g), gt_count))
+        # Find the largest mt in [1, mt_count] such that the
+        # estimator's gene-loci-per-chunk is >= anchored_g.
+        lo, hi = 1, mt_count
+        best_mt = 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if _estimate_for(mid) >= anchored_g:
+                best_mt = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if best_mt == 0:
+            # Even mt=1 cannot accommodate the requested -g; fall back
+            # to a small meth chunk and let the runtime decide. This is
+            # a corner case (very tight budget); we degrade gracefully
+            # rather than refuse.
+            best_mt = max(1, mt_count // 4)
+            if logger is not None:
+                logger.warning(
+                    'Chunk-size estimator: requested -g={0} exceeds budget '
+                    'even at -m=1; falling back to -m={1}.',
+                    anchored_g, best_mt,
+                )
+        if logger is not None:
+            logger.info(
+                'Chunk-size estimator (anchored -g={0}): target={1:.1f} MB '
+                '({2}), derived -m={3}',
+                anchored_g, target_bytes / 1_000_000, target_label, best_mt,
+            )
+        return (anchored_g, best_mt)
+
+    # Neither anchored: original logic, but no 40000 meth ceiling.
+    estimate = _estimate_for(mt_count)
     if logger is not None:
         logger.info(
             'Chunk-size estimator: target={0:.1f} MB ({1}), '
-            'estimate_e={2:.0f}, estimate_results={3:.0f}',
+            'estimate={2:.0f}',
             target_bytes / 1_000_000,
             target_label,
-            estimate_e,
-            estimate_results,
+            estimate,
         )
 
     if estimate >= gt_count:
@@ -139,12 +225,12 @@ def _auto_chunk_sizes(
         return (gene_chunk, meth_chunk)
 
     gene_chunk = max(1, int(estimate))
-    # Use the full methylation set per chunk by default; the inner loop
-    # iterates methylation chunks as the outer loop, so a larger -m means
-    # fewer outer iterations and better amortization. Profiling on
-    # klabdev showed -m 40000 was beneficial; cap at 40000 to stay
-    # within reasonable index-build cost on the producer thread.
-    meth_chunk = min(mt_count, 40000)
+    # Use the full methylation set per chunk: the RAM/GPU budget is the
+    # binding constraint (the estimator above is keyed on `mt_count`),
+    # so capping at 40000 was redundant pessimism that could only force
+    # extra outer iterations on hosts where a larger -m fit fine. The
+    # post-PR-1 footprint makes the un-capped value safer still.
+    meth_chunk = mt_count
     return (gene_chunk, meth_chunk)
 
 import pandas
@@ -779,16 +865,30 @@ def mlr(
 
     M, G, C = verify_and_trim_samples(M, G, C, logger=logger)
 
-    # Auto-derive chunk sizes on server-class hosts when the user did not
-    # supply -g / -m. We use the same memory heuristics as the `tecpg
-    # chunks` subcommand. On minimum-class hosts we never auto-set chunk
-    # sizes -- the user's explicit choice (or no chunking) is preserved.
+    # Auto-derive chunk sizes when (a) on a server-class host and the
+    # user supplied neither -g nor -m, or (b) the user anchored exactly
+    # one of -g / -m and wants the other auto-derived from the budget.
+    # We use the same memory heuristics as the `tecpg chunks` subcommand.
+    # On minimum-class hosts the no-anchor branch is intentionally
+    # disabled -- the user's explicit choice (or no chunking) is
+    # preserved -- but the anchor branch is honored on any host because
+    # it is an explicit user request.
     host_profile = logger.carry_data.get('host_profile', 'minimum')
-    if (
-        host_profile == 'server'
-        and gene_loci_per_chunk is None
-        and meth_loci_per_chunk is None
-    ):
+    user_anchored_one = (
+        (gene_loci_per_chunk is None) ^ (meth_loci_per_chunk is None)
+    )
+    user_anchored_none = (
+        gene_loci_per_chunk is None and meth_loci_per_chunk is None
+    )
+    should_auto = user_anchored_one or (
+        user_anchored_none and host_profile == 'server'
+    )
+    if should_auto:
+        # Capture which side was anchored before we mutate the locals.
+        if user_anchored_one:
+            anchor_label = 'm' if gene_loci_per_chunk is None else 'g'
+        else:
+            anchor_label = 'none'
         try:
             auto_g, auto_m = _auto_chunk_sizes(
                 M, G, C,
@@ -796,6 +896,8 @@ def mlr(
                 full_output=full_output,
                 region=region,
                 logger=logger,
+                pinned_g=gene_loci_per_chunk,
+                pinned_m=meth_loci_per_chunk,
             )
         except Exception as exc:
             # Heuristic estimation is best-effort. If it fails for any
@@ -812,8 +914,18 @@ def mlr(
             chunking = True
             logger.info(
                 'Auto-scaled chunk sizes: gene_loci_per_chunk={0}, '
-                'meth_loci_per_chunk={1} (host_profile=server)',
-                gene_loci_per_chunk, meth_loci_per_chunk,
+                'meth_loci_per_chunk={1} (host_profile={2}, anchored={3})',
+                gene_loci_per_chunk, meth_loci_per_chunk, host_profile,
+                anchor_label,
+            )
+        elif auto_g is None and auto_m is not None:
+            # No -g chunking needed at the user's anchored -m.
+            meth_loci_per_chunk = auto_m
+            chunking = True
+            logger.info(
+                'Auto-scaled chunk sizes: meth_loci_per_chunk={0} '
+                '(no -g chunking required at this -m, host_profile={1})',
+                meth_loci_per_chunk, host_profile,
             )
 
     if region != 'all':

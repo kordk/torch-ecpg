@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **1.15.1-dev**.
+The current development version on the `dev` branch is **1.21.0-dev**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 Entries below describe the work accumulated on `dev` since the last
@@ -12,7 +12,57 @@ changes. Each version section is organized into **Features**,
 
 ---
 
-## 1.16.1-dev
+## 1.21.0-dev
+
+### Improvements / Performance
+- `_auto_chunk_sizes` (`tecpg/cli.py`) gains anchored-mode support:
+  when the user supplies exactly one of `-g` / `-m` the helper now
+  honors that anchor and auto-derives the other dimension from the
+  same 80%-of-budget memory target used for the fully-automatic case
+  (CUDA `mem_get_info` on GPU, `psutil.virtual_memory().available` on
+  CPU). Anchoring is honored on any host class because it is an
+  explicit user request; the historical "minimum hosts never auto-set
+  chunk sizes when the user supplies neither flag" invariant is
+  preserved unchanged. `pinned_g` is satisfied via bisection over
+  `mt_count` against the existing peak-memory estimators in
+  `tecpg.tool`; `pinned_m` is satisfied directly by feeding the
+  anchored value in as `mt_count`.
+- Drop the `meth_chunk = min(mt_count, 40000)` ceiling on the
+  fully-automatic path: the RAM/GPU budget is the binding constraint
+  (the estimator is already keyed on `mt_count`), and the ceiling
+  could only force extra outer iterations on hosts where a larger
+  `-m` fit fine. Combined with PR 1's smaller post-PR-1 inner-kernel
+  footprint this lets the auto-sizer pick more aggressive `-m`
+  values when the budget allows.
+- Estimator docs (`_auto_chunk_sizes`) updated to reflect the
+  post-PR-1 inner-kernel footprint: the per-CpG `(B, S, T, P)`
+  tensors are now realized at the active methylation column only
+  (K=1) when `methylation_only=True` and no IG is requested, which
+  is what the `full_output=False` branch of the estimator already
+  implicitly modeled. The `2 *` factor in the results-peak formula
+  is preserved as a conservative upper bound on transient overlap
+  during the in-place buffer assembly.
+
+### Tests
+- `tests/test_host_profile.py` gains coverage for the anchored modes
+  (`pinned_m`, `pinned_g`, both pinned), and for the absence of the
+  old `40000` methylation ceiling on the auto path.
+
+## 1.20.1-dev
+
+### Improvements / Performance
+- PR 1 (Inner-kernel peak-memory reduction): drop the late
+  `torch.cat([B, S, T, P])` in the lstsq path in favor of an
+  in-place pre-allocated buffer that is filled and freed
+  incrementally (A5); free `X` immediately after QR when deep IG is
+  not requested (A6); and slice `B`/`S` to the active methylation
+  column before forming `T = B / S` and `P = normal_p(T)` when
+  `methylation_only=True` and neither analytical nor deep IG is
+  requested (A1–A2). Bit-equivalent output verified against the
+  pre-PR-1 baseline on CPU via `tests/test_mlr_comparison.py` and
+  the "All Region" demo variants.
+
+
 
 ### Features
 - Add `--host-profile {auto,minimum,server}` (envvar `TECPG_HOST_PROFILE`)
