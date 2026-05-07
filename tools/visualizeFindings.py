@@ -19,9 +19,11 @@ SIGNAL_FRAC = 0.05
 NOISE_FRAC = 0.005
 
 class Plotter:
-    def __init__(self, parquet_path: str, output_dir: str):
+    def __init__(self, parquet_path: str, output_dir: str, p_col: str, prefix: str):
         self.parquet_path = parquet_path
         self.output_dir = output_dir
+        self.p_col = p_col
+        self.prefix = prefix
         os.makedirs(self.output_dir, exist_ok=True)
         self.df = None
 
@@ -36,19 +38,12 @@ class Plotter:
         schema = parquet_file.schema_arrow
         col_names = schema.names
 
-        if 'p_boot' in col_names:
-            p_col = 'p_boot'
-        elif 'precise_mt_p' in col_names:
-            p_col = 'precise_mt_p'
-        else:
-            p_col = 'mt_p'
+        if self.p_col not in col_names:
+            raise ValueError(f"Specified p-value column '{self.p_col}' not found in {self.parquet_path}")
 
-        if p_col not in col_names:
-            raise ValueError(f"No valid p-value column ('p_boot', 'precise_mt_p', 'mt_p') found in {self.parquet_path}")
+        logger.info(f"Using {self.p_col} as the p-value column.")
 
-        logger.info(f"Using {p_col} as the p-value column.")
-
-        required_cols = ['mt_est', p_col, 'region', 'gt_id', 'mt_id', 'mt_chrom', 'mt_chromStart', 'fdr']
+        required_cols = ['mt_est', self.p_col, 'region', 'gt_id', 'mt_id', 'mt_chrom', 'mt_chromStart', 'fdr']
         cols_to_load = [c for c in required_cols if c in col_names]
 
         chunks = []
@@ -57,7 +52,7 @@ class Plotter:
             df_batch = batch.to_pandas()
 
             # Extract p-values
-            p_vals = df_batch[p_col]
+            p_vals = df_batch[self.p_col]
 
             # Stratified subsampling
             hits_mask = p_vals < HITS_P_THRESH
@@ -71,7 +66,6 @@ class Plotter:
             chunks.append(pd.concat([df_batch[hits_mask], sampled_signal, sampled_noise]))
 
         self.df = pd.concat(chunks, ignore_index=True)
-        self.p_col = p_col
 
         # Calculate -log10(p)
         self.df['neg_log10_p'] = -np.log10(self.df[self.p_col].clip(lower=1e-300))
@@ -116,7 +110,7 @@ class Plotter:
         plt.legend(title='Region', bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
 
-        out_path = os.path.join(self.output_dir, 'volcano_plot.png')
+        out_path = os.path.join(self.output_dir, f'{self.prefix}volcano_plot.png')
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close()
         logger.info(f"Saved Volcano Plot to {out_path}")
@@ -201,7 +195,7 @@ class Plotter:
         plt.legend()
         plt.tight_layout()
 
-        out_path = os.path.join(self.output_dir, 'manhattan_plot.png')
+        out_path = os.path.join(self.output_dir, f'{self.prefix}manhattan_plot.png')
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close()
         logger.info(f"Saved Manhattan Plot to {out_path}")
@@ -230,13 +224,13 @@ class Plotter:
 
         plt.tight_layout()
 
-        out_path = os.path.join(self.output_dir, 'region_breakdown.png')
+        out_path = os.path.join(self.output_dir, f'{self.prefix}region_breakdown.png')
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close()
         logger.info(f"Saved Region Breakdown to {out_path}")
 
 
-def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
+def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, prefix: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
     logger.info(f"Generating Comparative Scatter Plot for {cpg_id} vs {gene_id}...")
 
     try:
@@ -337,13 +331,13 @@ def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str,
     plt.tight_layout()
 
     safe_region = region.replace(" ", "_").replace("/", "_")
-    out_path = os.path.join(output_dir, f'comparative_scatter_{safe_region}_{cpg_id}_{gene_id}.png')
+    out_path = os.path.join(output_dir, f'{prefix}comparative_scatter_{safe_region}_{cpg_id}_{gene_id}.png')
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     logger.info(f"Saved Comparative Scatter Plot to {out_path}")
 
 
-def plot_adjusted_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
+def plot_adjusted_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, prefix: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
     logger.info(f"Generating Adjusted Scatter Plot for {cpg_id} vs {gene_id}...")
 
     try:
@@ -411,7 +405,7 @@ def plot_adjusted_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, M:
     plt.tight_layout()
 
     safe_region = region.replace(" ", "_").replace("/", "_")
-    out_path = os.path.join(output_dir, f'scatter_{safe_region}_{cpg_id}_{gene_id}.png')
+    out_path = os.path.join(output_dir, f'{prefix}scatter_{safe_region}_{cpg_id}_{gene_id}.png')
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     logger.info(f"Saved Scatter Plot to {out_path}")
@@ -432,9 +426,9 @@ def main():
     parser.add_argument("--all", action="store_true", help="Generate all plots (default if none specified)")
 
     # Tecpg paths for scatter plots
-    parser.add_argument("-m", "--meth-file", required=True, help="Full path to the methylation matrix file (e.g., M.csv)")
-    parser.add_argument("-g", "--gene-file", required=True, help="Full path to the gene expression matrix file (e.g., G.csv)")
-    parser.add_argument("-c", "--covar-file", required=True, help="Full path to the covariate matrix file (e.g., C.csv)")
+    parser.add_argument("-m", "--meth-file", required=False, help="Full path to the methylation matrix file (e.g., M.csv)")
+    parser.add_argument("-g", "--gene-file", required=False, help="Full path to the gene expression matrix file (e.g., G.csv)")
+    parser.add_argument("-c", "--covar-file", required=False, help="Full path to the covariate matrix file (e.g., C.csv)")
 
     args = parser.parse_args()
 
@@ -442,38 +436,53 @@ def main():
     if not (args.volcano or args.manhattan or args.region_breakdown or args.scatter or args.comparative_scatter):
         args.all = True
 
-    plotter = Plotter(args.parquet_file, args.out_dir)
-    plotter.load_and_subsample_data()
+    logger.info(f"Inspecting schema of {args.parquet_file}...")
+    try:
+        parquet_file = pq.ParquetFile(args.parquet_file)
+        col_names = parquet_file.schema_arrow.names
+    except Exception as e:
+        logger.error(f"Failed to read parquet file schema: {e}")
+        return
 
-    if args.all or args.volcano:
-        plotter.plot_volcano()
+    p_configs = []
 
-    if args.all or args.manhattan:
-        plotter.plot_manhattan()
+    has_boot = 'p_boot' in col_names
+    has_precise = 'precise_mt_p' in col_names
+    has_mt = 'mt_p' in col_names
 
-    if args.all or args.region_breakdown:
-        plotter.plot_region_breakdown()
+    if has_boot:
+        p_configs.append(('p_boot', 'bootstrapP_'))
+    else:
+        logger.info("p_boot column not found in parquet file. Bootstrap plots will not be generated.")
 
-    if args.all or args.scatter or args.comparative_scatter:
-        logger.info("Preparing to generate scatter plots for top hits per region...")
+    if has_precise:
+        p_configs.append(('precise_mt_p', 'preciseP_'))
+    else:
+        logger.info("precise_mt_p column not found in parquet file. Precise p-value plots will not be generated.")
 
-        if 'fdr' not in plotter.df.columns and plotter.p_col not in plotter.df.columns:
-            logger.warning("FDR or p-value column missing, cannot determine top hits.")
+    if not has_boot and not has_precise:
+        if has_mt:
+            logger.info("Fallback to mt_p since neither p_boot nor precise_mt_p were found.")
+            p_configs.append(('mt_p', 'mtP_'))
+        else:
+            logger.error("No valid p-value columns (p_boot, precise_mt_p, mt_p) found. Exiting.")
             return
 
-        sort_col = 'fdr' if 'fdr' in plotter.df.columns else plotter.p_col
-        logger.info(f"Sorting by {sort_col} to find top hits.")
-
+    # Load scatter plot matrices once if needed
+    M_df, G_df, C_df = None, None, None
+    if args.all or args.scatter or args.comparative_scatter:
         meth_path = args.meth_file
         gene_path = args.gene_file
         covar_path = args.covar_file
 
-        if not (os.path.exists(meth_path) and os.path.exists(gene_path) and os.path.exists(covar_path)):
-            logger.error(f"Missing one or more data files for scatter plots: {meth_path}, {gene_path}, {covar_path}")
-            logger.error("Please provide the correct paths using -m, -g, -c")
+        if not meth_path or not gene_path or not covar_path:
+            logger.error("Scatter plots requested but one or more data file paths (-m, -g, -c) are missing. Please provide them.")
             return
 
-        # Load matrices once to save memory and I/O time
+        if not (os.path.exists(meth_path) and os.path.exists(gene_path) and os.path.exists(covar_path)):
+            logger.error(f"Missing one or more data files for scatter plots: {meth_path}, {gene_path}, {covar_path}")
+            return
+
         try:
             logger.info("Loading methylation, gene, and covariate matrices into memory...")
             M_df = pd.read_csv(meth_path, index_col=0)
@@ -494,24 +503,53 @@ def main():
             logger.error(f"Failed to read data matrices: {e}")
             return
 
-        regions = plotter.df['region'].dropna().unique() if 'region' in plotter.df.columns else ["All"]
+    for p_col, prefix in p_configs:
+        logger.info(f"=== Generating plots for {p_col} with prefix '{prefix}' ===")
+        plotter = Plotter(args.parquet_file, args.out_dir, p_col, prefix)
 
-        for region in regions:
-            if 'region' in plotter.df.columns:
-                region_df = plotter.df[plotter.df['region'] == region]
-            else:
-                region_df = plotter.df
+        try:
+            plotter.load_and_subsample_data()
+        except Exception as e:
+            logger.error(f"Failed to load data for {p_col}: {e}")
+            continue
 
-            top_hits = region_df.nsmallest(10, sort_col)
+        if args.all or args.volcano:
+            plotter.plot_volcano()
 
-            for _, row in top_hits.iterrows():
-                cpg_id = row['mt_id']
-                gene_id = row['gt_id']
+        if args.all or args.manhattan:
+            plotter.plot_manhattan()
 
-                if args.all or args.comparative_scatter:
-                    plot_comparative_eqtm(cpg_id, gene_id, row, plotter.p_col, M_df, G_df, C_df, args.out_dir, region)
-                elif args.scatter:
-                    plot_adjusted_eqtm(cpg_id, gene_id, row, plotter.p_col, M_df, G_df, C_df, args.out_dir, region)
+        if args.all or args.region_breakdown:
+            plotter.plot_region_breakdown()
+
+        if args.all or args.scatter or args.comparative_scatter:
+            logger.info(f"Preparing to generate scatter plots for top hits per region using {p_col}...")
+
+            if 'fdr' not in plotter.df.columns and plotter.p_col not in plotter.df.columns:
+                logger.warning("FDR or p-value column missing, cannot determine top hits.")
+                continue
+
+            sort_col = 'fdr' if 'fdr' in plotter.df.columns else plotter.p_col
+            logger.info(f"Sorting by {sort_col} to find top hits.")
+
+            regions = plotter.df['region'].dropna().unique() if 'region' in plotter.df.columns else ["All"]
+
+            for region in regions:
+                if 'region' in plotter.df.columns:
+                    region_df = plotter.df[plotter.df['region'] == region]
+                else:
+                    region_df = plotter.df
+
+                top_hits = region_df.nsmallest(10, sort_col)
+
+                for _, row in top_hits.iterrows():
+                    cpg_id = row['mt_id']
+                    gene_id = row['gt_id']
+
+                    if args.all or args.comparative_scatter:
+                        plot_comparative_eqtm(cpg_id, gene_id, row, plotter.p_col, prefix, M_df, G_df, C_df, args.out_dir, region)
+                    elif args.scatter:
+                        plot_adjusted_eqtm(cpg_id, gene_id, row, plotter.p_col, prefix, M_df, G_df, C_df, args.out_dir, region)
 
 if __name__ == "__main__":
     main()

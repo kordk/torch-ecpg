@@ -1,22 +1,25 @@
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
+import numpy as np
+import os
 
-df_tecpg = pd.DataFrame({
-    'mt_id': ['cg1', 'cg2', 'cg3', 'cg5'],
-    'gt_id': ['g1', 'g2', 'g1', 'g3'],
-    'mt_est': [0.5, -0.2, 0.1, 0.4],
-    'mt_t': [2.5, -1.2, 0.8, 2.0],
-    'fdr_est': [0.01, 0.04, 0.1, 0.02]
-})
-table = pa.Table.from_pandas(df_tecpg)
-pq.write_table(table, 'test_tecpg.parquet')
+os.makedirs('test_data', exist_ok=True)
+pd.DataFrame({
+    'mt_est': [0.1, 0.2, 0.3],
+    'p_boot': [1e-6, 1e-3, 0.5],
+    'precise_mt_p': [1e-7, 1e-4, 0.6],
+    'region': ['promoter', 'body', 'enhancer'],
+    'gt_id': ['geneA', 'geneB', 'geneC'],
+    'mt_id': ['cpg1', 'cpg2', 'cpg3'],
+    'mt_chrom': ['chr1', 'chr2', 'chr3'],
+    'mt_chromStart': [100, 200, 300],
+    'fdr': [1e-5, 1e-2, 0.8]
+}).to_parquet('test_data/test.parquet')
 
-df_kennedy = pd.DataFrame({
-    'CpG.probe': ['cg1', 'cg2', 'cg4', 'cg5'],
-    'annot.gene': ['g1', 'g2', 'g4', 'g3'],
-    'beta': [0.45, -0.15, 0.6, 0.35],
-    'T.stat': [2.4, -1.0, 3.1, 1.9],
-    'p.val': [0.001, 0.2, 0.0001, 0.03]
-})
-df_kennedy.to_csv('test_kennedy.txt', sep='\t', index=False)
+# dummy matrices
+M = pd.DataFrame(np.random.rand(3, 2), index=['cpg1', 'cpg2', 'cpg3'], columns=['sub1', 'sub2'])
+G = pd.DataFrame(np.random.rand(3, 2), index=['geneA', 'geneB', 'geneC'], columns=['sub1', 'sub2'])
+C = pd.DataFrame(np.random.rand(2, 2), index=['sub1', 'sub2'], columns=['cov1', 'cov2'])
+
+M.to_csv('test_data/M.csv')
+G.to_csv('test_data/G.csv')
+C.to_csv('test_data/C.csv')
