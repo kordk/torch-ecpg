@@ -42,7 +42,7 @@ class Plotter:
 
         logger.info(f"Using {p_col} as the p-value column.")
 
-        required_cols = ['mt_est', p_col, 'region', 'gt_id', 'mt_id', 'mt_chr', 'mt_pos', 'fdr']
+        required_cols = ['mt_est', p_col, 'region', 'gt_id', 'mt_id', 'mt_chrom', 'mt_chromStart', 'fdr']
         cols_to_load = [c for c in required_cols if c in col_names]
 
         chunks = []
@@ -118,15 +118,15 @@ class Plotter:
     def plot_manhattan(self):
         logger.info("Generating Manhattan Plot...")
 
-        if 'mt_chr' not in self.df.columns or 'mt_pos' not in self.df.columns:
-            logger.warning("Missing mt_chr or mt_pos columns. Skipping Manhattan Plot.")
+        if 'mt_chrom' not in self.df.columns or 'mt_chromStart' not in self.df.columns:
+            logger.warning("Missing mt_chrom or mt_chromStart columns. Skipping Manhattan Plot.")
             return
 
         # Prepare chromosome data
         df_mh = self.df.copy()
 
         # Clean chromosome names to just numbers/X/Y
-        df_mh['mt_chr_clean'] = df_mh['mt_chr'].astype(str).str.replace('chr', '', case=False)
+        df_mh['mt_chr_clean'] = df_mh['mt_chrom'].astype(str).str.replace('chr', '', case=False)
 
         # Map chromosomes to integers for sorting
         def map_chr(c):
@@ -140,7 +140,7 @@ class Plotter:
 
         df_mh['chr_num'] = df_mh['mt_chr_clean'].apply(map_chr)
         df_mh = df_mh[df_mh['chr_num'] < 99] # Filter out weird contigs
-        df_mh = df_mh.sort_values(['chr_num', 'mt_pos'])
+        df_mh = df_mh.sort_values(['chr_num', 'mt_chromStart'])
 
         # Calculate absolute positions for continuous x-axis
         df_mh['pos_abs'] = 0
@@ -151,11 +151,11 @@ class Plotter:
         for chr_num, group in df_mh.groupby('chr_num', sort=True):
             if len(group) == 0: continue
 
-            group_min = group['mt_pos'].min()
-            group_max = group['mt_pos'].max()
+            group_min = group['mt_chromStart'].min()
+            group_max = group['mt_chromStart'].max()
 
             # Shift positions
-            df_mh.loc[group.index, 'pos_abs'] = group['mt_pos'] - group_min + last_max
+            df_mh.loc[group.index, 'pos_abs'] = group['mt_chromStart'] - group_min + last_max
 
             # Midpoint for label
             midpoint = (df_mh.loc[group.index, 'pos_abs'].min() + df_mh.loc[group.index, 'pos_abs'].max()) / 2
@@ -472,6 +472,17 @@ def main():
             M_df = pd.read_csv(meth_path, index_col=0)
             G_df = pd.read_csv(gene_path, index_col=0)
             C_df = pd.read_csv(covar_path, index_col=0)
+
+            # Ensure subject IDs align by casting all to string
+            M_df.columns = M_df.columns.astype(str)
+            G_df.columns = G_df.columns.astype(str)
+            C_df.index = C_df.index.astype(str)
+
+            # Log sample info for visual confirmation of overlap
+            logger.info(f"M_df subjects (first 5): {list(M_df.columns[:5])}")
+            logger.info(f"G_df subjects (first 5): {list(G_df.columns[:5])}")
+            logger.info(f"C_df subjects (first 5): {list(C_df.index[:5])}")
+
         except Exception as e:
             logger.error(f"Failed to read data matrices: {e}")
             return
