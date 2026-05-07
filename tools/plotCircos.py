@@ -60,9 +60,52 @@ import matplotlib.pyplot as plt
 import matplotlib.path as mpath
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+
 import pycircos
 
-def load_and_validate_data(filepath):
+def _patch_pycircos():
+    original_draw = pycircos.Circos.draw_scaffold
+
+    def safe_draw_scaffold(self, rad, width, colors=[], fill=False, **kwargs):
+        n = len(colors)
+        if fill == False or n == 0:
+            kwargs.update({'edgecolor': 'k', 'linewidth': 1,
+                           'linestyle': '-', 'fill': False})
+        else:
+            kwargs.update({'linewidth': 0})
+
+        # Also clean kwargs to ensure linewidth is int/float not array
+        if 'linewidth' in kwargs and type(kwargs['linewidth']) not in (int, float):
+            try:
+                kwargs['linewidth'] = float(kwargs['linewidth'][0])
+            except:
+                kwargs['linewidth'] = float(kwargs['linewidth'])
+
+        for i, gid in enumerate(self.regions.index):
+            if n:
+                kwargs['color'] = colors[i % n]
+            et1 = self.regions.theta_start[gid]
+            et2_list = self.get_theta([gid], [self.regions.length[gid]-1])
+            et2 = et2_list[0] if isinstance(et2_list, list) else et2_list
+
+            # Matplotlib 3.8+ compatibility
+            try:
+                et2_val = et2.item() if hasattr(et2, 'item') else float(et2)
+                et1_val = et1.item() if hasattr(et1, 'item') else float(et1)
+            except:
+                et2_val = et2
+                et1_val = et1
+
+            w_val = et2_val - et1_val
+
+            self.pax.bar([(et1_val+et2_val)/2], [width], width=w_val, bottom=rad, **kwargs)
+
+    pycircos.Circos.draw_scaffold = safe_draw_scaffold
+
+_patch_pycircos()
+
+
+def load_and_validate_data(filepath, valid_chroms):
     print(f"Loading data from {filepath}...")
 
     # We use pq.ParquetFile to inspect schema without loading full file
@@ -106,11 +149,14 @@ def load_and_validate_data(filepath):
     df['mt_chromStart'] = pd.to_numeric(df['mt_chromStart'], errors='coerce')
     df['gt_chromStart'] = pd.to_numeric(df['gt_chromStart'], errors='coerce')
 
-    missing_mask = df['mt_chromStart'].isna() | df['gt_chromStart'].isna() | (df['mt_chrom'] == 'chrnan') | (df['mt_chrom'] == 'chrNone') | (df['gt_chrom'] == 'chrnan') | (df['gt_chrom'] == 'chrNone')
+    invalid_coord_mask = df['mt_chromStart'].isna() | df['gt_chromStart'].isna() | (df['mt_chrom'] == 'chrnan') | (df['mt_chrom'] == 'chrNone') | (df['gt_chrom'] == 'chrnan') | (df['gt_chrom'] == 'chrNone')
+    missing_chrom_mask = (~df['mt_chrom'].isin(valid_chroms)) | (~df['gt_chrom'].isin(valid_chroms))
+
+    missing_mask = invalid_coord_mask | missing_chrom_mask
 
     if missing_mask.any():
         missing_df = df[missing_mask]
-        print(f"Warning: Found {missing_mask.sum()} rows with missing or invalid coordinates/chromosomes.")
+        print(f"Warning: Found {missing_mask.sum()} rows with missing or invalid coordinates, or chromosomes missing from cytoband annotation file.")
 
         has_mt_id = 'mt_id' in df.columns
         has_gt_id = 'gt_id' in df.columns
@@ -378,6 +424,8 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
 
 
 import os
+import tempfile
+import atexit
 
 def main():
     args = parse_args()
@@ -386,7 +434,37 @@ def main():
     # Ensure output directory exists
     os.makedirs(args.out_dir, exist_ok=True)
 
-    df = load_and_validate_data(args.input)
+    # Read cytoband data
+    try:
+        cytoband_df = pd.read_csv(args.cytoband, sep='\t', header=None,
+                                  names=['chrom', 'chromStart', 'chromEnd', 'name', 'gieStain'])
+    except Exception as e:
+        print(f"Error reading cytoband file: {e}")
+        sys.exit(1)
+
+    # Standard chromosomes to include
+    standard_chroms = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY", "chrM"]
+
+    # Filter cytoband to only include standard chromosomes
+    filtered_cytoband_df = cytoband_df[cytoband_df['chrom'].isin(standard_chroms)]
+    valid_chroms = set(filtered_cytoband_df['chrom'].unique())
+
+    if not valid_chroms:
+        print("Error: No standard chromosomes found in the cytoband file.")
+        sys.exit(1)
+
+    # Create temporary cytoband file
+    fd, temp_cytoband_path = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+
+    def cleanup():
+        if os.path.exists(temp_cytoband_path):
+            os.remove(temp_cytoband_path)
+    atexit.register(cleanup)
+
+    filtered_cytoband_df.to_csv(temp_cytoband_path, sep='\t', header=False, index=False)
+
+    df = load_and_validate_data(args.input, valid_chroms)
     print(f"Loaded {len(df)} records.")
 
     df_top_saliency, df_trans_only = filter_data(df, args.top_n, args.top_n_trans)
@@ -398,7 +476,7 @@ def main():
     create_circos_plot(
         df_all=df,
         df_filtered=df_top_saliency,
-        cytoband_file=args.cytoband,
+        cytoband_file=temp_cytoband_path,
         out_path=out_path_saliency,
         title=f"Global eQTM Architecture: Top {len(df_top_saliency)} Saliency Links"
     )
@@ -408,7 +486,7 @@ def main():
     create_circos_plot(
         df_all=df,
         df_filtered=df_trans_only,
-        cytoband_file=args.cytoband,
+        cytoband_file=temp_cytoband_path,
         out_path=out_path_trans,
         title=f"Global eQTM Architecture: Top {len(df_trans_only)} Trans-Chromosomal Links"
     )
