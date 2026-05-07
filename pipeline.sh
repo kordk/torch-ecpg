@@ -82,6 +82,11 @@ if [ -n "${TECPG_G_CHUNK:-}" ]; then
     MLR_CHUNK_ARGS+=(--gene-loci-per-chunk "$TECPG_G_CHUNK")
 fi
 
+# Determine whether to apply logit transformation based on dataset
+if [ "$DATASET" = "gtp" ]; then
+    MLR_CHUNK_ARGS+=(--logit-transform)
+fi
+
 log "======================================"
 log "Starting eQTM Pipeline for: $DATASET (Mapping: $MAPPING)"
 if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
