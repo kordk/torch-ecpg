@@ -36,9 +36,15 @@ class Plotter:
         schema = parquet_file.schema_arrow
         col_names = schema.names
 
-        p_col = 'precise_mt_p' if 'precise_mt_p' in col_names else 'mt_p'
+        if 'p_boot' in col_names:
+            p_col = 'p_boot'
+        elif 'precise_mt_p' in col_names:
+            p_col = 'precise_mt_p'
+        else:
+            p_col = 'mt_p'
+
         if p_col not in col_names:
-            raise ValueError(f"Neither 'precise_mt_p' nor 'mt_p' found in {self.parquet_path}")
+            raise ValueError(f"No valid p-value column ('p_boot', 'precise_mt_p', 'mt_p') found in {self.parquet_path}")
 
         logger.info(f"Using {p_col} as the p-value column.")
 
@@ -106,7 +112,7 @@ class Plotter:
 
         plt.xlabel('Effect Size (Coefficient / Beta)')
         plt.ylabel(f'-log10({self.p_col})')
-        plt.title('eQTM Volcano Plot')
+        plt.title(f'eQTM Volcano Plot ({self.p_col})')
         plt.legend(title='Region', bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
 
@@ -191,7 +197,7 @@ class Plotter:
         plt.xticks(xticks, xlabels, rotation=45, fontsize=8)
         plt.xlabel('Chromosome')
         plt.ylabel(f'-log10({self.p_col})')
-        plt.title('Genomic Distribution of eQTMs (Manhattan Plot)')
+        plt.title(f'Genomic Distribution of eQTMs (Manhattan Plot - {self.p_col})')
         plt.legend()
         plt.tight_layout()
 
@@ -292,7 +298,7 @@ def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str,
     slope_raw, intercept_raw, r_value_raw, p_value_raw, std_err_raw = stats.linregress(meth_vals.values, gene_vals.values)
 
     # Annotate unadjusted plot
-    ax_raw.annotate(f"R = {r_value_raw:.3f}\nP = {p_value_raw:.2e}", xy=(0.05, 0.90), xycoords='axes fraction',
+    ax_raw.annotate(f"R = {r_value_raw:.3f}\nRaw P = {p_value_raw:.2e}", xy=(0.05, 0.90), xycoords='axes fraction',
                     fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
 
     ax_raw.set_xlabel('Raw DNA Methylation (Beta)')
@@ -319,7 +325,7 @@ def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str,
     ax_adj.plot(x_vals, y_vals, color='red', label=f'mt_est slope: {mt_est:.3f}')
 
     # Annotate adjusted plot
-    ax_adj.annotate(f"R = {r_value_adj:.3f}\nP = {pq_p_val:.2e}", xy=(0.05, 0.90), xycoords='axes fraction',
+    ax_adj.annotate(f"R = {r_value_adj:.3f}\n{p_col} = {pq_p_val:.2e}", xy=(0.05, 0.90), xycoords='axes fraction',
                     fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
     ax_adj.legend(loc='lower right')
 
@@ -337,7 +343,7 @@ def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str,
     logger.info(f"Saved Comparative Scatter Plot to {out_path}")
 
 
-def plot_adjusted_eqtm(cpg_id: str, gene_id: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
+def plot_adjusted_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, M: pd.DataFrame, G: pd.DataFrame, C: pd.DataFrame, output_dir: str, region: str = "Unknown"):
     logger.info(f"Generating Adjusted Scatter Plot for {cpg_id} vs {gene_id}...")
 
     try:
@@ -394,7 +400,8 @@ def plot_adjusted_eqtm(cpg_id: str, gene_id: str, M: pd.DataFrame, G: pd.DataFra
 
     # Add correlation info
     correlation = np.corrcoef(meth_residuals, gene_residuals)[0, 1]
-    plt.annotate(f"r = {correlation:.3f}", xy=(0.05, 0.95), xycoords='axes fraction',
+    pq_p_val = row[p_col]
+    plt.annotate(f"r = {correlation:.3f}\n{p_col} = {pq_p_val:.2e}", xy=(0.05, 0.95), xycoords='axes fraction',
                  fontsize=12, bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
 
     plt.xlabel('Covariate-Adjusted DNA Methylation')
@@ -504,7 +511,7 @@ def main():
                 if args.all or args.comparative_scatter:
                     plot_comparative_eqtm(cpg_id, gene_id, row, plotter.p_col, M_df, G_df, C_df, args.out_dir, region)
                 elif args.scatter:
-                    plot_adjusted_eqtm(cpg_id, gene_id, M_df, G_df, C_df, args.out_dir, region)
+                    plot_adjusted_eqtm(cpg_id, gene_id, row, plotter.p_col, M_df, G_df, C_df, args.out_dir, region)
 
 if __name__ == "__main__":
     main()
