@@ -53,7 +53,12 @@ def main():
 
     if args.log2_transform:
         logger.info("Applying log2(x + 1) transformation to the input matrix.")
-        M = np.log2(M.astype(float) + 1)
+        float_M = M.astype(float)
+        if (float_M <= -1).any().any():
+            logger.error("Negative values <= -1 found in input matrix before log2 transform. Cannot apply log2(x + 1) to values <= -1.")
+            import sys
+            sys.exit(1)
+        M = np.log2(float_M + 1)
 
     logger.info(f"Loading base covariates from {args.covar_file}")
     C = pd.read_csv(args.covar_file, dtype={0: str})

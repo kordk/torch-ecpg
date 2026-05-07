@@ -148,23 +148,37 @@ def process_mesa(
     M.drop(M_drop, axis=1, inplace=True)
     G.drop(G_drop, axis=1, inplace=True)
 
+    logger.info('Data diagnostics for Gene Expression (G):')
+    logger.info(f'  Min: {G.min().min():.4f}, Max: {G.max().max():.4f}')
+    logger.info('Data diagnostics for Methylation (M):')
+    logger.info(f'  Min: {M.min().min():.4f}, Max: {M.max().max():.4f}')
+
     if drop_na:
         G_start = len(G)
-        G.dropna(axis=0, inplace=True)
+        G_na = G.isna().any(axis=1)
+        G.drop(G[G_na].index, inplace=True)
         G_end = len(G)
-        logger.info(
-            'Dropped {0} rows of G with missing values ({1}% remaining)',
-            G_start - G_end,
-            round(G_end / G_start * 100, 4),
-        )
+        dropped_G = G_start - G_end
+        if dropped_G == 0:
+            logger.info('No NaNs found in G.')
+        else:
+            logger.info(
+                f'Excluded {dropped_G} gene expression loci due to missing data '
+                f'({round(G_end / G_start * 100, 4)}% remaining)'
+            )
+
         M_start = len(M)
-        M.dropna(axis=0, inplace=True)
+        M_na = M.isna().any(axis=1)
+        M.drop(M[M_na].index, inplace=True)
         M_end = len(M)
-        logger.info(
-            'Dropped {0} rows of M with missing values ({1}% remaining)',
-            M_start - M_end,
-            round(M_end / M_start * 100, 4),
-        )
+        dropped_M = M_start - M_end
+        if dropped_M == 0:
+            logger.info('No NaNs found in M.')
+        else:
+            logger.info(
+                f'Excluded {dropped_M} methylation loci due to missing data '
+                f'({round(M_end / M_start * 100, 4)}% remaining)'
+            )
 
     C_drop = set(C.index) - set(M.columns)
     C.drop(C_drop, axis=0, inplace=True)
