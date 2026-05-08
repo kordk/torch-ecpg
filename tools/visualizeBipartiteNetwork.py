@@ -27,6 +27,18 @@ def load_data(args):
     logging.info(f"Loading nodes from {args.nodes}...")
     nodes = pd.read_csv(args.nodes)
 
+    if 'Region' not in nodes.columns:
+        logging.error("Column 'Region' not found in nodes. Cannot proceed.")
+        sys.exit(1)
+
+    nodes['Region'] = nodes['Region'].fillna('Undefined')
+
+    # Log summary of counts for each region
+    region_counts = nodes['Region'].value_counts()
+    logging.info("Region counts:")
+    for region, count in region_counts.items():
+        logging.info(f"  {region}: {count}")
+
     # Determine weight column
     if 'mt_ig' in edges.columns:
         weight_col = 'mt_ig'
