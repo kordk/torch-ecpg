@@ -162,6 +162,11 @@ else
     python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/epic_probes_blacklist.csv" "$DATA_DIR/M.csv"
 fi
 
+# Data Exploration
+log "Exploring Omics data..."
+python3 tools/exploreOmics.py --input "$DATA_DIR/M.csv" --data-type methylation --output-dir "$DATA_DIR/qc"
+python3 tools/exploreOmics.py --input "$DATA_DIR/G.csv" --data-type expression --output-dir "$DATA_DIR/qc"
+
 # Stage 1.5: Estimate Immune Cell Proportions
 log "[1.5/9] Estimating immune cell proportions using EpiDISH..."
 if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then

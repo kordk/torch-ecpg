@@ -11,14 +11,40 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import argparse
+import logging
+import random
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+def setup_logger(name, level='INFO'):
+    logger = logging.getLogger(name)
+    logger.setLevel(getattr(logging, level.upper()))
+    if not logger.handlers:
+        ch = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+    return logger
 
-from src.config import load_config
-from src.utils import set_random_seed, ensure_dir
-from src.logging_utils import setup_logger, log_dataframe_info
-from src.data_utils import load_omics_data
+def set_random_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+
+def ensure_dir(dir_path):
+    p = Path(dir_path)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+def load_omics_data(filepath, transpose=False):
+    # Load data with first column as index (Sample IDs)
+    df = pd.read_csv(filepath, index_col=0)
+    if transpose:
+        df = df.T
+    return df
+
+def log_dataframe_info(logger, df, name):
+    logger.info(f"{name} info:")
+    logger.info(f"  Shape: {df.shape}")
+    logger.info(f"  Memory usage: {df.memory_usage(deep=True).sum() / 1e6:.2f} MB")
+
 
 
 def calculate_qc_metrics(df: pd.DataFrame, logger) -> dict:
@@ -236,7 +262,6 @@ def main():
     args = parser.parse_args()
     
     # Setup
-    config = load_config()
     set_random_seed(args.seed)
     logger = setup_logger('explore_omics', level='INFO')
     
