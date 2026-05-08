@@ -189,6 +189,11 @@ def process_mesa(
     M.drop(columns=list(M_drop_from_C), inplace=True)
     G.drop(columns=list(G_drop_from_C), inplace=True)
 
+    logger.info('Applying floor to zero and log2(x + 1) transformation to Gene Expression (G)')
+    import numpy as np
+    G = G.clip(lower=0)
+    G = np.log2(G + 1)
+
     logger.info('Sorting columns')
     M = M.reindex(sorted(M.columns, key=int), axis=1)
     G = G.reindex(sorted(G.columns, key=int), axis=1)
