@@ -43,7 +43,7 @@ class TestExportCytoscape(unittest.TestCase):
         }
         self.create_dummy_parquet(data, self.input_file)
 
-        test_args = ['export_cytoscape.py', '-i', self.input_file, '-o', self.out_prefix, '--top-k', '10']
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix, '--top-k', '10']
         with patch('sys.argv', test_args):
             export_cytoscape.main()
 
