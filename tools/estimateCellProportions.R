@@ -35,6 +35,16 @@ library(pheatmap)
 cat(paste("Loading methylation data from", meth_file, "\n"))
 # Assuming CpGs as rows, samples as columns for EpiDISH based on standard input
 beta_matrix <- read.csv(meth_file, row.names=1, check.names=FALSE)
+
+# Check if data are M-values (contains negative values)
+if (any(beta_matrix < 0, na.rm = TRUE)) {
+    cat("Negative values detected. Assuming input data are M-values.\n")
+    cat("Converting M-values to Beta-values for EpiDISH...\n")
+    beta_matrix <- (2^beta_matrix) / (2^beta_matrix + 1)
+} else {
+    cat("Input data appears to be Beta-values. No conversion needed.\n")
+}
+
 cat("Methylation matrix first 5 column names (sample IDs):\n")
 print(head(colnames(beta_matrix), 5))
 
