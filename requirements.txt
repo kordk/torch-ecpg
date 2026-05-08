@@ -21,3 +21,6 @@ statsmodels
 polars
 matplotlib-venn
 upsetplot
+networkx
+fa2
+umap-learn

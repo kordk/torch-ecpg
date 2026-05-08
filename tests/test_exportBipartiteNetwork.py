@@ -8,7 +8,7 @@ import io
 
 # Add the tools directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from tools import export_cytoscape
+from tools import exportBipartiteNetwork
 
 class TestExportCytoscape(unittest.TestCase):
     def setUp(self):
@@ -45,7 +45,7 @@ class TestExportCytoscape(unittest.TestCase):
 
         test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix, '--top-k', '10']
         with patch('sys.argv', test_args):
-            export_cytoscape.main()
+            exportBipartiteNetwork.main()
 
         self.assertTrue(os.path.exists(self.out_edges))
         self.assertTrue(os.path.exists(self.out_nodes))
@@ -84,9 +84,9 @@ class TestExportCytoscape(unittest.TestCase):
         }
         self.create_dummy_parquet(data, self.input_file)
 
-        test_args = ['export_cytoscape.py', '-i', self.input_file, '-o', self.out_prefix]
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix]
         with patch('sys.argv', test_args):
-            export_cytoscape.main()
+            exportBipartiteNetwork.main()
 
         edges_df = pd.read_csv(self.out_edges)
 
@@ -106,10 +106,10 @@ class TestExportCytoscape(unittest.TestCase):
         }
         self.create_dummy_parquet(data, self.input_file)
 
-        test_args = ['export_cytoscape.py', '-i', self.input_file, '-o', self.out_prefix]
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix]
         with patch('sys.argv', test_args):
             with self.assertRaises(SystemExit) as cm:
-                export_cytoscape.main()
+                exportBipartiteNetwork.main()
             self.assertEqual(cm.exception.code, 1)
 
     def test_missing_edge_cols(self):
@@ -121,10 +121,10 @@ class TestExportCytoscape(unittest.TestCase):
         }
         self.create_dummy_parquet(data, self.input_file)
 
-        test_args = ['export_cytoscape.py', '-i', self.input_file, '-o', self.out_prefix]
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix]
         with patch('sys.argv', test_args):
             with self.assertRaises(SystemExit) as cm:
-                export_cytoscape.main()
+                exportBipartiteNetwork.main()
             self.assertEqual(cm.exception.code, 1)
 
     def test_missing_mt_ig_and_mt_t(self):
@@ -136,10 +136,10 @@ class TestExportCytoscape(unittest.TestCase):
         }
         self.create_dummy_parquet(data, self.input_file)
 
-        test_args = ['export_cytoscape.py', '-i', self.input_file, '-o', self.out_prefix]
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix]
         with patch('sys.argv', test_args):
             with self.assertRaises(SystemExit) as cm:
-                export_cytoscape.main()
+                exportBipartiteNetwork.main()
             self.assertEqual(cm.exception.code, 1)
 
     def test_default_region_undefined(self):
@@ -151,9 +151,9 @@ class TestExportCytoscape(unittest.TestCase):
         }
         self.create_dummy_parquet(data, self.input_file)
 
-        test_args = ['export_cytoscape.py', '-i', self.input_file, '-o', self.out_prefix]
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix]
         with patch('sys.argv', test_args):
-            export_cytoscape.main()
+            exportBipartiteNetwork.main()
 
         edges_df = pd.read_csv(self.out_edges)
         self.assertIn('Interaction', edges_df.columns)

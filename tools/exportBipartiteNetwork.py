@@ -81,14 +81,15 @@ def main():
     # 6. Build Node Table
     logging.info("Building Node table...")
     # Extract CpGs
-    cpgs = df_top[['mt_id', 'mt_chrom', 'mt_chromStart', 'mt_strand']].copy()
-    cpgs.columns = ['Node_ID', 'Chrom', 'Start', 'Strand']
+    cpgs = df_top[['mt_id', 'mt_chrom', 'mt_chromStart', 'mt_strand', 'region']].copy()
+    cpgs.columns = ['Node_ID', 'Chrom', 'Start', 'Strand', 'Region']
     cpgs['Node_Type'] = 'CpG'
 
     # Extract Genes
     genes = df_top[['gt_id', 'gt_chrom', 'gt_chromStart', 'gt_strand']].copy()
     genes.columns = ['Node_ID', 'Chrom', 'Start', 'Strand']
     genes['Node_Type'] = 'Gene'
+    genes['Region'] = 'Undefined'
 
     # Stack and Deduplicate
     nodes = pd.concat([cpgs, genes]).drop_duplicates(subset=['Node_ID'])
