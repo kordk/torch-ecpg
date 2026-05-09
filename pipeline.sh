@@ -126,13 +126,15 @@ else
         mv annot/* "$ANNOT_DIR/"
         rmdir data annot
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
-        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
+        cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
+        cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
     elif [ "$DATASET" == "gtp" ]; then
         log "Downloading GTP data..."
         echo "y" | python3 -m tecpg data gtp --yes
         mv data/* "$DATA_DIR/"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
-        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
+        cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
+        cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
         # For GTP, assuming the demo annots are used
         cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6"
         cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6"
@@ -142,7 +144,8 @@ else
         echo "y" | python3 -m tecpg data mesa
         mv data/* "$DATA_DIR/"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
-        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
+        cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
+        cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
         # For MESA, assuming appropriate demo annots are used if available
         # Or fall back to EPIC/HT12 for now
         cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6" 2>/dev/null || true
@@ -164,8 +167,12 @@ fi
 
 # Data Exploration
 log "Exploring Omics data..."
-python3 tools/exploreOmics.py --input "$DATA_DIR/M.csv" --data-type methylation --output-dir "$DATA_DIR/qc"
-python3 tools/exploreOmics.py --input "$DATA_DIR/G.csv" --data-type expression --output-dir "$DATA_DIR/qc"
+python3 tools/exploreOmics.py \
+    --input-processed-methylation "$DATA_DIR/M.csv" \
+    --input-orig-methylation "$DATA_DIR/M_orig.csv" \
+    --input-processed-expression "$DATA_DIR/G.csv" \
+    --input-orig-expression "$DATA_DIR/G_orig.csv" \
+    --output-dir "$DATA_DIR/qc"
 
 # Stage 1.5: Estimate Immune Cell Proportions
 log "[1.5/9] Estimating immune cell proportions using EpiDISH..."

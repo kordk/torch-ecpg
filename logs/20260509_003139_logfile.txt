@@ -1,0 +1,23 @@
+[37m[INFO] tecpg version 1.24.1-dev[0m
+[37m[INFO] CUDA GPU detected. This device does not support CUDA.[0m
+[37m[INFO] Auto-detected host_profile=minimum (physical_cores=4, ram_gb=7.8)[0m
+[37m[INFO] Auto-scaled save_threads to 2[0m
+[37m[INFO] Auto-scaled save_queue_depth to 3[0m
+[37m[INFO] Removing directory /app/data...[0m
+[37m[INFO] Creating directory /app/data...[0m
+[37m[INFO] Saving 3 dataframes...[0m
+[37m[INFOTIMER] Saving 1/3: M.csv[0m
+[37m[INFOTIMER] Saved 1/3 in 0.2923 seconds[0m
+[37m[INFOTIMER] Saving 2/3: G.csv[0m
+[37m[INFOTIMER] Saved 2/3 in 0.2551 seconds[0m
+[37m[INFOTIMER] Saving 3/3: C.csv[0m
+[37m[INFOTIMER] Saved 3/3 in 0.0018 seconds[0m
+[37m[INFOTIMER] Finished saving 3 dataframes in 0.5493 seconds.[0m
+[37m[INFO] Removing directory /app/annot...[0m
+[37m[INFO] Creating directory /app/annot...[0m
+[37m[INFO] Saving 2 dataframes...[0m
+[37m[INFOTIMER] Saving 1/2: M.bed6[0m
+[37m[INFOTIMER] Saved 1/2 in 0.0036 seconds[0m
+[37m[INFOTIMER] Saving 2/2: G.bed6[0m
+[37m[INFOTIMER] Saved 2/2 in 0.0037 seconds[0m
+[37m[INFOTIMER] Finished saving 2 dataframes in 0.0074 seconds.[0m
