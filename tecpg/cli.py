@@ -765,7 +765,7 @@ def corr(
 @run.command()
 @click.option('--gene-loci-per-chunk', show_default=True, type=int)
 @click.option('--meth-loci-per-chunk', show_default=True, type=int)
-@click.option('-p', '--p-thresh', show_default=True, default=0.00001, type=float)
+@click.option('-p', '--p-thresh', show_default=True, default=0.001, type=float)
 @click.option(
     '--all', 'region', show_default=True, flag_value='all', default=True
 )
