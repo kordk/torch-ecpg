@@ -50,6 +50,13 @@ def load_data(args):
         logging.error("Neither 'mt_ig' nor 'abs_t' found in edges. Cannot proceed.")
         sys.exit(1)
 
+    # Check for inf / -inf values in the weight column
+    if np.isinf(edges[weight_col]).any():
+        logging.error(f"The weight column '{weight_col}' contains infinite values (inf or -inf). "
+                      f"This typically occurs due to preprocessing artifacts like -log10(p) conversions of exact zero p-values. "
+                      f"Please clean your data to remove or cap these infinite values before running the script.")
+        sys.exit(1)
+
     return edges, nodes, weight_col
 
 def prepare_network(edges, nodes, weight_col, threshold):
@@ -178,8 +185,8 @@ def plot_umap(filtered_edges, nodes, weight_col, out_dir):
     # Pivot to CpG (rows) x Gene (cols) matrix
     matrix = filtered_edges.pivot(index='Source', columns='Target', values=weight_col).fillna(0)
 
-    if matrix.shape[0] < 2:
-        logging.warning("Not enough CpG nodes to run UMAP. Skipping Figure 2.")
+    if matrix.shape[0] < 4:
+        logging.warning("Not enough CpG nodes to run UMAP (requires >= 4). Skipping Figure 2.")
         return
 
     # Run UMAP
@@ -203,6 +210,217 @@ def plot_umap(filtered_edges, nodes, weight_col, out_dir):
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     logging.info(f"Saved Figure 2 to {out_path}")
+
+def plot_bi_adjacency_heatmap(df, cpg_col='Source', gene_col='Target', weight_col='weight', out_dir='.', figsize=(10, 8)):
+    logging.info("Generating Figure 4: Biclustered Bi-Adjacency Heatmap...")
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except ImportError:
+        logging.error("Required visualization libraries not found. Please run 'pip install torch-ecpg[viz]'.")
+        sys.exit(1)
+
+    # Pivot to wide form and fill NaNs with 0
+    matrix = df.pivot(index=cpg_col, columns=gene_col, values=weight_col).fillna(0.0)
+
+    has_negative = (matrix.values < 0).any()
+
+    if has_negative:
+        cmap = 'RdBu_r'
+        center = 0
+        mask = None
+    else:
+        cmap = 'viridis'
+        center = None
+        mask = matrix == 0.0
+
+    try:
+        g = sns.clustermap(
+            matrix,
+            cmap=cmap,
+            center=center,
+            mask=mask,
+            figsize=figsize,
+            cbar_pos=(0.02, 0.8, 0.05, 0.18),
+            xticklabels=False,
+            yticklabels=False,
+            method='average' # Hierarchical clustering method
+        )
+
+        g.fig.suptitle("Biclustered Bi-Adjacency Heatmap", y=1.05)
+
+        out_path = os.path.join(out_dir, "BiclusteredBiAdjacencyHeatmap.png")
+        g.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.close(g.fig)
+        logging.info(f"Saved Figure 4 to {out_path}")
+    except Exception as e:
+        logging.error(f"Failed to generate Biclustered Bi-Adjacency Heatmap: {e}")
+
+def plot_arc_diagram(df, cpg_col='Source', gene_col='Target', weight_col='weight', out_dir='.', figsize=(12, 6)):
+    logging.info("Generating Figure 5: Arc Diagram...")
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+    except ImportError:
+        logging.error("Required visualization libraries not found. Please run 'pip install torch-ecpg[viz]'.")
+        sys.exit(1)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Get unique CpGs and Genes
+    unique_cpgs = df[cpg_col].unique()
+    unique_genes = df[gene_col].unique()
+
+    n_cpg = len(unique_cpgs)
+    n_gene = len(unique_genes)
+
+    # Map to coordinates
+    # CpGs from 0 to n_cpg - 1
+    # Genes from n_cpg to n_cpg + n_gene - 1
+    cpg_pos = {cpg: i for i, cpg in enumerate(unique_cpgs)}
+    gene_pos = {gene: i + n_cpg for i, gene in enumerate(unique_genes)}
+
+    # Plot nodes
+    ax.scatter(list(cpg_pos.values()), [0] * n_cpg, color='tab:blue', s=20, label='CpG', zorder=5)
+    ax.scatter(list(gene_pos.values()), [0] * n_gene, color='tab:orange', s=20, label='Gene', zorder=5)
+
+    # Normalize weights for widths/alphas
+    weights = df[weight_col].abs()
+    if len(weights) > 0:
+        max_w = weights.max()
+        min_w = weights.min()
+    else:
+        max_w, min_w = 1, 0
+
+    # Colormap based on weight sign if applicable
+    cmap_pos = plt.get_cmap('Reds')
+    cmap_neg = plt.get_cmap('Blues')
+
+    # Draw arcs
+    for _, row in df.iterrows():
+        cpg = row[cpg_col]
+        gene = row[gene_col]
+        w = row[weight_col]
+        abs_w = abs(w)
+
+        x1 = cpg_pos[cpg]
+        x2 = gene_pos[gene]
+
+        center = ((x1 + x2) / 2.0, 0)
+        width = abs(x2 - x1)
+        # Height can be proportional to width or a constant. Let's make it proportional to width
+        height = width * 0.5
+
+        # Line width scaling
+        if max_w > min_w:
+            lw = 0.5 + 2.0 * (abs_w - min_w) / (max_w - min_w)
+            alpha = 0.3 + 0.5 * (abs_w - min_w) / (max_w - min_w)
+        else:
+            lw = 1.0
+            alpha = 0.5
+
+        color = cmap_pos(alpha) if w >= 0 else cmap_neg(alpha)
+
+        arc = patches.Arc(center, width, height, theta1=0, theta2=180,
+                          linewidth=lw, color=color, alpha=alpha, zorder=1)
+        ax.add_patch(arc)
+
+    ax.set_xlim(-1, n_cpg + n_gene)
+    # The max height is roughly half the max width
+    max_width = (n_cpg + n_gene)
+    ax.set_ylim(-max_width * 0.05, max_width * 0.3)
+
+    ax.axis('off')
+    ax.legend(loc='upper right')
+    ax.set_title("Arc Diagram")
+
+    out_path = os.path.join(out_dir, "ArcDiagram.png")
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    logging.info(f"Saved Figure 5 to {out_path}")
+
+def project_bipartite_to_unipartite(df, cpg_col='Source', gene_col='Target', weight_col='weight', target='gene', weight_method='count'):
+    logging.info(f"Generating Bipartite Projection (1-Mode Network) for {target} using method: {weight_method}...")
+    try:
+        import networkx as nx
+        from networkx.algorithms import bipartite
+    except ImportError:
+        logging.error("Required visualization libraries not found. Please run 'pip install torch-ecpg[viz]'.")
+        sys.exit(1)
+
+    B = nx.Graph()
+
+    unique_cpgs = df[cpg_col].unique()
+    unique_genes = df[gene_col].unique()
+
+    B.add_nodes_from(unique_cpgs, bipartite=0)
+    B.add_nodes_from(unique_genes, bipartite=1)
+
+    edges = [(row[cpg_col], row[gene_col], {weight_col: row[weight_col]}) for _, row in df.iterrows()]
+    B.add_edges_from(edges)
+
+    target_nodes = unique_genes if target == 'gene' else unique_cpgs
+
+    if weight_method == 'count':
+        # Default networkx behavior (returns count of shared neighbors)
+        G_proj = bipartite.weighted_projected_graph(B, target_nodes, ratio=False)
+    elif weight_method == 'sum':
+        # Manually compute 'sum' of products of shared edges weights
+        G_proj = nx.Graph()
+        G_proj.add_nodes_from(target_nodes)
+
+        target_nodes_list = list(target_nodes)
+        for i, u in enumerate(target_nodes_list):
+            for j in range(i + 1, len(target_nodes_list)):
+                v = target_nodes_list[j]
+
+                shared_neighbors = set(B[u]) & set(B[v])
+                if shared_neighbors:
+                    total_weight = sum(B[u][k][weight_col] * B[v][k][weight_col] for k in shared_neighbors)
+                    G_proj.add_edge(u, v, weight=total_weight)
+    elif weight_method == 'hypergeometric':
+        # Compute hypergeom p-value as weight.
+        from scipy.stats import hypergeom
+        G_proj = nx.Graph()
+        G_proj.add_nodes_from(target_nodes)
+
+        total_other_nodes = len(unique_cpgs) if target == 'gene' else len(unique_genes)
+
+        target_nodes_list = list(target_nodes)
+        for i, u in enumerate(target_nodes_list):
+            for j in range(i + 1, len(target_nodes_list)):
+                v = target_nodes_list[j]
+
+                neighbors_u = set(B[u])
+                neighbors_v = set(B[v])
+                shared_neighbors = neighbors_u & neighbors_v
+
+                if shared_neighbors:
+                    k = len(shared_neighbors)
+                    M = total_other_nodes
+                    n = len(neighbors_u)
+                    N = len(neighbors_v)
+                    # Survival function: P(X >= k)
+                    pval = hypergeom.sf(k - 1, M, n, N)
+                    # For visualization/edges, -log10(p) is often better to use as weight
+                    import math
+                    weight_val = -math.log10(pval) if pval > 0 else 100 # cap to 100 for exact 0
+                    G_proj.add_edge(u, v, weight=weight_val)
+    else:
+        logging.error(f"Unknown weight_method: {weight_method}")
+        sys.exit(1)
+
+    # Convert to DataFrame
+    edge_list = []
+    for u, v, data in G_proj.edges(data=True):
+        edge_list.append({
+            'Node1': u,
+            'Node2': v,
+            'weight': data.get('weight', 1.0)
+        })
+    proj_df = pd.DataFrame(edge_list)
+
+    return G_proj, proj_df
 
 def plot_degree_distribution(G, nodes, out_dir):
     logging.info("Generating Figure 3: Regulatory Degree Distribution...")
@@ -259,6 +477,50 @@ def main():
     plot_network(G, args.out_dir)
     plot_umap(filtered_edges, nodes, weight_col, args.out_dir)
     plot_degree_distribution(G, nodes, args.out_dir)
+
+    # Note: Source and Target defaults match the output of prepare_network/filtered_edges
+    plot_bi_adjacency_heatmap(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=args.out_dir)
+    plot_arc_diagram(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=args.out_dir)
+
+    # 1-Mode Projection
+    G_proj, proj_df = project_bipartite_to_unipartite(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, target='gene', weight_method='count')
+    # Save the projection edge list
+    proj_out_path = os.path.join(args.out_dir, "UnipartiteProjection_Edges.csv")
+    proj_df.to_csv(proj_out_path, index=False)
+    logging.info(f"Saved Unipartite Projection edge list to {proj_out_path}")
+
+    # Generate a simple visualization for the unipartite network (Figure 6)
+    logging.info("Generating Figure 6: Unipartite Projection Network...")
+    try:
+        import matplotlib.pyplot as plt
+        import networkx as nx
+        fig, ax = plt.subplots(figsize=(10, 10))
+        pos = nx.spring_layout(G_proj, seed=42)
+
+        edges_proj = G_proj.edges(data=True)
+        weights = [d['weight'] for u, v, d in edges_proj]
+        if weights:
+            max_w = max(weights)
+            min_w = min(weights)
+            if max_w > min_w:
+                edge_widths = [0.5 + 2.0 * (w - min_w) / (max_w - min_w) for w in weights]
+            else:
+                edge_widths = [1.0] * len(weights)
+        else:
+            edge_widths = []
+
+        nx.draw_networkx_nodes(G_proj, pos, node_size=50, node_color='tab:orange', alpha=0.8, ax=ax)
+        nx.draw_networkx_edges(G_proj, pos, width=edge_widths, alpha=0.5, ax=ax)
+
+        ax.set_title("Unipartite Projection (Genes)")
+        ax.axis('off')
+
+        fig_out_path = os.path.join(args.out_dir, "UnipartiteProjection.png")
+        plt.savefig(fig_out_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        logging.info(f"Saved Figure 6 to {fig_out_path}")
+    except Exception as e:
+        logging.error(f"Failed to generate Unipartite Projection visualization: {e}")
 
     logging.info("All visualizations complete.")
 
