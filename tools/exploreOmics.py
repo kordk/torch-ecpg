@@ -13,6 +13,7 @@ import seaborn as sns
 import argparse
 import logging
 import random
+from jinja2 import Template
 
 def setup_logger(name, level='INFO'):
     logger = logging.getLogger(name)
@@ -238,17 +239,86 @@ def generate_summary_report(df: pd.DataFrame, metrics: dict,
     
     logger.info(f"Saved summary report: {report_path}")
 
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Omics Exploration Report</title>
+<style>
+body { font-family: sans-serif; margin: 20px; }
+h1, h2, h3 { color: #333; }
+.container { display: flex; flex-direction: row; }
+.column { flex: 50%; padding: 10px; }
+.metric-table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+.metric-table th, .metric-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+.metric-table th { background-color: #f2f2f2; }
+img { max-width: 100%; height: auto; border: 1px solid #eee; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<h1>Omics Data Exploration Report</h1>
+
+{% for data_type, title in [('methylation', 'Methylation'), ('expression', 'Expression')] %}
+<h2>{{ title }} Data</h2>
+<div class="container">
+    <div class="column">
+        <h3>Original</h3>
+        <table class="metric-table">
+            {% for k, v in metrics[data_type]['orig'].items() %}
+            <tr><th>{{ k }}</th><td>{{ v }}</td></tr>
+            {% endfor %}
+        </table>
+
+        {% if not skip_plots %}
+        <h4>Sample Distributions</h4>
+        <img src="{{ data_type }}_orig_sample_distributions.png" alt="{{ title }} Original Sample Distributions">
+        <h4>Feature Variances</h4>
+        <img src="{{ data_type }}_orig_feature_variances.png" alt="{{ title }} Original Feature Variances">
+        <h4>Missing Data</h4>
+        <img src="{{ data_type }}_orig_missing_data.png" alt="{{ title }} Original Missing Data">
+        {% endif %}
+    </div>
+
+    <div class="column">
+        <h3>Processed</h3>
+        <table class="metric-table">
+            {% for k, v in metrics[data_type]['processed'].items() %}
+            <tr><th>{{ k }}</th><td>{{ v }}</td></tr>
+            {% endfor %}
+        </table>
+
+        {% if not skip_plots %}
+        <h4>Sample Distributions</h4>
+        <img src="{{ data_type }}_processed_sample_distributions.png" alt="{{ title }} Processed Sample Distributions">
+        <h4>Feature Variances</h4>
+        <img src="{{ data_type }}_processed_feature_variances.png" alt="{{ title }} Processed Feature Variances">
+        <h4>Missing Data</h4>
+        <img src="{{ data_type }}_processed_missing_data.png" alt="{{ title }} Processed Missing Data">
+        {% endif %}
+    </div>
+</div>
+<hr>
+{% endfor %}
+
+</body>
+</html>
+"""
+
 
 def main():
     """Main function to explore omics data."""
     parser = argparse.ArgumentParser(
         description='Explore omics data and generate QC reports'
     )
-    parser.add_argument('--input', type=str, required=True,
-                       help='Input omics data file')
-    parser.add_argument('--data-type', type=str, default='omics',
-                       choices=['methylation', 'expression', 'omics'],
-                       help='Type of omics data')
+    parser.add_argument('--input-processed-methylation', type=str, required=True,
+                       help='Input processed methylation data file')
+    parser.add_argument('--input-orig-methylation', type=str, required=True,
+                       help='Input original methylation data file')
+    parser.add_argument('--input-processed-expression', type=str, required=True,
+                       help='Input processed expression data file')
+    parser.add_argument('--input-orig-expression', type=str, required=True,
+                       help='Input original expression data file')
     parser.add_argument('--transpose', action='store_true',
                        help='Transpose data (if features are in rows)')
     parser.add_argument('--output-dir', type=str, 
@@ -268,27 +338,58 @@ def main():
     output_dir = ensure_dir(args.output_dir)
     logger.info(f"Output directory: {output_dir}")
     
-    # Load data
-    logger.info(f"Loading {args.data_type} data from: {args.input}")
-    df = load_omics_data(args.input, transpose=args.transpose)
-    log_dataframe_info(logger, df, f"{args.data_type} data")
+    # Process all datasets
+    datasets = {
+        'methylation': {
+            'orig': args.input_orig_methylation,
+            'processed': args.input_processed_methylation
+        },
+        'expression': {
+            'orig': args.input_orig_expression,
+            'processed': args.input_processed_expression
+        }
+    }
     
-    # Calculate QC metrics
-    metrics = calculate_qc_metrics(df, logger)
+    all_metrics = {'methylation': {}, 'expression': {}}
     
-    # Generate summary report
-    generate_summary_report(df, metrics, output_dir, args.data_type, logger)
+    for dtype, paths in datasets.items():
+        for state, filepath in paths.items():
+            label = f"{dtype}_{state}"
+            logger.info(f"Loading {label} data from: {filepath}")
+            df = load_omics_data(filepath, transpose=args.transpose)
+            log_dataframe_info(logger, df, f"{label} data")
+
+            # Calculate QC metrics
+            metrics = calculate_qc_metrics(df, logger)
+            # Format metrics for HTML template
+            formatted_metrics = {k: (f"{v:.4f}" if isinstance(v, float) else v) for k, v in metrics.items()}
+            all_metrics[dtype][state] = formatted_metrics
+
+            # Generate summary report
+            generate_summary_report(df, metrics, output_dir, label, logger)
+
+            # Generate plots
+            if not args.skip_plots:
+                logger.info(f"Generating visualizations for {label}...")
+                plot_sample_distributions(df, output_dir, label, logger)
+                plot_feature_distributions(df, output_dir, label, logger)
+                plot_missing_data(df, output_dir, label, logger)
+
+    # Generate HTML report
+    logger.info("Generating HTML report...")
+    template = Template(HTML_TEMPLATE)
+    html_content = template.render(
+        metrics=all_metrics,
+        skip_plots=args.skip_plots
+    )
     
-    # Generate plots
-    if not args.skip_plots:
-        logger.info("Generating visualizations...")
-        
-        plot_sample_distributions(df, output_dir, args.data_type, logger)
-        plot_feature_distributions(df, output_dir, args.data_type, logger)
-        plot_missing_data(df, output_dir, args.data_type, logger)
+    html_path = output_dir / 'exploration_report.html'
+    with open(html_path, 'w') as f:
+        f.write(html_content)
     
-    logger.info(f"\n{args.data_type} data exploration complete!")
+    logger.info(f"\nOmics data exploration complete!")
     logger.info(f"All outputs saved to: {output_dir}")
+    logger.info(f"HTML report saved to: {html_path}")
 
 
 if __name__ == '__main__':
