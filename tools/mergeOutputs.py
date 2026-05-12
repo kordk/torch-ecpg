@@ -24,43 +24,63 @@ def natural_keys(text):
 
 def get_stats(filepath):
     """
-    Reads a CSV file and calculates the number of rows (mappings),
+    Reads a CSV or Parquet file and calculates the number of rows (mappings),
     unique genes (gt_id), and unique CpGs (mt_id).
-
-    Assumes the file has a header.
     """
     try:
-        # Use pandas to read just the columns we need for counting unique values
-        # We need to detect if 'gt_id' and 'mt_id' are in the columns
-        # Reading just the header first to be safe
-        header = pd.read_csv(filepath, nrows=0)
-        usecols = []
-        if 'gt_id' in header.columns:
-            usecols.append('gt_id')
-        if 'mt_id' in header.columns:
-            usecols.append('mt_id')
-
-        # If columns are missing, we can't count unique values for them
-        # This might happen if the file format is different
-        if not usecols:
-            # Fallback: Count lines - 1 (header)
-            with open(filepath, 'rb') as f:
-                mappings = sum(1 for _ in f) - 1
-            return mappings, set(), set()
-
-        # Read the file in chunks to be memory efficient
         mappings = 0
         unique_genes = set()
         unique_cpgs = set()
 
-        for chunk in pd.read_csv(filepath, usecols=usecols, chunksize=100000):
-            mappings += len(chunk)
-            if 'gt_id' in chunk.columns:
-                unique_genes.update(chunk['gt_id'].dropna().astype(str))
-            if 'mt_id' in chunk.columns:
-                unique_cpgs.update(chunk['mt_id'].dropna().astype(str))
+        if filepath.endswith('.parquet'):
+            try:
+                parquet_file = pq.ParquetFile(filepath)
+                schema_names = parquet_file.schema.names
+                usecols = []
+                if 'gt_id' in schema_names:
+                    usecols.append('gt_id')
+                if 'mt_id' in schema_names:
+                    usecols.append('mt_id')
 
-        return mappings, unique_genes, unique_cpgs
+                if not usecols:
+                    return parquet_file.metadata.num_rows, set(), set()
+
+                for batch in parquet_file.iter_batches(columns=usecols):
+                    df = batch.to_pandas()
+                    mappings += len(df)
+                    if 'gt_id' in df.columns:
+                        unique_genes.update(df['gt_id'].dropna().astype(str))
+                    if 'mt_id' in df.columns:
+                        unique_cpgs.update(df['mt_id'].dropna().astype(str))
+                return mappings, unique_genes, unique_cpgs
+            except Exception as e:
+                 print(f"Error reading Parquet metadata/batches for {filepath}: {e}", file=sys.stderr)
+                 return 0, set(), set()
+        else:
+            # CSV processing
+            # Use pandas to read just the columns we need for counting unique values
+            header = pd.read_csv(filepath, nrows=0)
+            usecols = []
+            if 'gt_id' in header.columns:
+                usecols.append('gt_id')
+            if 'mt_id' in header.columns:
+                usecols.append('mt_id')
+
+            # If columns are missing, we can't count unique values for them
+            if not usecols:
+                # Fallback: Count lines - 1 (header)
+                with open(filepath, 'rb') as f:
+                    mappings = sum(1 for _ in f) - 1
+                return mappings, set(), set()
+
+            for chunk in pd.read_csv(filepath, usecols=usecols, chunksize=100000):
+                mappings += len(chunk)
+                if 'gt_id' in chunk.columns:
+                    unique_genes.update(chunk['gt_id'].dropna().astype(str))
+                if 'mt_id' in chunk.columns:
+                    unique_cpgs.update(chunk['mt_id'].dropna().astype(str))
+
+            return mappings, unique_genes, unique_cpgs
     except Exception as e:
         print(f"Error processing {filepath}: {e}", file=sys.stderr)
         return 0, set(), set()
@@ -80,20 +100,20 @@ def merge_file_content(input_path, output_handle, is_first_file):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Merge multiple CSV output files into a single CSV efficiently."
+        description="Merge multiple CSV/Parquet output files into a single file efficiently."
     )
     parser.add_argument(
         "input_dir",
-        help="Directory containing the CSV chunk files."
+        help="Directory containing the chunk files."
     )
     parser.add_argument(
         "output_file",
-        help="Path to the output merged CSV file."
+        help="Path to the output merged file."
     )
     parser.add_argument(
         "--pattern",
-        default="*.csv",
-        help="File pattern to match (default: '*.csv')."
+        default="*-*.*",
+        help="File pattern to match (default: '*-*.*'). Will filter for .csv and .parquet files."
     )
     parser.add_argument(
         "--format",
@@ -131,10 +151,13 @@ def main():
 
     # Find all files matching the pattern
     search_path = os.path.join(input_dir, pattern)
-    files = glob.glob(search_path)
+    raw_files = glob.glob(search_path)
+
+    # Filter to only .csv and .parquet extensions
+    files = [f for f in raw_files if f.endswith('.csv') or f.endswith('.parquet')]
 
     if not files:
-        print(f"Error: No files found matching '{pattern}' in '{input_dir}'.", file=sys.stderr)
+        print(f"Error: No files found matching '{pattern}' (and ending in .csv or .parquet) in '{input_dir}'.", file=sys.stderr)
         sys.exit(1)
 
     # Sort files naturally
@@ -171,36 +194,61 @@ def main():
                 with open(output_file, 'wb') as f_out:
                     first_file_written = False
                     for i, filepath in enumerate(files):
-                        # Check if file is empty (only header)
-                        is_empty = False
-                        with open(filepath, 'rb') as f_check:
-                            header = f_check.readline()
-                            if not f_check.read(1):  # No data after header
-                                empty_files_count += 1
-                                is_empty = True
+                        if filepath.endswith('.parquet'):
+                            try:
+                                table = pq.read_table(filepath)
+                                if table.num_rows == 0:
+                                    empty_files_count += 1
+                                else:
+                                    df = table.to_pandas()
+                                    csv_data = df.to_csv(index=False, header=not first_file_written).encode('utf-8')
+                                    f_out.write(csv_data)
+                                    first_file_written = True
+                            except Exception as e:
+                                print(f"\nError converting {filepath} to CSV: {e}", file=sys.stderr)
+                        else:
+                            # CSV handling
+                            is_empty = False
+                            with open(filepath, 'rb') as f_check:
+                                header = f_check.readline()
+                                if not f_check.read(1):  # No data after header
+                                    empty_files_count += 1
+                                    is_empty = True
 
-                        if not is_empty:
-                            merge_file_content(filepath, f_out, not first_file_written)
-                            first_file_written = True
+                            if not is_empty:
+                                merge_file_content(filepath, f_out, not first_file_written)
+                                first_file_written = True
 
                         if (i + 1) % 10 == 0 or (i + 1) == len(files):
                             print(f"Merged {i + 1}/{len(files)} files...", end='\r')
             elif out_format == "parquet":
                 writer = None
                 for i, filepath in enumerate(files):
-                    # Read the CSV chunk
-                    df = pd.read_csv(filepath)
+                    try:
+                        if filepath.endswith('.parquet'):
+                            table = pq.read_table(filepath)
+                            if table.num_rows == 0:
+                                empty_files_count += 1
+                            else:
+                                if writer is None:
+                                    writer = pq.ParquetWriter(output_file, table.schema, compression=compression)
+                                writer.write_table(table)
+                        else:
+                            # Read the CSV chunk
+                            df = pd.read_csv(filepath)
 
-                    if df.empty:
-                        empty_files_count += 1
-                    else:
-                        table = pa.Table.from_pandas(df)
+                            if df.empty:
+                                empty_files_count += 1
+                            else:
+                                table = pa.Table.from_pandas(df)
 
-                        if writer is None:
-                            # Initialize writer with the schema of the first non-empty file
-                            writer = pq.ParquetWriter(output_file, table.schema, compression=compression)
+                                if writer is None:
+                                    # Initialize writer with the schema of the first non-empty file
+                                    writer = pq.ParquetWriter(output_file, table.schema, compression=compression)
 
-                        writer.write_table(table)
+                                writer.write_table(table)
+                    except Exception as e:
+                        print(f"\nError processing {filepath}: {e}", file=sys.stderr)
 
                     if (i + 1) % 10 == 0 or (i + 1) == len(files):
                         print(f"Merged {i + 1}/{len(files)} files...", end='\r')
@@ -208,7 +256,7 @@ def main():
                 if writer:
                     writer.close()
                 else:
-                    print("Warning: All processed files were empty. No parquet file was generated.", file=sys.stderr)
+                    print("\nWarning: All processed files were empty. No parquet file was generated.", file=sys.stderr)
 
             print(f"\nMerge complete. Waiting for statistics calculation...")
 
