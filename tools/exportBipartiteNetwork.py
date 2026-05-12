@@ -11,6 +11,7 @@ def main():
     parser = argparse.ArgumentParser(description="Export eQTM Parquet file to Cytoscape Node and Edge tables.")
     parser.add_argument("-i", "--input", required=True, help="Path to the input Parquet file (e.g., results.precise_p.annot.fdr.parquet).")
     parser.add_argument("-o", "--out-prefix", default="cytoscape", help="Output prefix for generated CSV files (default: 'cytoscape').")
+    parser.add_argument("--out-dir", default=".", help="Directory to save output files (default: current directory).")
     parser.add_argument("--top-k", type=int, default=10000, help="Number of top hits to include (default: 10000).")
     args = parser.parse_args()
 
@@ -75,7 +76,10 @@ def main():
     edges = df_top[edge_cols].copy()
     edges.rename(columns={'mt_id': 'Source', 'gt_id': 'Target', 'region': 'Interaction'}, inplace=True)
 
-    out_edges = f"{args.out_prefix}_edges.csv"
+    if not os.path.exists(args.out_dir):
+        os.makedirs(args.out_dir)
+
+    out_edges = os.path.join(args.out_dir, f"{args.out_prefix}_edges.csv")
     edges.to_csv(out_edges, index=False)
 
     # 6. Build Node Table
@@ -94,7 +98,7 @@ def main():
     # Stack and Deduplicate
     nodes = pd.concat([cpgs, genes]).drop_duplicates(subset=['Node_ID'])
 
-    out_nodes = f"{args.out_prefix}_nodes.csv"
+    out_nodes = os.path.join(args.out_dir, f"{args.out_prefix}_nodes.csv")
     nodes.to_csv(out_nodes, index=False)
 
     logging.info(f"Exported {len(nodes)} nodes to {out_nodes} and {len(edges)} edges to {out_edges} for Cytoscape.")
