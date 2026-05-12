@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **1.22.2-dev**.
+The current development version on the `dev` branch is **1.24.4-dev**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 Entries below describe the work accumulated on `dev` since the last
@@ -11,6 +11,206 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 1.24.4-dev
+
+### Features
+- `tools/exportBipartiteNetwork.py` gains an `--out-dir` argument
+  (PR #211). The script now accepts an explicit output directory,
+  creates it if it does not exist, and writes the edges and nodes
+  tables there via `os.path.join(args.out_dir, ...)` instead of the
+  current working directory.
+
+## 1.24.3-dev
+
+### Features
+- `tools/exploreOmics.py` now reports on **both original and
+  processed** methylation and expression files and emits a
+  consolidated HTML report (PR #213). The script accepts four input
+  files (orig + processed for methylation and expression), generates
+  per-dataset QC metrics and plots labelled `_orig` / `_processed`,
+  and aggregates the figures and stats into a single HTML page.
+  `pipeline.sh` is updated to pass all four inputs and to ensure
+  `G_orig.csv` is present before invoking the script.
+
+## 1.24.2-dev
+
+### Features
+- Advanced bipartite visualizations added to
+  `tools/visualizeBipartiteNetwork.py` (PR #212):
+  - `plot_bi_adjacency_heatmap` renders clustered co-regulation
+    modules with Seaborn.
+  - `plot_arc_diagram` produces a clean horizontal arc representation
+    of regulatory bridges.
+  - `project_bipartite_to_unipartite` collapses the 2-mode graph to a
+    1-mode gene or CpG graph using `count`, `sum`, or `hypergeometric`
+    edge-weight methods.
+  - Edge weights are validated for `inf`/`-inf` before plotting.
+  - All three new charts are hooked into the existing `main()`
+    pipeline.
+
+### Bug Fixes
+- `tools/visualizeBipartiteNetwork.py` no longer raises `TypeError`
+  when `Region` values are empty (PR #210). Missing `Region` entries
+  are filled with `'Undefined'` before sorting, the script exits
+  early with a clear error if the `Region` column is absent
+  entirely, and a per-region count summary is logged.
+- Disable the logit transformation for the `gtp` dataset in
+  `pipeline.sh` (the dataset is already on a suitable scale).
+
+### Changes
+- Revert the default `p-thresh` value from `0.00001` back to `0.001`
+  (supersedes the 1.22.3-dev change in PR #196).
+
+## 1.24.1-dev
+
+### Features
+- New **Bipartite Network Visualization Suite**
+  (`tools/visualizeBipartiteNetwork.py`, PR #209):
+  - Parses annotated edges and nodes CSVs produced by
+    `exportBipartiteNetwork.py`.
+  - Renders an Energy-Minimized Bipartite Network via `networkx` +
+    `ForceAtlas2` (`fa2`).
+  - Renders a UMAP of Regulatory Beta-Diversity using `umap-learn`
+    with a Bray–Curtis metric.
+  - Renders a Regulatory Degree Distribution plot (Seaborn) with the
+    x-axis clipped to the 99th percentile for readability.
+- `tools/exportBipartiteNetwork.py` now extracts and includes the
+  `Region` column for CpG nodes in the node table export.
+
+### Improvements
+- Renamed `tests/test_exportBipartiteNetwork.py` →
+  `tools/exportBipartiteNetwork.py` and fixed a broken import inside
+  the test so the existing tests run again.
+- New runtime dependencies added to `requirements.txt`: `networkx`,
+  `fa2`, `umap-learn`.
+
+## 1.24.0-dev
+
+### Features
+- New **Cytoscape bipartite network exporter**,
+  `tools/export_cytoscape.py` (PR #208). It parses an eQTM Parquet
+  file and emits filtered Cytoscape-formatted **node** and **edge**
+  tables. Records are sorted by `mt_ig` with a fallback to
+  `abs(mt_t)`. Required columns are validated and optional columns
+  are handled gracefully (e.g. `region` defaults to `'Undefined'`).
+
+### Tests
+- `tests/test_export_cytoscape.py` covers the exporter (sorting
+  precedence, optional-column fallbacks, schema validation).
+
+## 1.23.2-dev
+
+### Features
+- Integrate `tools/exploreOmics.py` into `pipeline.sh` (PR #205).
+  External / `src` imports are removed in favor of local helpers
+  (`setup_logger`, `set_random_seed`, `ensure_dir`), and the script
+  runs immediately after Stage 1 to write QC outputs for methylation
+  (`M.csv`) and expression (`G.csv`) into a dataset-specific `qc/`
+  directory.
+- Add `tools/exploreOmics.py` (initial version): explores omics data,
+  computes QC metrics, and generates summary reports and
+  visualizations.
+
+### Bug Fixes
+- Apply the floor + `log2(x + 1)` gene-expression transform during
+  initial data preparation in `tecpg/mesa.py` and `tecpg/gtp.py`
+  (using `log2(max(x, 0) + 1)`), and remove the duplicate
+  `--log2-transform` invocation from `pipeline.sh` so
+  `residualize_pca.sh` no longer transforms the data a second time
+  (PR #206).
+
+## 1.23.1-dev
+
+### Features
+- `tools/estimateCellProportions.R` now supports **M-values** for
+  EpiDISH (PR #204). The script detects negative values in the
+  methylation matrix at runtime — indicative of M-values, e.g. from
+  the MESA cohort — and applies the inverse log2 transform
+  `(2^M) / (2^M + 1)` in-memory to produce beta-values before
+  calling EpiDISH. GTP beta-scores are passed through unchanged and
+  the on-disk inputs are not modified.
+
+## 1.23.0-dev
+
+### Features
+- `tools/visualizeFindings.py` now prefers the empirical bootstrap
+  p-value column (`p_boot`) over `precise_mt_p` and `mt_p` when
+  loading data and selecting top hits (PR #199). Volcano, Manhattan,
+  and Scatter plot labels and annotations show which p-value metric
+  is being plotted.
+- `tools/visualizeFindings.py` further refactored to generate a
+  **full set of plots for every p-value column present** in the
+  parquet schema (PR #200). Output filenames are prefixed
+  `bootstrapP_`, `preciseP_`, or `mtP_` to differentiate them; falls
+  back to `mt_p` when neither bootstrap nor precise columns exist.
+  The matrix dependency is now checked lazily, only when scatter
+  plots are requested.
+
+### Bug Fixes
+- Add NaN diagnostics, error handling, and M-value awareness to the
+  preparation pipeline (PR #203):
+  - `tecpg/mesa.py` and `tecpg/gtp.py` properly detect row-wise NaNs,
+    drop the offending loci, and print clear diagnostics with drop
+    counts.
+  - `tools/residualize_pca.py` errors early when it sees values
+    `<= -1` before `log2(x + 1)` rather than silently producing
+    NaNs.
+  - `pipeline.sh` only passes `--logit-transform` for the `gtp`
+    dataset; MESA already provides M-values so the flag is omitted
+    there.
+- `tools/plotCircos`: filter `cytoBand.txt` down to the standard
+  chromosomes the script initializes to avoid `pycircos` `KeyError`
+  on alternate contigs, log any Parquet links excluded because their
+  chromosome is missing from the filtered annotations, and
+  monkeypatch `pycircos.Circos.draw_scaffold` for Matplotlib 3.10+
+  compatibility (strict numpy 0-d scalar type-checking previously
+  crashed the script; PR #201).
+
+### Chores
+- Remove temporary test files (`patch.py`, `patch_main.py`,
+  `patch_scatter.py`, `test_data/`, `test_out/`) accidentally
+  committed in an earlier PR, and update `.gitignore` to prevent
+  reintroduction (PR #202).
+
+## 1.22.5-dev
+
+### Features
+- New `tools/install_dependencies.R` script that identifies and
+  installs all required R packages used by the repository's tools
+  (`pheatmap`, `EpiDISH`, `sva`,
+  `IlluminaHumanMethylationEPICanno.ilm10b4.hg19`, `ExperimentHub`)
+  via `BiocManager` for both CRAN and Bioconductor sources (PR #198).
+
+## 1.22.4-dev
+
+### Bug Fixes
+- Resolve missing scatter and Manhattan plots in
+  `tools/visualizeFindings.py` (PR #197):
+  - Cast sample-ID indexes and columns of the `M`, `G`, and `C`
+    DataFrames to strings so the matrix intersections are no longer
+    empty, restoring comparative scatter plots.
+  - Add sample-ID debugging logs for the matrix intersections to
+    aid troubleshooting.
+  - Rename column lookups `mt_chr` / `mt_pos` → `mt_chrom` /
+    `mt_chromStart` to match the actual Parquet schema, re-enabling
+    Manhattan plot generation.
+
+## 1.22.3-dev
+
+### Bug Fixes
+- `pipeline.sh`: write the `mlr_run.log` `tee` target outside the
+  `tecpg` output directory (PR #195). `tecpg` calls
+  `helper.initialize_dir()` on the user-supplied output directory at
+  startup, which `rmtree`s its contents — if `tee` had already
+  created `mlr_run.log` inside that directory the log file was
+  deleted immediately, breaking downstream parsing steps. The log
+  is now written to the current working directory instead.
+
+### Changes
+- Update the default `p-thresh` value to `0.00001` and emit a
+  console log line announcing the active threshold (PR #196). (This
+  default is later reverted to `0.001` in 1.24.2-dev.)
 
 ## 1.22.2-dev
 
