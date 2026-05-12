@@ -79,9 +79,13 @@ changes. Each version section is organized into **Features**,
   `Region` column for CpG nodes in the node table export.
 
 ### Improvements
-- Renamed `tests/test_exportBipartiteNetwork.py` →
-  `tools/exportBipartiteNetwork.py` and fixed a broken import inside
-  the test so the existing tests run again.
+- Rename `tools/export_cytoscape.py` (introduced in 1.24.0-dev) to
+  `tools/exportBipartiteNetwork.py`, and remove its previous
+  `tests/test_export_cytoscape.py` (the cytoscape exporter and the
+  bipartite exporter are the same tool under a clearer name). A
+  broken import inside the remaining
+  `tests/test_exportBipartiteNetwork.py` is also fixed so the test
+  runs again.
 - New runtime dependencies added to `requirements.txt`: `networkx`,
   `fa2`, `umap-learn`.
 
@@ -89,15 +93,17 @@ changes. Each version section is organized into **Features**,
 
 ### Features
 - New **Cytoscape bipartite network exporter**,
-  `tools/export_cytoscape.py` (PR #208). It parses an eQTM Parquet
-  file and emits filtered Cytoscape-formatted **node** and **edge**
-  tables. Records are sorted by `mt_ig` with a fallback to
+  `tools/export_cytoscape.py` (PR #208), which parses an eQTM
+  Parquet file and emits filtered Cytoscape-formatted **node** and
+  **edge** tables. Records are sorted by `mt_ig` with a fallback to
   `abs(mt_t)`. Required columns are validated and optional columns
   are handled gracefully (e.g. `region` defaults to `'Undefined'`).
+  (Renamed to `tools/exportBipartiteNetwork.py` in 1.24.1-dev.)
 
 ### Tests
 - `tests/test_export_cytoscape.py` covers the exporter (sorting
-  precedence, optional-column fallbacks, schema validation).
+  precedence, optional-column fallbacks, schema validation). (Removed
+  in 1.24.1-dev when the script was renamed.)
 
 ## 1.23.2-dev
 
