@@ -68,30 +68,25 @@ def main():
 
         # Process the file in batches to save memory
         for batch in parquet_file.iter_batches(batch_size=args.chunk_size):
-            # Convert the batch to a pandas DataFrame or dictionary
-            df_chunk = batch.to_pandas()
-
-            if 'mt_t' not in df_chunk.columns:
+            if 'mt_t' not in batch.schema.names:
                 raise ValueError("Input Parquet file must contain 'mt_t' column.")
 
-            # Ensure float64 precision for t-statistics
-            t_stats = df_chunk['mt_t'].astype(np.float64)
+            # Extract t-statistics as a numpy array directly from the Arrow column
+            t_stats = batch.column('mt_t').to_numpy(zero_copy_only=False).astype(np.float64)
 
             # Calculate two-sided p-value using Survival Function (SF) of Student's t
             # p = 2 * sf(|t|, df)
             p_values = t.sf(np.abs(t_stats), df) * 2
 
-            # Add the new column
-            df_chunk['precise_mt_p'] = p_values
-
-            # Convert back to an Arrow Table
-            table = pa.Table.from_pandas(df_chunk, preserve_index=False)
+            # Add the new column to the Arrow RecordBatch
+            p_values_array = pa.array(p_values, type=pa.float64())
+            new_batch = batch.append_column('precise_mt_p', p_values_array)
 
             # Initialize the writer with the schema of the first chunk
             if writer is None:
-                writer = pq.ParquetWriter(output_path, table.schema)
+                writer = pq.ParquetWriter(output_path, new_batch.schema)
 
-            writer.write_table(table)
+            writer.write_batch(new_batch)
 
         if writer is not None:
             writer.close()
