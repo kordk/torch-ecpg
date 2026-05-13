@@ -250,7 +250,7 @@ python3 tools/mergeOutputs.py --format parquet "$OUT_DIR" "$MERGED_PARQUET"
 
 # Clean up CSV chunks to save space
 log "Cleaning up intermediate CSV chunks..."
-rm "$OUT_DIR"/*-*.csv || true
+rm "$OUT_DIR"/*-*.csv "$OUT_DIR"/*-*.parquet 2>/dev/null || true
 
 # Stage 5: Annotate regions
 log "[5/9] Annotating regions..."
