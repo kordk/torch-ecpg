@@ -47,6 +47,8 @@ def get_stats(filepath):
 
                 for batch in parquet_file.iter_batches(columns=usecols):
                     df = batch.to_pandas()
+                    if df.index.names != [None]:
+                        df = df.reset_index()
                     mappings += len(df)
                     if 'gt_id' in df.columns:
                         unique_genes.update(df['gt_id'].dropna().astype(str))
