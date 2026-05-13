@@ -627,7 +627,7 @@ def cli(
     data['covar_file'] = click.format_filename(covar_file)
     data['meth_annot'] = click.format_filename(meth_annot)
     data['gene_annot'] = click.format_filename(gene_annot)
-    data['output_file'] = click.format_filename(output_file)
+    data['output'] = click.format_filename(output_file)
     data['log_dir'] = click.format_filename(log_dir)
 
     log_path = None if no_log_file else os.path.join(root_path, log_dir)
@@ -757,7 +757,7 @@ def corr(
             M, G, chunks, save_chunks, output_path, flatten=flatten, **logger
         )
     if output is not None:
-        save_dataframes([output], output_path, [data['output_file']], **logger)
+        save_dataframes([output], output_path, [data['output']], **logger)
 
     logger.save()
 
@@ -1204,7 +1204,7 @@ def mlr(
 
         from .bootstrap import tecpg_mlr_lstsq_bootstrap
 
-        output_file_path = data['output_file']
+        output_file_path = data['output']
         if chunking:
             output_file_path = os.path.join(output_path, 'bootstrap_merged.parquet')
         elif output_path and not output_file_path.startswith('/'):
@@ -1247,7 +1247,7 @@ def mlr(
         kwargs.pop('ig_covariates_filter', None)
         output = regression_full(**kwargs, **logger)
     if not chunking:
-        save_dataframes([output], output_path, [data['output_file']], **logger)
+        save_dataframes([output], output_path, [data['output']], **logger)
 
 
 @run.command()
@@ -1430,7 +1430,7 @@ def mlr_single(
 
     output = regression_single(**kwargs, **logger)
     if not regressions_per_chunk:
-        save_dataframes([output], output_path, [data['output_file']], **logger)
+        save_dataframes([output], output_path, [data['output']], **logger)
 
 
 @cli.group(name='data')

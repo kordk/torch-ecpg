@@ -180,7 +180,12 @@ if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
     log "C_post_cellTypes.csv already exists. Skipping cell proportion estimation."
 else
     log "Running EpiDISH to estimate cell proportions..."
-    ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATASET"
+    if [ "$DATASET" == "dummy" ]; then
+        log "Skipping EpiDISH for dummy data (random noise causes singular fits)."
+        cp "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv"
+    else
+        ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATASET"
+    fi
 fi
 
 # Stage 2: Residualization & PCA
@@ -246,7 +251,7 @@ fi
 log "[4/9] Merging chunked outputs to Parquet..."
 MERGED_PARQUET="$OUT_DIR/merged.parquet"
 log "Converting CSV chunks in $OUT_DIR into a single Parquet file at $MERGED_PARQUET..."
-python3 tools/mergeOutputs.py --format parquet "$OUT_DIR" "$MERGED_PARQUET"
+python3 tools/mergeOutputs.py --format parquet --pattern "*.*" "$OUT_DIR" "$MERGED_PARQUET"
 
 # Clean up CSV chunks to save space
 log "Cleaning up intermediate CSV chunks..."
