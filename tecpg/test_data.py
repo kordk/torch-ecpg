@@ -108,7 +108,7 @@ def generate_data(
 
     Return order: M, G, C, M_annot, G_annot
     """
-    person_codes = generate_codes(sample_size)
+    person_codes = generate_codes(sample_size, prefix='s')
     m_row_codes = generate_codes(m_rows, 'cg')
     g_row_codes = generate_codes(g_rows, 'ILMN_')
 

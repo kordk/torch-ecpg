@@ -1,3 +1,4 @@
+import time
 import math
 import time
 from typing import Callable, List, Optional, Tuple
@@ -88,10 +89,10 @@ def test(
         results = []
         pass_times = []
         for f in functions:
-            start = time.perf_counter()
+            start_time = time.perf_counter()
             result = f(x, y, **logger)
-            end = time.perf_counter()
-            pass_times.append(end - start)
+            end_time = time.perf_counter()
+            pass_times.append(end_time - start_time)
             results.append(result)
 
         times.append(pass_times)

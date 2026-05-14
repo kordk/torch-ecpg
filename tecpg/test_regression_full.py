@@ -63,7 +63,8 @@ def generate_args_lists(
     return random.choices(args_lists, k=limit)
 
 
-BASE_COMMAND = ['tecpg', 'run', 'mlr']
+import sys
+BASE_COMMAND = [sys.executable, '-m', 'tecpg', 'run', 'mlr']
 ARGUMENTS_FORMULA = [
     Argument('-f'),
     Argument(['-p', '0.05']),
@@ -92,7 +93,8 @@ ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 ARGS_LISTS = generate_args_lists(ARGUMENTS_FORMULA)
 
 
-def test(cwd: str) -> str:
+def test():
+    cwd = '.'
     command_list = [BASE_COMMAND + args for args in ARGS_LISTS]
     output = ''
     for index, command in enumerate(command_list, 1):
