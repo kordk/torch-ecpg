@@ -155,8 +155,8 @@ def main():
     search_path = os.path.join(input_dir, pattern)
     raw_files = glob.glob(search_path)
 
-    # Filter to only .csv and .parquet extensions
-    files = [f for f in raw_files if f.endswith('.csv') or f.endswith('.parquet')]
+    # Filter to only .csv and .parquet extensions, and ignore sample_reservoir.csv
+    files = [f for f in raw_files if (f.endswith('.csv') or f.endswith('.parquet')) and not f.endswith('sample_reservoir.csv')]
 
     if not files:
         print(f"Error: No files found matching '{pattern}' (and ending in .csv or .parquet) in '{input_dir}'.", file=sys.stderr)
