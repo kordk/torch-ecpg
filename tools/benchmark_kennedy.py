@@ -26,6 +26,8 @@ def main():
     logging.info(f"Loading tecpg data from {args.tecpg}...")
     try:
         df_tecpg = pq.read_table(args.tecpg).to_pandas()
+        if df_tecpg.index.names != [None]:
+            df_tecpg = df_tecpg.reset_index()
         logging.info(f"tecpg data loaded. Shape: {df_tecpg.shape}")
         logging.info(f"tecpg columns: {list(df_tecpg.columns)}")
         logging.info(f"tecpg distinct genes (gt_id): {df_tecpg.get('gt_id', pd.Series()).nunique()}")

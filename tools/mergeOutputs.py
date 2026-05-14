@@ -203,6 +203,8 @@ def main():
                                     empty_files_count += 1
                                 else:
                                     df = table.to_pandas()
+                                    if df.index.names != [None]:
+                                        df = df.reset_index()
                                     csv_data = df.to_csv(index=False, header=not first_file_written).encode('utf-8')
                                     f_out.write(csv_data)
                                     first_file_written = True

@@ -132,6 +132,8 @@ def reportPvalues(my_ecpgDataFile, pval_col, chunk_size):
 
     for batch in parquet_file.iter_batches(batch_size=chunk_size, columns=[pval_col]):
         df = batch.to_pandas()
+        if df.index.names != [None]:
+            df = df.reset_index()
 
         # Count missing
         missing_mask = df[pval_col].isna()
@@ -192,6 +194,8 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
 
     for batch in parquet_file.iter_batches(batch_size=chunk_size):
         df = batch.to_pandas()
+        if df.index.names != [None]:
+            df = df.reset_index()
         my_eqtmA = []
 
         for index, row in df.iterrows():
@@ -477,6 +481,8 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
 
         batch = next(parquet_file.iter_batches(batch_size=1000, columns=['gt_id', 'mt_id', pval_col]))
         df = batch.to_pandas()
+        if df.index.names != [None]:
+            df = df.reset_index()
     except Exception as e:
         logger.error(f"[verify_alignment] Error reading parquet file for verification: {e}")
         sys.exit(1)

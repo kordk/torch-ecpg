@@ -39,6 +39,8 @@ def main():
 
         for i, batch in enumerate(parquet_file.iter_batches(batch_size=chunk_size)):
             df = batch.to_pandas()
+            if df.index.names != [None]:
+                df = df.reset_index()
 
             # Write header only for the first chunk
             mode = 'w' if i == 0 else 'a'

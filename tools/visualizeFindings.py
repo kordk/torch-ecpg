@@ -50,6 +50,8 @@ class Plotter:
 
         for batch in parquet_file.iter_batches(columns=cols_to_load):
             df_batch = batch.to_pandas()
+            if df_batch.index.names != [None]:
+                df_batch = df_batch.reset_index()
 
             # Extract p-values
             p_vals = df_batch[self.p_col]
