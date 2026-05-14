@@ -323,6 +323,8 @@ Outputs and Metrics Calculated:
     try:
         for i, batch in enumerate(parquet_file.iter_batches(batch_size=args.chunk_size)):
             df_chunk = batch.to_pandas()
+            if df_chunk.index.names != [None]:
+                df_chunk = df_chunk.reset_index()
             res = pool.apply_async(process_chunk, (df_chunk, sample_prob, args.df))
             results.append(res)
 
@@ -596,6 +598,8 @@ Outputs and Metrics Calculated:
         try:
             for i, batch in enumerate(parquet_file.iter_batches(batch_size=args.chunk_size)):
                 df_chunk = batch.to_pandas()
+                if df_chunk.index.names != [None]:
+                    df_chunk = df_chunk.reset_index()
 
                 # Use same logic to get p-values
                 if not using_fallback:
@@ -937,6 +941,8 @@ Outputs and Metrics Calculated:
         try:
             for i, batch in enumerate(parquet_file.iter_batches(batch_size=args.chunk_size)):
                 df_chunk = batch.to_pandas()
+                if df_chunk.index.names != [None]:
+                    df_chunk = df_chunk.reset_index()
 
                 # Retrieve or calculate p-values for this chunk
                 if not using_fallback:
