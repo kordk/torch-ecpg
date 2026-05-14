@@ -387,6 +387,8 @@ def _tecpg_mlr_lstsq_inner(
     inner_logger = mc_logger.alias()
 
     methylation_loop_start_time = time.time()
+    methylation_last_chunk_end_time = methylation_loop_start_time
+    methylation_chunk_times = []
 
     # Use the process pool
     futures = deque()
@@ -1099,18 +1101,6 @@ def _tecpg_mlr_lstsq_inner(
                     prof_t6 = time.perf_counter()
                     prof_write_time += (prof_t6 - prof_t5)
 
-                    if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
-                        prof_total = prof_t6 - prof_t0
-                        M_c = len(M_chunk)
-                        G_c = chunk_len
-                        K_val = K
-                        S_val = nrows
-                        gflops = (2 * M_c * (K_val**2) * S_val + 2 * M_c * K_val * G_c * S_val) / 1e9 / max(prof_gpu_time, 1e-9)
-                        reg_sec = (M_c * G_c) / max(prof_total, 1e-9)
-
-                        res = inner_logger.resource_check()
-                        util_sm = gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
-
                     run_metrics['prep_ms'].append(prof_prep_time * 1000)
                     run_metrics['h2d_ms'].append(prof_h2d_time * 1000)
                     run_metrics['compute_ms'].append(prof_gpu_time * 1000)
@@ -1123,17 +1113,17 @@ def _tecpg_mlr_lstsq_inner(
                     total_tests_passed_filter += len(out)
                     last_chunk_end_time = time.perf_counter()
 
+                    prof_total = prof_t6 - prof_t0
+                    M_c = len(M_chunk)
+                    G_c = chunk_len
+                    K_val = K
+                    S_val = nrows
+                    res = inner_logger.resource_check()
+                    util_sm = gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
+
                     if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
-                        prof_total = prof_t6 - prof_t0
-                        M_c = len(M_chunk)
-                        G_c = chunk_len
-                        K_val = K
-                        S_val = nrows
                         gflops = (2 * M_c * (K_val**2) * S_val + 2 * M_c * K_val * G_c * S_val) / 1e9 / max(prof_gpu_time, 1e-9)
                         reg_sec = (M_c * G_c) / max(prof_total, 1e-9)
-
-                        res = inner_logger.resource_check()
-                        util_sm = gpu_monitor.avg_util_sm if 'gpu_monitor' in locals() and gpu_monitor and hasattr(gpu_monitor, 'avg_util_sm') else 0
 
                         inner_logger.debug(
                             f"PROFILE chunk m={meth_chunk_index+1}/{meth_chunk_count} g={gene_chunk_index+1}/{gene_chunk_count} | "
@@ -1144,12 +1134,13 @@ def _tecpg_mlr_lstsq_inner(
                             f"total={prof_total*1000:.1f}ms reg/s={reg_sec:.2e} gflops={gflops:.1f} util_sm={util_sm:.1f}% ram_avail={res['ram_avail_gb']:.1f}GB"
                         )
 
-                        bottleneck = analyze_bottleneck(
-                            prof_gpu_time, prof_total, prof_h2d_time, prof_d2h_time, prof_write_time,
-                            util_sm, res['ram_avail_gb'], res['cpu_percent']
-                        )
-                        if bottleneck:
-                            inner_logger.info(bottleneck)
+                    bottleneck = analyze_bottleneck(
+                        prof_gpu_time, prof_total, prof_h2d_time, prof_d2h_time, prof_write_time,
+                        util_sm, res['ram_avail_gb'], res['cpu_percent'],
+                        gene_chunk_size=chunk_len, meth_chunk_size=M_c
+                    )
+                    if bottleneck:
+                        inner_logger.info(bottleneck)
 
                     # Save
                     mc_logger.count(
@@ -1238,8 +1229,19 @@ def _tecpg_mlr_lstsq_inner(
 
             completed_chunks = meth_chunk_index + 1
             remaining_chunks = meth_chunk_count - completed_chunks
-            elapsed_time = time.time() - methylation_loop_start_time
-            average_time = elapsed_time / completed_chunks
+
+            chunk_end_time = time.time()
+            chunk_duration = chunk_end_time - methylation_last_chunk_end_time
+            methylation_last_chunk_end_time = chunk_end_time
+
+            methylation_chunk_times.append(chunk_duration)
+
+            if completed_chunks > 1:
+                # Exclude the first chunk from average to avoid startup overhead skewing the estimate
+                average_time = sum(methylation_chunk_times[1:]) / (completed_chunks - 1)
+            else:
+                average_time = chunk_duration
+
             estimated_remaining_seconds = average_time * remaining_chunks
             estimated_remaining_hours = estimated_remaining_seconds / 3600
 
