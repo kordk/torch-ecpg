@@ -480,23 +480,29 @@ def analyze_bottleneck(
     util_sm: float,
     ram_avail_gb: float,
     cpu_percent: float,
+    gene_chunk_size: Optional[int] = None,
+    meth_chunk_size: Optional[int] = None,
 ) -> Optional[str]:
     """
     Returns a string describing the detected bottleneck, or None if no obvious bottleneck.
     """
+    chunk_info = ""
+    if gene_chunk_size is not None or meth_chunk_size is not None:
+        chunk_info = f" (g_chunk={gene_chunk_size}, m_chunk={meth_chunk_size})"
+
     if ram_avail_gb < LOW_RAM_GB:
-        return "BOTTLENECK: low system RAM — reduce chunk size"
+        return f"BOTTLENECK: low system RAM ({ram_avail_gb:.1f} GB) — reduce chunk size{chunk_info}"
 
     if cpu_percent > HIGH_CPU_PCT and util_sm < GPU_UNDERUTIL_SM_PCT:
-        return "BOTTLENECK: CPU postprocessing — consider doing filter on GPU"
+        return f"BOTTLENECK: CPU postprocessing (CPU={cpu_percent:.1f}%) — consider doing filter on GPU{chunk_info}"
 
     if gpu_time / max(total_time, 1e-9) < GPU_UNDERUTIL_RATIO and util_sm < GPU_UNDERUTIL_SM_PCT:
-        return "BOTTLENECK: GPU underutilized — consider larger gene/meth chunk"
+        return f"BOTTLENECK: GPU underutilized (util_sm={util_sm:.1f}%) — consider larger gene/meth chunk{chunk_info}"
 
     if h2d_time + d2h_time > gpu_time:
-        return "BOTTLENECK: PCIe transfer dominant — consider pinned memory / fewer chunks / smaller dtype"
+        return f"BOTTLENECK: PCIe transfer dominant (transfer_ms={(h2d_time + d2h_time)*1000:.1f} > gpu_ms={gpu_time*1000:.1f}) — consider pinned memory / fewer chunks / smaller dtype{chunk_info}"
 
     if write_time > gpu_time:
-        return "BOTTLENECK: disk I/O — consider parquet, larger output buffer, or .filter() before write"
+        return f"BOTTLENECK: disk I/O (write_ms={write_time*1000:.1f} > gpu_ms={gpu_time*1000:.1f}) — consider parquet, larger output buffer, or .filter() before write{chunk_info}"
 
     return None
