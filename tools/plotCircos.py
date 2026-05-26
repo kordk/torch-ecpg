@@ -149,10 +149,12 @@ def load_and_validate_data(filepath, valid_chroms):
     df['mt_chromStart'] = pd.to_numeric(df['mt_chromStart'], errors='coerce')
     df['gt_chromStart'] = pd.to_numeric(df['gt_chromStart'], errors='coerce')
 
-    invalid_coord_mask = df['mt_chromStart'].isna() | df['gt_chromStart'].isna() | (df['mt_chrom'] == 'chrnan') | (df['mt_chrom'] == 'chrNone') | (df['gt_chrom'] == 'chrnan') | (df['gt_chrom'] == 'chrNone')
-    missing_chrom_mask = (~df['mt_chrom'].isin(valid_chroms)) | (~df['gt_chrom'].isin(valid_chroms))
+    invalid_coord_mask_mt = df['mt_chromStart'].isna() | (df['mt_chrom'] == 'chrnan') | (df['mt_chrom'] == 'chrNone')
+    invalid_coord_mask_gt = df['gt_chromStart'].isna() | (df['gt_chrom'] == 'chrnan') | (df['gt_chrom'] == 'chrNone')
+    missing_chrom_mask_mt = (~df['mt_chrom'].isin(valid_chroms)) & ~invalid_coord_mask_mt
+    missing_chrom_mask_gt = (~df['gt_chrom'].isin(valid_chroms)) & ~invalid_coord_mask_gt
 
-    missing_mask = invalid_coord_mask | missing_chrom_mask
+    missing_mask = invalid_coord_mask_mt | invalid_coord_mask_gt | missing_chrom_mask_mt | missing_chrom_mask_gt
 
     if missing_mask.any():
         missing_df = df[missing_mask]
@@ -169,10 +171,20 @@ def load_and_validate_data(filepath, valid_chroms):
         unique_cpgs = missing_df['mt_id'].nunique() if has_mt_id else 0
         unique_genes = missing_df['gt_id'].nunique() if has_gt_id else 0
 
+        reason_missing_mt_coords = invalid_coord_mask_mt.sum()
+        reason_missing_gt_coords = invalid_coord_mask_gt.sum()
+        reason_mt_chrom_not_in_cyto = missing_chrom_mask_mt.sum()
+        reason_gt_chrom_not_in_cyto = missing_chrom_mask_gt.sum()
+
         print(f"Summary of excluded missing data:")
         print(f"  Total pairs excluded: {len(missing_df)}")
         print(f"  Unique CpGs excluded: {unique_cpgs}")
         print(f"  Unique genes excluded: {unique_genes}")
+        print(f"Breakdown of exclusion reasons (a pair may match multiple):")
+        print(f"  Missing/Invalid Methylation Coordinates: {reason_missing_mt_coords}")
+        print(f"  Missing/Invalid Gene Coordinates: {reason_missing_gt_coords}")
+        print(f"  Methylation Chromosome not in Cytoband: {reason_mt_chrom_not_in_cyto}")
+        print(f"  Gene Chromosome not in Cytoband: {reason_gt_chrom_not_in_cyto}")
 
         df = df[~missing_mask].copy()
 
