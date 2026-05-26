@@ -59,13 +59,31 @@ def load_data(args):
 
     return edges, nodes, weight_col
 
-def prepare_network(edges, nodes, weight_col, threshold):
+def prepare_network(edges, nodes, weight_col, threshold, out_dir):
     logging.info(f"Filtering edges with {weight_col} >= {threshold}...")
     filtered_edges = edges[edges[weight_col] >= threshold].copy()
 
     if filtered_edges.empty:
         logging.error(f"No edges left after filtering with threshold {threshold}.")
         sys.exit(1)
+
+    # Check for duplicate edges
+    duplicates_mask = filtered_edges.duplicated(subset=['Source', 'Target'], keep=False)
+    if duplicates_mask.any():
+        duplicate_edges = filtered_edges[duplicates_mask]
+
+        # Keep the edge with the maximum weight
+        filtered_edges = filtered_edges.sort_values(by=weight_col, ascending=False).drop_duplicates(subset=['Source', 'Target'], keep='first')
+
+        # Identify the exact dropped edges by filtering out the ones we kept
+        dropped_edges = duplicate_edges.loc[~duplicate_edges.index.isin(filtered_edges.index)]
+
+        num_dropped = len(dropped_edges)
+        logging.warning(f"Found duplicate edges. Dropped {num_dropped} duplicate(s), keeping the maximum weight.")
+
+        dropped_out_path = os.path.join(out_dir, "dropped_duplicate_edges.csv")
+        dropped_edges.to_csv(dropped_out_path, index=False)
+        logging.info(f"Saved dropped duplicate edges to {dropped_out_path}")
 
     logging.info(f"Remaining edges: {len(filtered_edges)}")
 
@@ -472,7 +490,7 @@ def main():
 
     edges, nodes, weight_col = load_data(args)
 
-    G, filtered_edges = prepare_network(edges, nodes, weight_col, args.threshold)
+    G, filtered_edges = prepare_network(edges, nodes, weight_col, args.threshold, args.out_dir)
 
     plot_network(G, args.out_dir)
     plot_umap(filtered_edges, nodes, weight_col, args.out_dir)
