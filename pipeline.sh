@@ -13,6 +13,7 @@ DATASET="dummy"
 MAPPING="all"
 TOTAL_TESTS=1000000
 NUM_PCS=5
+START_STAGE="all"
 
 # Chunk sizes for `tecpg run mlr` are intentionally NOT set here. As of
 # tecpg 1.21.0-dev the CLI's anchored auto-sizer (`_auto_chunk_sizes` in
@@ -36,7 +37,12 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -h, --help               Show this help message and exit"
             echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, mesa"
             echo "  -m, --mapping MAPPING    Specify the mapping method for tecpg. Options: all (default), cis"
+            echo "  -s, --start-stage STAGE  Specify the starting stage. Options: all, prep, cell_prop, pca, map, merge, annotate, precise_p, summarize, boot_list, bootstrap. Default is 'all'."
             exit 0
+            ;;
+        -s|--start-stage)
+            START_STAGE="$2"
+            shift 2
             ;;
         -d|--dataset)
             DATASET="$2"
@@ -56,7 +62,22 @@ done
 
 if [ "$MAPPING" != "all" ] && [ "$MAPPING" != "cis" ]; then
     log "Error: Unknown mapping: $MAPPING"
-    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis]"
+    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis] --start-stage [STAGE]"
+    exit 1
+fi
+
+VALID_STAGES=("all" "prep" "cell_prop" "pca" "map" "merge" "annotate" "precise_p" "summarize" "boot_list" "bootstrap")
+IS_VALID_STAGE=0
+for stage in "${VALID_STAGES[@]}"; do
+    if [ "$START_STAGE" == "$stage" ]; then
+        IS_VALID_STAGE=1
+        break
+    fi
+done
+
+if [ $IS_VALID_STAGE -eq 0 ]; then
+    log "Error: Unknown start stage: $START_STAGE"
+    log "Valid options for --start-stage: ${VALID_STAGES[*]}"
     exit 1
 fi
 
@@ -94,6 +115,7 @@ if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
 else
     log "Dataset configurations: TOTAL_TESTS=$TOTAL_TESTS, chunk sizes=auto (tecpg CLI)"
 fi
+log "Starting from stage: $START_STAGE"
 log "======================================"
 
 # Setup directories
@@ -102,7 +124,11 @@ DATA_DIR="data_${DATASET}"
 ANNOT_DIR="annot_${DATASET}"
 mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
 
+EXECUTE=0
+if [ "$START_STAGE" == "all" ] || [ "$START_STAGE" == "prep" ]; then EXECUTE=1; fi
+
 # Stage 1: Data Preparation
+if [ $EXECUTE -eq 1 ]; then
 log "[1/9] Preparing data..."
 log "Checking if dataset files already exist in $DATA_DIR..."
 
@@ -173,8 +199,12 @@ python3 tools/exploreOmics.py \
     --input-processed-expression "$DATA_DIR/G.csv" \
     --input-orig-expression "$DATA_DIR/G_orig.csv" \
     --output-dir "$DATA_DIR/qc"
+fi
+
+if [ "$START_STAGE" == "cell_prop" ]; then EXECUTE=1; fi
 
 # Stage 1.5: Estimate Immune Cell Proportions
+if [ $EXECUTE -eq 1 ]; then
 log "[1.5/9] Estimating immune cell proportions using EpiDISH..."
 if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
     log "C_post_cellTypes.csv already exists. Skipping cell proportion estimation."
@@ -187,8 +217,12 @@ else
         ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATASET"
     fi
 fi
+fi
+
+if [ "$START_STAGE" == "pca" ]; then EXECUTE=1; fi
 
 # Stage 2: Residualization & PCA
+if [ $EXECUTE -eq 1 ]; then
 log "[2/9] Generating Expression and Methylation PCs..."
 if [ -s "$DATA_DIR/C.csv" ]; then
     log "C.csv already exists. Skipping Residualization and PCA generation."
@@ -212,19 +246,27 @@ C_final = pd.concat([C, G_PCs, M_PCs], axis=1)
 C_final.to_csv('$DATA_DIR/C.csv')
 "
 fi
+fi
 
-# Determine Degrees of Freedom for P-value calculation
+if [ "$START_STAGE" == "map" ]; then EXECUTE=1; fi
+
+# We calculate DF inside the block that needs it (or we can just calculate it here unconditionally if the file exists)
 # SAMPLES - COVARIATES - 1 (M) - 1 (Intercept)
 # Using placeholder calculation if needed; assuming df=96 for dummy (100 - 2 - 2)
 # Here we just parse the C.csv lines dynamically
-SAMPLES=$(wc -l < "$DATA_DIR/C.csv")
-SAMPLES=$((SAMPLES - 1)) # Header
-COVARS=$(head -n 1 "$DATA_DIR/C.csv" | awk -F, '{print NF-1}')
-DF=$((SAMPLES - COVARS - 2))
-
-log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
+if [ -s "$DATA_DIR/C.csv" ]; then
+    SAMPLES=$(wc -l < "$DATA_DIR/C.csv")
+    SAMPLES=$((SAMPLES - 1)) # Header
+    COVARS=$(head -n 1 "$DATA_DIR/C.csv" | awk -F, '{print NF-1}')
+    DF=$((SAMPLES - COVARS - 2))
+    log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
+else
+    # Default placeholder
+    DF=96
+fi
 
 # Stage 3: Mapping (lstsq + ig)
+if [ $EXECUTE -eq 1 ]; then
 log "[3/9] Performing eQTM Mapping (lstsq + IG)..."
 log "This stage runs the multiple linear regression (mlr) model and computes Integrated Gradients (IG)."
 if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
@@ -237,17 +279,25 @@ fi
 set -o pipefail
 python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig 2>&1 | tee "mlr_run_${DATASET}.log"
 set +o pipefail
+fi
 
-# Extract dynamically evaluated TOTAL_TESTS
-EXTRACTED_TOTALS=$(grep -o 'TOTAL_TESTS=[0-9]*' "mlr_run_${DATASET}.log" | tail -n 1 | cut -d= -f2 || true)
-if [ -n "$EXTRACTED_TOTALS" ]; then
-    TOTAL_TESTS=$EXTRACTED_TOTALS
-    log "Dynamically extracted TOTAL_TESTS=$TOTAL_TESTS from mlr output."
+if [ "$START_STAGE" == "merge" ]; then EXECUTE=1; fi
+
+# Extract dynamically evaluated TOTAL_TESTS (needed if we run mapping or summarize, independent of whether Stage 3 ran just now)
+if [ -f "mlr_run_${DATASET}.log" ]; then
+    EXTRACTED_TOTALS=$(grep -o 'TOTAL_TESTS=[0-9]*' "mlr_run_${DATASET}.log" | tail -n 1 | cut -d= -f2 || true)
+    if [ -n "$EXTRACTED_TOTALS" ]; then
+        TOTAL_TESTS=$EXTRACTED_TOTALS
+        log "Dynamically extracted TOTAL_TESTS=$TOTAL_TESTS from mlr output."
+    else
+        log "Warning: Could not extract TOTAL_TESTS from mlr output. Falling back to placeholder value ($TOTAL_TESTS)."
+    fi
 else
-    log "Warning: Could not extract TOTAL_TESTS from mlr output. Falling back to placeholder value ($TOTAL_TESTS)."
+    log "Warning: mlr_run_${DATASET}.log not found. Falling back to placeholder value ($TOTAL_TESTS)."
 fi
 
 # Stage 4: Merge chunked outputs
+if [ $EXECUTE -eq 1 ]; then
 log "[4/9] Merging chunked outputs to Parquet..."
 MERGED_PARQUET="$OUT_DIR/merged.parquet"
 log "Converting CSV chunks in $OUT_DIR into a single Parquet file at $MERGED_PARQUET..."
@@ -256,24 +306,40 @@ python3 tools/mergeOutputs.py --format parquet --pattern "*.*" "$OUT_DIR" "$MERG
 # Clean up CSV chunks to save space
 log "Cleaning up intermediate CSV chunks..."
 rm "$OUT_DIR"/*-*.csv "$OUT_DIR"/*-*.parquet 2>/dev/null || true
+fi
+
+if [ "$START_STAGE" == "annotate" ]; then EXECUTE=1; fi
+
+# Variables that span across conditionally-executed later stages
+MERGED_PARQUET="$OUT_DIR/merged.parquet"
+ANNOTATED_PARQUET="$OUT_DIR/annotated.parquet"
+RECALC_PARQUET="$OUT_DIR/annotated_pcalc.parquet"
+SUMMARIZED_PARQUET="$OUT_DIR/summarized.parquet"
+BOOTSTRAP_LIST="$OUT_DIR/bootstrap_list.csv"
 
 # Stage 5: Annotate regions
+if [ $EXECUTE -eq 1 ]; then
 log "[5/9] Annotating regions..."
-ANNOTATED_PARQUET="$OUT_DIR/annotated.parquet"
 log "Mapping eCpG and Gene coordinates to determine regional categories (e.g., CIS, TRANS)."
 log "Input Parquet: $MERGED_PARQUET, Output Parquet: $ANNOTATED_PARQUET"
 python3 tools/assignRegionToEcpg_parquet.py -d "$MERGED_PARQUET" -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" -o "$ANNOTATED_PARQUET"
+fi
+
+if [ "$START_STAGE" == "precise_p" ]; then EXECUTE=1; fi
 
 # Stage 6: Precise P-value recalculation
+if [ $EXECUTE -eq 1 ]; then
 log "[6/9] Recalculating precise p-values..."
-RECALC_PARQUET="$OUT_DIR/annotated_pcalc.parquet"
 log "Calculating high-precision p-values using DF=$DF."
 log "Input Parquet: $ANNOTATED_PARQUET, Output Parquet: $RECALC_PARQUET"
 python3 tools/recalculate_pvalues_parquet.py "$ANNOTATED_PARQUET" --df "$DF" --output-file "$RECALC_PARQUET"
+fi
+
+if [ "$START_STAGE" == "summarize" ]; then EXECUTE=1; fi
 
 # Stage 7: Summarize & FDR
+if [ $EXECUTE -eq 1 ]; then
 log "[7/9] Calculating FDR and summarizing..."
-SUMMARIZED_PARQUET="$OUT_DIR/summarized.parquet"
 log "Estimating global Benjamini-Hochberg FDR based on TOTAL_TESTS=$TOTAL_TESTS."
 log "Generating diagnostic plots (QQ, Histogram, Saliency)."
 log "Input Parquet: $RECALC_PARQUET, Output Parquet: $SUMMARIZED_PARQUET"
@@ -281,19 +347,27 @@ python3 tools/summarizeOutput_parquet.py --main-file "$RECALC_PARQUET" --reservo
 # Ensure plots are created in the right folder, but for now they go to CWD based on tool
 log "Moving generated plots to $OUT_DIR..."
 mv p_value_histogram.png qq_plot.png saliency_profile_top50.png "$OUT_DIR/" 2>/dev/null || true
+fi
+
+if [ "$START_STAGE" == "boot_list" ]; then EXECUTE=1; fi
 
 # Stage 8: Bootstrap List creation
+if [ $EXECUTE -eq 1 ]; then
 log "[8/9] Creating Bootstrap List..."
-BOOTSTRAP_LIST="$OUT_DIR/bootstrap_list.csv"
 log "Identifying top hits (ranked by p-value) to be evaluated via bootstrapping."
 log "Input Parquet: $SUMMARIZED_PARQUET, Output List: $BOOTSTRAP_LIST"
 python3 tools/createBootstrapList.py --input "$SUMMARIZED_PARQUET" --output "$BOOTSTRAP_LIST" --rank-by p-value
+fi
+
+if [ "$START_STAGE" == "bootstrap" ]; then EXECUTE=1; fi
 
 # Stage 9: Bootstrap evaluation
+if [ $EXECUTE -eq 1 ]; then
 log "[9/9] Bootstrapping top hits..."
 log "Running bootstrap analysis on the top candidates to validate association robustness."
 log "Pairs File: $BOOTSTRAP_LIST, Master Parquet: $SUMMARIZED_PARQUET"
 python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 100 --bootstrap-batch-size 10 --compute-ig
+fi
 
 log "======================================"
 log "Pipeline completed successfully!"
