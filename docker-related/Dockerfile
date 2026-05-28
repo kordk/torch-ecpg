@@ -1,22 +1,95 @@
-#FROM python:3.13.0a2-bookworm
-FROM python:3.10.13-bullseye
-#FROM 3.10.13-alpine3.19
-WORKDIR /usr/src/app
-COPY ./proj/torch-ecpg/requirements.txt .
-COPY ./proj/torch-ecpg/setup.py .
-COPY ./proj/torch-ecpg/README.md .
-COPY tecpg .
-RUN pip config --user set global.progress_bar off
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-COPY ./proj .
-RUN pip install .
+# Base Image
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS builder
 
+# Prevent interactive prompts
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install builder system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    software-properties-common \
+    dirmngr \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add CRAN apt repository for R 4.x
+RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc \
+    && add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    r-base \
+    r-base-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Upgrade pip and install PyTorch with cu118
+RUN pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Copy and install python dependencies
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy and install R dependencies
+COPY tools/install_dependencies.R tools/
+RUN Rscript tools/install_dependencies.R
+
+# Install source package
+COPY . .
+RUN pip3 install --no-cache-dir .
+
+# Verify R installations in builder
+RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
+
+
+# Runtime Stage
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS runtime
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install runtime system dependencies and R
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    software-properties-common \
+    dirmngr \
+    wget \
+    curl \
+    coreutils \
+    gzip \
+    && wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc \
+    && add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    r-base \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy Python packages
+COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy R packages
+COPY --from=builder /usr/local/lib/R/site-library /usr/local/lib/R/site-library
+
+# Copy application files
 COPY . .
 
-ENV PYTHONPATH "/usr/src/app/torch-ecpg:${PYTHONPATH}"
+# Verify fa2 imported correctly in runtime
+RUN python3 -c "import fa2"
 
-CMD [ "python", "./tecpg" ]
+# Create /work directory for volume mount
+RUN mkdir -p /work
+WORKDIR /work
 
+# Ensure Python path includes /app
+ENV PYTHONPATH="/app:\${PYTHONPATH}"
 
+# Entrypoint setup
+CMD ["python3", "-m", "tecpg"]
