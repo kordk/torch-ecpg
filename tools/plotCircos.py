@@ -166,7 +166,20 @@ def load_and_validate_data(filepath, valid_chroms):
         for _, row in missing_df.iterrows():
             mt_name = row['mt_id'] if has_mt_id else "UNKNOWN_CPG"
             gt_name = row['gt_id'] if has_gt_id else "UNKNOWN_GENE"
-            print(f"Excluding pair: CpG={mt_name}, Gene={gt_name}")
+
+            reasons = []
+            if pd.isna(row['mt_chromStart']) or row['mt_chrom'] == 'chrnan' or row['mt_chrom'] == 'chrNone':
+                reasons.append("Missing/Invalid Methylation Coordinates")
+            elif row['mt_chrom'] not in valid_chroms:
+                reasons.append(f"Methylation Chromosome '{row['mt_chrom']}' not in Cytoband")
+
+            if pd.isna(row['gt_chromStart']) or row['gt_chrom'] == 'chrnan' or row['gt_chrom'] == 'chrNone':
+                reasons.append("Missing/Invalid Gene Coordinates")
+            elif row['gt_chrom'] not in valid_chroms:
+                reasons.append(f"Gene Chromosome '{row['gt_chrom']}' not in Cytoband")
+
+            reason_str = ", ".join(reasons)
+            print(f"Excluding pair: CpG={mt_name}, Gene={gt_name} (Reason: {reason_str})")
 
         unique_cpgs = missing_df['mt_id'].nunique() if has_mt_id else 0
         unique_genes = missing_df['gt_id'].nunique() if has_gt_id else 0
