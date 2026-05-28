@@ -24,3 +24,5 @@ upsetplot
 networkx
 fa2
 umap-learn
+GEOparse
+pyliftover
