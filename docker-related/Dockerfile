@@ -74,10 +74,10 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy R packages from all potential library paths
-COPY --from=builder /usr/local/lib/R/site-library /usr/local/lib/R/site-library
-COPY --from=builder /usr/lib/R/site-library /usr/lib/R/site-library
-COPY --from=builder /usr/lib/R/library /usr/lib/R/library
+# Copy R packages resiliently (by copying parent dirs, ensuring existence)
+# Copying /usr/local/lib/R and /usr/lib/R covers all standard Debian/Ubuntu R installation paths
+COPY --from=builder /usr/local/lib/R /usr/local/lib/R
+COPY --from=builder /usr/lib/R /usr/lib/R
 
 # Verify R installations in runtime
 RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
