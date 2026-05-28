@@ -27,6 +27,11 @@ def load_data(args):
     logging.info(f"Loading nodes from {args.nodes}...")
     nodes = pd.read_csv(args.nodes)
 
+    num_edges = len(edges)
+    num_cpg_nodes = len(nodes[nodes['Node_Type'] == 'CpG']) if 'Node_Type' in nodes.columns else 0
+    num_gene_nodes = len(nodes[nodes['Node_Type'] == 'Gene']) if 'Node_Type' in nodes.columns else 0
+    logging.info(f"Network input: {num_edges} edges, {num_cpg_nodes} CpG nodes, {num_gene_nodes} gene nodes")
+
     if 'Region' not in nodes.columns:
         logging.error("Column 'Region' not found in nodes. Cannot proceed.")
         sys.exit(1)

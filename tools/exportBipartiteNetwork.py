@@ -13,6 +13,8 @@ def main():
     parser.add_argument("-o", "--out-prefix", default="cytoscape", help="Output prefix for generated CSV files (default: 'cytoscape').")
     parser.add_argument("--out-dir", default=".", help="Directory to save output files (default: current directory).")
     parser.add_argument("--top-k", type=int, default=10000, help="Number of top hits to include (default: 10000).")
+    parser.add_argument("--min-effect", type=float, default=None, help="Retain only edges where abs(mt_est) >= min-effect.")
+    parser.add_argument("--max-boot-p", type=float, default=None, help="Retain only edges where p_boot <= max-boot-p.")
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
@@ -46,19 +48,38 @@ def main():
         logging.info("Column 'region' not found. Defaulting Interaction to 'Undefined'.")
         df['region'] = 'Undefined'
 
-    # 4. Filter and sort by Saliency / mt_t
+    # 4. Apply Filters (Order: --min-effect, --max-boot-p, --top-k)
+    # The --top-k filter selects the top K from whatever survives the threshold filters.
+    # It ranks by mt_ig (Integrated Gradients score) descending, with fallback ranking by abs(mt_t).
+
+    total_edges = len(df)
+    logging.info(f"Total edges before filtering: {total_edges}")
+
+    if args.min_effect is not None:
+        df = df[df['mt_est'].abs() >= args.min_effect]
+        logging.info(f"Edges surviving --min-effect >= {args.min_effect}: {len(df)}")
+
+    if args.max_boot_p is not None:
+        if 'p_boot' in df.columns:
+            df = df[df['p_boot'] <= args.max_boot_p]
+            logging.info(f"Edges surviving --max-boot-p <= {args.max_boot_p}: {len(df)}")
+        else:
+            logging.warning("Column 'p_boot' not found in Parquet file. Skipping --max-boot-p filter.")
+
     if 'mt_ig' in df.columns:
-        logging.info("Sorting by mt_ig (Saliency) in descending order.")
+        logging.info(f"Sorting by mt_ig (Saliency) in descending order and taking top {args.top_k}.")
         df_top = df.sort_values(by='mt_ig', ascending=False).head(args.top_k)
         used_abs_t = False
     elif 'mt_t' in df.columns:
-        logging.info("Column 'mt_ig' not found. Falling back to sorting by absolute mt_t.")
+        logging.info(f"Column 'mt_ig' not found. Falling back to sorting by absolute mt_t and taking top {args.top_k}.")
         df['abs_t'] = df['mt_t'].abs()
         df_top = df.sort_values(by='abs_t', ascending=False).head(args.top_k)
         used_abs_t = True
     else:
         logging.error("Neither 'mt_ig' nor 'mt_t' column found in the Parquet file. Cannot perform top-K ranking.")
         sys.exit(1)
+
+    logging.info(f"Edges surviving --top-k filter: {len(df_top)}")
 
     # 5. Build Edge Table
     logging.info("Building Edge table...")
@@ -101,6 +122,7 @@ def main():
     out_nodes = os.path.join(args.out_dir, f"{args.out_prefix}_nodes.csv")
     nodes.to_csv(out_nodes, index=False)
 
+    logging.info(f"Final edge count written to output: {len(edges)}")
     logging.info(f"Exported {len(nodes)} nodes to {out_nodes} and {len(edges)} edges to {out_edges} for Cytoscape.")
 
 if __name__ == "__main__":
