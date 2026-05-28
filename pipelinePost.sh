@@ -37,7 +37,7 @@ mkdir -p "$PLOTS_DIR" "$NETWORK_DIR"
 log "[1/5] Checking for cytoBand.txt..."
 if [ ! -f "cytoBand.txt" ]; then
     log "cytoBand.txt not found. Downloading from UCSC..."
-    curl -O http://hgdownload.cse.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz
+    curl -O http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz
     gunzip -f cytoBand.txt.gz
     log "cytoBand.txt downloaded and extracted."
 else
