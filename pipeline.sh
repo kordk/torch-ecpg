@@ -162,8 +162,17 @@ else
         cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
         cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
         # For GTP, assuming the demo annots are used
-        cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6"
-        cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6"
+        if [ -f "demo/annoEPIC_comprehensive.hg19.bed6" ]; then
+            cp demo/annoEPIC_comprehensive.hg19.bed6 "$ANNOT_DIR/M.bed6"
+        else
+            cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6"
+        fi
+
+        if [ -f "demo/annoHT12_comprehensive.hg19.bed6" ]; then
+            cp demo/annoHT12_comprehensive.hg19.bed6 "$ANNOT_DIR/G.bed6"
+        else
+            cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6"
+        fi
         rmdir data
     elif [ "$DATASET" == "mesa" ]; then
         log "Downloading MESA data..."
@@ -174,8 +183,17 @@ else
         cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
         # For MESA, assuming appropriate demo annots are used if available
         # Or fall back to EPIC/HT12 for now
-        cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6" 2>/dev/null || true
-        cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6" 2>/dev/null || true
+        if [ -f "demo/annoEPIC_comprehensive.hg19.bed6" ]; then
+            cp demo/annoEPIC_comprehensive.hg19.bed6 "$ANNOT_DIR/M.bed6" 2>/dev/null || true
+        else
+            cp demo/annoEPIC.hg19.bed6 "$ANNOT_DIR/M.bed6" 2>/dev/null || true
+        fi
+
+        if [ -f "demo/annoHT12_comprehensive.hg19.bed6" ]; then
+            cp demo/annoHT12_comprehensive.hg19.bed6 "$ANNOT_DIR/G.bed6" 2>/dev/null || true
+        else
+            cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6" 2>/dev/null || true
+        fi
         rmdir data
     fi
 fi
