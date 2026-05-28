@@ -159,5 +159,101 @@ class TestExportCytoscape(unittest.TestCase):
         self.assertIn('Interaction', edges_df.columns)
         self.assertEqual(edges_df.iloc[0]['Interaction'], 'Undefined')
 
+    def test_min_effect_filter(self):
+        data = {
+            'mt_id': ['cpg1', 'cpg2', 'cpg3'],
+            'mt_chrom': ['chr1', 'chr1', 'chr1'],
+            'mt_chromStart': [100, 200, 300],
+            'mt_strand': ['+', '+', '+'],
+            'gt_id': ['geneA', 'geneB', 'geneC'],
+            'gt_chrom': ['chr1', 'chr1', 'chr1'],
+            'gt_chromStart': [500, 600, 700],
+            'gt_strand': ['+', '+', '+'],
+            'mt_est': [0.5, -0.3, 0.1],  # cpg3 should be filtered out by min_effect=0.2
+            'mt_p': [0.01, 0.05, 0.01],
+            'mt_ig': [1.5, 2.5, 3.5]
+        }
+        self.create_dummy_parquet(data, self.input_file)
+
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix, '--min-effect', '0.2']
+        with patch('sys.argv', test_args):
+            exportBipartiteNetwork.main()
+
+        edges_df = pd.read_csv(self.out_edges)
+        nodes_df = pd.read_csv(self.out_nodes)
+
+        self.assertEqual(len(edges_df), 2)
+        # Should contain cpg1 and cpg2, but not cpg3
+        sources = edges_df['Source'].tolist()
+        self.assertIn('cpg1', sources)
+        self.assertIn('cpg2', sources)
+        self.assertNotIn('cpg3', sources)
+
+        # Verify isolated node is excluded
+        node_ids = nodes_df['Node_ID'].tolist()
+        self.assertNotIn('cpg3', node_ids)
+        self.assertNotIn('geneC', node_ids)
+
+    def test_max_boot_p_filter(self):
+        data = {
+            'mt_id': ['cpg1', 'cpg2', 'cpg3'],
+            'mt_chrom': ['chr1', 'chr1', 'chr1'],
+            'mt_chromStart': [100, 200, 300],
+            'mt_strand': ['+', '+', '+'],
+            'gt_id': ['geneA', 'geneB', 'geneC'],
+            'gt_chrom': ['chr1', 'chr1', 'chr1'],
+            'gt_chromStart': [500, 600, 700],
+            'gt_strand': ['+', '+', '+'],
+            'mt_est': [0.5, -0.3, 0.1],
+            'mt_p': [0.01, 0.05, 0.01],
+            'p_boot': [0.01, 0.1, 0.05], # cpg2 should be filtered out by max_boot_p=0.05
+            'mt_ig': [1.5, 2.5, 3.5]
+        }
+        self.create_dummy_parquet(data, self.input_file)
+
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix, '--max-boot-p', '0.05']
+        with patch('sys.argv', test_args):
+            exportBipartiteNetwork.main()
+
+        edges_df = pd.read_csv(self.out_edges)
+        nodes_df = pd.read_csv(self.out_nodes)
+
+        self.assertEqual(len(edges_df), 2)
+        sources = edges_df['Source'].tolist()
+        self.assertIn('cpg1', sources)
+        self.assertIn('cpg3', sources)
+        self.assertNotIn('cpg2', sources)
+
+        # Verify isolated node is excluded
+        node_ids = nodes_df['Node_ID'].tolist()
+        self.assertNotIn('cpg2', node_ids)
+        self.assertNotIn('geneB', node_ids)
+
+    def test_max_boot_p_filter_missing_column(self):
+        data = {
+            'mt_id': ['cpg1', 'cpg2', 'cpg3'],
+            'mt_chrom': ['chr1', 'chr1', 'chr1'],
+            'mt_chromStart': [100, 200, 300],
+            'mt_strand': ['+', '+', '+'],
+            'gt_id': ['geneA', 'geneB', 'geneC'],
+            'gt_chrom': ['chr1', 'chr1', 'chr1'],
+            'gt_chromStart': [500, 600, 700],
+            'gt_strand': ['+', '+', '+'],
+            'mt_est': [0.5, -0.3, 0.1],
+            'mt_p': [0.01, 0.05, 0.01],
+            'mt_ig': [1.5, 2.5, 3.5]
+            # No p_boot column
+        }
+        self.create_dummy_parquet(data, self.input_file)
+
+        test_args = ['exportBipartiteNetwork.py', '-i', self.input_file, '-o', self.out_prefix, '--max-boot-p', '0.05']
+        with patch('sys.argv', test_args):
+            exportBipartiteNetwork.main()
+
+        edges_df = pd.read_csv(self.out_edges)
+
+        # All 3 edges should remain because missing p_boot causes the filter to be skipped
+        self.assertEqual(len(edges_df), 3)
+
 if __name__ == '__main__':
     unittest.main()

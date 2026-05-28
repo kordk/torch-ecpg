@@ -20,6 +20,10 @@ PLOTS_DIR="${OUT_DIR}/plots"
 NETWORK_DIR="${OUT_DIR}/network"
 PARQUET_FILE="${OUT_DIR}/bootstrap_merged.parquet"
 
+# Network export filtering defaults
+NETWORK_TOP_K=500
+NETWORK_MAX_BOOT_P=0.05
+
 log "======================================"
 log "Starting Pipeline Post-Processing for DATASET: ${DATASET}"
 log "======================================"
@@ -54,7 +58,12 @@ python3 -u tools/visualizeFindings.py --all -m "$DATA_DIR/M.csv" -g "$DATA_DIR/G
 
 # Stage 4: Run exportBipartiteNetwork.py to generate cytoscape nodes/edges
 log "[4/5] Generating Cytoscape network files..."
-python3 -u tools/exportBipartiteNetwork.py -i "$PARQUET_FILE" -o cytoscape --out-dir "$NETWORK_DIR"
+python3 -u tools/exportBipartiteNetwork.py \
+    -i "$PARQUET_FILE" \
+    -o cytoscape \
+    --out-dir "$NETWORK_DIR" \
+    --top-k "$NETWORK_TOP_K" \
+    --max-boot-p "$NETWORK_MAX_BOOT_P"
 
 # Stage 5: Run visualizeBipartiteNetwork.py
 log "[5/5] Running visualizeBipartiteNetwork.py..."
