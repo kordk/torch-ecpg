@@ -2,6 +2,24 @@ import argparse
 import os
 import sys
 
+_LOG_FILE = None
+
+def setup_logging(out_dir):
+    global _LOG_FILE
+    os.makedirs(out_dir, exist_ok=True)
+    _LOG_FILE = os.path.join(out_dir, "circos_diagnostic.log")
+    with open(_LOG_FILE, 'w') as f:
+        pass
+
+def cprint(*args, **kwargs):
+    msg = " ".join(map(str, args))
+    import builtins
+    builtins.print(*args, **kwargs)
+    if _LOG_FILE is not None:
+        with open(_LOG_FILE, 'a') as f:
+            f.write(msg + '\n')
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate a publication-quality Circos plot visualizing global eQTM architecture.",
@@ -106,13 +124,13 @@ _patch_pycircos()
 
 
 def load_and_validate_data(filepath, valid_chroms):
-    print(f"Loading data from {filepath}...")
+    cprint(f"Loading data from {filepath}...")
 
     # We use pq.ParquetFile to inspect schema without loading full file
     try:
         parquet_file = pq.ParquetFile(filepath)
     except Exception as e:
-        print(f"Error reading Parquet file: {e}")
+        cprint(f"Error reading Parquet file: {e}")
         sys.exit(1)
 
     required_cols = ['mt_chrom', 'mt_chromStart', 'gt_chrom', 'gt_chromStart', 'mt_est', 'mt_ig']
@@ -120,11 +138,11 @@ def load_and_validate_data(filepath, valid_chroms):
 
     missing_cols = [col for col in required_cols if col not in schema_cols]
     if missing_cols:
-        print(f"Error: Missing required columns in input Parquet file: {', '.join(missing_cols)}")
-        print(f"The input must contain all of: {', '.join(required_cols)}")
+        cprint(f"Error: Missing required columns in input Parquet file: {', '.join(missing_cols)}")
+        cprint(f"The input must contain all of: {', '.join(required_cols)}")
         sys.exit(1)
 
-    print(f"Validation passed. All required columns present.")
+    cprint(f"Validation passed. All required columns present.")
 
     # Load required columns + mt_id for density calculations
     # checking if mt_id is present
@@ -136,6 +154,38 @@ def load_and_validate_data(filepath, valid_chroms):
 
     # Load into pandas dataframe
     df = pd.read_parquet(filepath, columns=cols_to_load)
+
+    # --- RAW DIAGNOSTICS LOGGING ---
+    cprint("=== RAW DIAGNOSTICS: Parquet Input Data ===")
+
+    diagnostic_cols = ['mt_chrom', 'gt_chrom']
+    if 'mt_id' in df.columns:
+        diagnostic_cols.append('mt_id')
+    if 'gt_id' in df.columns:
+        diagnostic_cols.append('gt_id')
+
+    for col in diagnostic_cols:
+        cprint(f"  Column: {col} | dtype: {df[col].dtype}")
+        cprint(f"  First 5 values: {df[col].head(5).tolist()}")
+    cprint("===========================================")
+    # -------------------------------
+
+    # --- CHROMOSOME FORMAT SUMMARY ---
+    mt_chroms_raw = df['mt_chrom'].astype(str)
+    gt_chroms_raw = df['gt_chrom'].astype(str)
+
+    mt_has_chr = mt_chroms_raw.str.startswith('chr').sum()
+    mt_no_chr = len(mt_chroms_raw) - mt_has_chr
+    gt_has_chr = gt_chroms_raw.str.startswith('chr').sum()
+    gt_no_chr = len(gt_chroms_raw) - gt_has_chr
+
+    cprint("=== CHROMOSOME FORMAT SUMMARY: Parquet Input Data ===")
+    cprint(f"  mt_chrom: {mt_has_chr} with 'chr' prefix, {mt_no_chr} without")
+    cprint(f"  gt_chrom: {gt_has_chr} with 'chr' prefix, {gt_no_chr} without")
+    if (mt_has_chr > 0 and mt_no_chr > 0) or (gt_has_chr > 0 and gt_no_chr > 0):
+        cprint("  FLAG: Mixed chromosome formats detected in input data!")
+    cprint("=====================================================")
+    # ---------------------------------
 
     # We strictly cast chroms to str, and coords to int
     df['mt_chrom'] = df['mt_chrom'].astype(str)
@@ -156,12 +206,67 @@ def load_and_validate_data(filepath, valid_chroms):
 
     missing_mask = invalid_coord_mask_mt | invalid_coord_mask_gt | missing_chrom_mask_mt | missing_chrom_mask_gt
 
+    # --- PREFIX MATCH/FAIL RATE ANALYSIS ---
+    cprint("=== PREFIX MATCH/FAIL RATE ANALYSIS ===")
+
+    total_rows = len(df)
+
+    if 'mt_id' in df.columns:
+        mt_ids = df['mt_id'].astype(str)
+        # Classify CpG prefixes
+        is_cg = mt_ids.str.startswith('cg')
+        is_ch = mt_ids.str.startswith('ch.')
+        is_rs = mt_ids.str.startswith('rs')
+        is_other_mt = ~(is_cg | is_ch | is_rs)
+
+        cprint("Methylation (CpG) Prefix Stats:")
+        for prefix_name, mask in [('cg', is_cg), ('ch.', is_ch), ('rs', is_rs), ('other', is_other_mt)]:
+            count = mask.sum()
+            if count > 0:
+                fails = missing_mask[mask].sum()
+                matches = count - fails
+                fail_rate = (fails / count) * 100
+                cprint(f"  Prefix '{prefix_name}': {count} total | Matches: {matches} | Fails: {fails} ({fail_rate:.1f}% failure rate)")
+
+    if 'gt_id' in df.columns:
+        gt_ids = df['gt_id'].astype(str)
+        # Classify Gene ID prefixes
+        is_ilmn = gt_ids.str.startswith('ILMN_')
+        is_other_gt = ~is_ilmn
+
+        cprint("Gene ID Prefix Stats:")
+        for prefix_name, mask in [('ILMN_', is_ilmn), ('other', is_other_gt)]:
+            count = mask.sum()
+            if count > 0:
+                fails = missing_mask[mask].sum()
+                matches = count - fails
+                fail_rate = (fails / count) * 100
+                cprint(f"  Prefix '{prefix_name}': {count} total | Matches: {matches} | Fails: {fails} ({fail_rate:.1f}% failure rate)")
+
+    cprint("=======================================")
+    # ---------------------------------------
+
     if missing_mask.any():
         missing_df = df[missing_mask]
-        print(f"Warning: Found {missing_mask.sum()} rows with missing or invalid coordinates, or chromosomes missing from cytoband annotation file.")
+        cprint(f"Warning: Found {missing_mask.sum()} rows with missing or invalid coordinates, or chromosomes missing from cytoband annotation file.")
 
         has_mt_id = 'mt_id' in df.columns
         has_gt_id = 'gt_id' in df.columns
+
+        # --- ENHANCED FAILURE EXAMPLES LOGGING ---
+        cprint("=== EXAMPLE FAILURES ===")
+        num_examples = min(5, len(missing_df))
+        cprint(f"Showing {num_examples} example rows that failed to match:")
+        for idx, (_, row) in enumerate(missing_df.head(num_examples).iterrows()):
+            mt_val = row['mt_id'] if has_mt_id else 'N/A'
+            gt_val = row['gt_id'] if has_gt_id else 'N/A'
+            mt_chr = row['mt_chrom']
+            gt_chr = row['gt_chrom']
+            mt_start = row['mt_chromStart']
+            gt_start = row['gt_chromStart']
+            cprint(f"  Example {idx+1}: mt_id={mt_val}, gt_id={gt_val} | mt_chrom={mt_chr}, gt_chrom={gt_chr} | mt_chromStart={mt_start}, gt_chromStart={gt_start}")
+        cprint("========================")
+        # -----------------------------------------
 
         for _, row in missing_df.iterrows():
             mt_name = row['mt_id'] if has_mt_id else "UNKNOWN_CPG"
@@ -179,7 +284,7 @@ def load_and_validate_data(filepath, valid_chroms):
                 reasons.append(f"Gene Chromosome '{row['gt_chrom']}' not in Cytoband")
 
             reason_str = ", ".join(reasons)
-            print(f"Excluding pair: CpG={mt_name}, Gene={gt_name} (Reason: {reason_str})")
+            cprint(f"Excluding pair: CpG={mt_name}, Gene={gt_name} (Reason: {reason_str})")
 
         unique_cpgs = missing_df['mt_id'].nunique() if has_mt_id else 0
         unique_genes = missing_df['gt_id'].nunique() if has_gt_id else 0
@@ -189,17 +294,19 @@ def load_and_validate_data(filepath, valid_chroms):
         reason_mt_chrom_not_in_cyto = missing_chrom_mask_mt.sum()
         reason_gt_chrom_not_in_cyto = missing_chrom_mask_gt.sum()
 
-        print(f"Summary of excluded missing data:")
-        print(f"  Total pairs excluded: {len(missing_df)}")
-        print(f"  Unique CpGs excluded: {unique_cpgs}")
-        print(f"  Unique genes excluded: {unique_genes}")
-        print(f"Breakdown of exclusion reasons (a pair may match multiple):")
-        print(f"  Missing/Invalid Methylation Coordinates: {reason_missing_mt_coords}")
-        print(f"  Missing/Invalid Gene Coordinates: {reason_missing_gt_coords}")
-        print(f"  Methylation Chromosome not in Cytoband: {reason_mt_chrom_not_in_cyto}")
-        print(f"  Gene Chromosome not in Cytoband: {reason_gt_chrom_not_in_cyto}")
+        cprint(f"Summary of excluded missing data:")
+        cprint(f"  Total pairs excluded: {len(missing_df)} (Retained: {len(df) - len(missing_df)})")
+        cprint(f"  Unique CpGs excluded: {unique_cpgs}")
+        cprint(f"  Unique genes excluded: {unique_genes}")
+        cprint(f"Breakdown of exclusion reasons (a pair may match multiple):")
+        cprint(f"  Missing/Invalid Methylation Coordinates: {reason_missing_mt_coords}")
+        cprint(f"  Missing/Invalid Gene Coordinates: {reason_missing_gt_coords}")
+        cprint(f"  Methylation Chromosome not in Cytoband: {reason_mt_chrom_not_in_cyto}")
+        cprint(f"  Gene Chromosome not in Cytoband: {reason_gt_chrom_not_in_cyto}")
 
         df = df[~missing_mask].copy()
+    else:
+        cprint(f"No missing/invalid data found. Retained all {len(df)} rows.")
 
     df['mt_chromStart'] = df['mt_chromStart'].astype(int)
     df['gt_chromStart'] = df['gt_chromStart'].astype(int)
@@ -207,25 +314,25 @@ def load_and_validate_data(filepath, valid_chroms):
     return df
 
 def filter_data(df, top_n, top_n_trans):
-    print(f"Applying filters...")
+    cprint(f"Applying filters...")
 
     # 1. Top Saliency Filter
     # Sort by mt_ig descending
     df_sorted = df.sort_values(by='mt_ig', ascending=False)
 
     df_top_saliency = df_sorted.head(top_n).copy()
-    print(f"Top Saliency dataset filtered to top {len(df_top_saliency)} rows by mt_ig.")
+    cprint(f"Top Saliency dataset filtered to top {len(df_top_saliency)} rows by mt_ig.")
 
     # 2. Trans-Only Focus Filter
     # Filter for trans-chromosomal links (mt_chrom != gt_chrom)
     df_trans = df_sorted[df_sorted['mt_chrom'] != df_sorted['gt_chrom']]
     df_trans_only = df_trans.head(top_n_trans).copy()
-    print(f"Trans-Only Focus dataset filtered to top {len(df_trans_only)} trans rows by mt_ig.")
+    cprint(f"Trans-Only Focus dataset filtered to top {len(df_trans_only)} trans rows by mt_ig.")
 
     return df_top_saliency, df_trans_only
 
 def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
-    print(f"Generating Circos plot: {title}")
+    cprint(f"Generating Circos plot: {title}")
 
     # Read cytoband data
     try:
@@ -233,8 +340,27 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
         cytoband_df = pd.read_csv(cytoband_file, sep='\t', header=None,
                                   names=['chrom', 'chromStart', 'chromEnd', 'name', 'gieStain'])
     except Exception as e:
-        print(f"Error reading cytoband file: {e}")
+        cprint(f"Error reading cytoband file: {e}")
         sys.exit(1)
+
+    # --- RAW DIAGNOSTICS LOGGING ---
+    cprint("=== RAW DIAGNOSTICS: Cytoband Reference Data ===")
+    cprint(f"  Column: chrom | dtype: {cytoband_df['chrom'].dtype}")
+    cprint(f"  First 5 values: {cytoband_df['chrom'].head(5).tolist()}")
+    cprint("================================================")
+    # -------------------------------
+
+    # --- CHROMOSOME FORMAT SUMMARY ---
+    cyto_chroms_raw = cytoband_df['chrom'].astype(str)
+    cyto_has_chr = cyto_chroms_raw.str.startswith('chr').sum()
+    cyto_no_chr = len(cyto_chroms_raw) - cyto_has_chr
+
+    cprint("=== CHROMOSOME FORMAT SUMMARY: Cytoband Reference Data ===")
+    cprint(f"  chrom: {cyto_has_chr} with 'chr' prefix, {cyto_no_chr} without")
+    if cyto_has_chr > 0 and cyto_no_chr > 0:
+        cprint("  FLAG: Mixed chromosome formats detected in cytoband data!")
+    cprint("==========================================================")
+    # ---------------------------------
 
     # Standard chromosomes to include
     standard_chroms = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY", "chrM"]
@@ -251,7 +377,7 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
             chrom_lengths_dict[chrom] = max_len
 
     if not chrom_lengths_list:
-        print("Error: No standard chromosomes found in the cytoband file.")
+        cprint("Error: No standard chromosomes found in the cytoband file.")
         sys.exit(1)
 
     chrom_df = pd.DataFrame(chrom_lengths_list).set_index('id')
@@ -350,15 +476,15 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
                         ax.add_patch(poly)
 
     # Outer Density (All CpGs)
-    print("Computing global density track...")
+    cprint("Computing global density track...")
     add_density_track(df_all, r=0.88, color='#888888', track_name="Global Density", height=0.08)
 
     # Inner Density (Filtered CpGs)
-    print("Computing filtered density track...")
+    cprint("Computing filtered density track...")
     add_density_track(df_filtered, r=0.78, color='#E69F00', track_name="Filtered Density", height=0.08)
 
     # 3. Add Link Tracks (The Connections)
-    print("Drawing connection links...")
+    cprint("Drawing connection links...")
     # Scale linewidths linearly by mt_ig
     min_ig = df_filtered['mt_ig'].min()
     max_ig = df_filtered['mt_ig'].max()
@@ -409,7 +535,7 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
         circle.pax.add_patch(patch)
 
     # 4. Add Legend
-    print("Adding legend...")
+    cprint("Adding legend...")
     legend_elements = [
         mpatches.Patch(facecolor='#888888', label='Total Significant eQTM Density'),
         mpatches.Patch(facecolor='#E69F00', label='Top Saliency Density'),
@@ -425,7 +551,7 @@ def create_circos_plot(df_all, df_filtered, cytoband_file, out_path, title):
     legend._legend_box.align = "left"
 
     # 5. Save Plot
-    print(f"Saving plot to {out_path}...")
+    cprint(f"Saving plot to {out_path}...")
 
     ax.set_title(title, y=1.05, fontsize=16)
 
@@ -454,7 +580,8 @@ import atexit
 
 def main():
     args = parse_args()
-    print(f"Arguments parsed successfully: {args}")
+    setup_logging(args.out_dir)
+    cprint(f"Arguments parsed successfully: {args}")
 
     # Ensure output directory exists
     os.makedirs(args.out_dir, exist_ok=True)
@@ -464,8 +591,27 @@ def main():
         cytoband_df = pd.read_csv(args.cytoband, sep='\t', header=None,
                                   names=['chrom', 'chromStart', 'chromEnd', 'name', 'gieStain'])
     except Exception as e:
-        print(f"Error reading cytoband file: {e}")
+        cprint(f"Error reading cytoband file: {e}")
         sys.exit(1)
+
+    # --- RAW DIAGNOSTICS LOGGING ---
+    cprint("=== RAW DIAGNOSTICS: Cytoband Reference Data ===")
+    cprint(f"  Column: chrom | dtype: {cytoband_df['chrom'].dtype}")
+    cprint(f"  First 5 values: {cytoband_df['chrom'].head(5).tolist()}")
+    cprint("================================================")
+    # -------------------------------
+
+    # --- CHROMOSOME FORMAT SUMMARY ---
+    cyto_chroms_raw = cytoband_df['chrom'].astype(str)
+    cyto_has_chr = cyto_chroms_raw.str.startswith('chr').sum()
+    cyto_no_chr = len(cyto_chroms_raw) - cyto_has_chr
+
+    cprint("=== CHROMOSOME FORMAT SUMMARY: Cytoband Reference Data ===")
+    cprint(f"  chrom: {cyto_has_chr} with 'chr' prefix, {cyto_no_chr} without")
+    if cyto_has_chr > 0 and cyto_no_chr > 0:
+        cprint("  FLAG: Mixed chromosome formats detected in cytoband data!")
+    cprint("==========================================================")
+    # ---------------------------------
 
     # Standard chromosomes to include
     standard_chroms = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY", "chrM"]
@@ -475,7 +621,7 @@ def main():
     valid_chroms = set(filtered_cytoband_df['chrom'].unique())
 
     if not valid_chroms:
-        print("Error: No standard chromosomes found in the cytoband file.")
+        cprint("Error: No standard chromosomes found in the cytoband file.")
         sys.exit(1)
 
     # Create temporary cytoband file
@@ -490,7 +636,7 @@ def main():
     filtered_cytoband_df.to_csv(temp_cytoband_path, sep='\t', header=False, index=False)
 
     df = load_and_validate_data(args.input, valid_chroms)
-    print(f"Loaded {len(df)} records.")
+    cprint(f"Loaded {len(df)} records.")
 
     df_top_saliency, df_trans_only = filter_data(df, args.top_n, args.top_n_trans)
 
@@ -516,7 +662,7 @@ def main():
         title=f"Global eQTM Architecture: Top {len(df_trans_only)} Trans-Chromosomal Links"
     )
 
-    print("Done!")
+    cprint("Done!")
 
 if __name__ == "__main__":
     main()
