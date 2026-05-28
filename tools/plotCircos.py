@@ -20,7 +20,7 @@ def parse_args():
         required=True,
         help="Path to the cytoband (karyotype) file for drawing the genome perimeter.\n"
              "You can download this from UCSC Genome Browser, for example:\n"
-             "  curl -O http://hgdownload.cse.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz\n"
+             "  curl -O http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz\n"
              "  gunzip cytoBand.txt.gz\n"
              "Then provide the extracted cytoBand.txt file here."
     )
