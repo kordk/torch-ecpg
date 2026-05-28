@@ -1,0 +1,27 @@
+# Project Specific
+data_*
+output_*
+annot_*
+GTP/
+MESA/
+*/GTP/
+cytoBand.txt
+
+# Logs
+*.log
+
+# Data files at root
+/*.parquet
+/*.csv
+
+# Python/Environment
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Git
+.git/
+
+# Test data (Ensure test automation scripts reside outside the build context)
+test/

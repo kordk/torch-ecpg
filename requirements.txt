@@ -22,7 +22,10 @@ polars
 matplotlib-venn
 upsetplot
 networkx
-fa2
+fa2==1.1.2
 umap-learn
 GEOparse
 pyliftover
+jinja2==3.1.6
+patsy==1.0.2
+scikit-learn==1.7.2
