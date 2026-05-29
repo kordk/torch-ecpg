@@ -186,6 +186,9 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
     npskip = 0
     assigned_total = 0
 
+    missing_gene_ids = {}
+    missing_meth_ids = {}
+
     parquet_file = pq.ParquetFile(my_ecpgDataFile)
     writer = None
 
@@ -230,15 +233,19 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
 
             if not has_mt_annot:
                 if mt_id not in mH:
-                    logger.info(f"[assignRegion] Annotation missing - methylation: {nlp} {mt_id}")
+                    if mt_id not in missing_meth_ids:
+                        missing_meth_ids[mt_id] = "missing_id"
                 else:
-                    logger.info(f"[assignRegion] Annotation missing - methylation [chrom]: {nlp} {mt_id}")
+                    if mt_id not in missing_meth_ids:
+                        missing_meth_ids[mt_id] = "missing_chrom"
                 nemt += 1
             if not has_gt_annot:
                 if gt_id not in gH:
-                    logger.info(f"[assignRegion] Annotation missing - gene expression: {nlp} {gt_id}")
+                    if gt_id not in missing_gene_ids:
+                        missing_gene_ids[gt_id] = "missing_id"
                 else:
-                    logger.info(f"[assignRegion] Annotation missing - gene expression [chrom]: {nlp} {gt_id}")
+                    if gt_id not in missing_gene_ids:
+                        missing_gene_ids[gt_id] = "missing_chrom"
                 negx += 1
 
             if not has_mt_annot or not has_gt_annot:
@@ -444,6 +451,23 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
         # If no results matched, we still want to create an empty parquet file
         writer = pq.ParquetWriter(outFileName, schema)
         writer.close()
+
+    # Write missing annotation IDs to sidecar file
+    out_dir = os.path.dirname(outFileName)
+    if not out_dir:
+        out_dir = "."
+    sidecar_path = os.path.join(out_dir, "annotation_missing_ids.txt")
+
+    with open(sidecar_path, "w") as f:
+        f.write("type\tid\treason\n")
+        for g_id in sorted(missing_gene_ids.keys()):
+            f.write(f"gene\t{g_id}\t{missing_gene_ids[g_id]}\n")
+        for m_id in sorted(missing_meth_ids.keys()):
+            f.write(f"meth\t{m_id}\t{missing_meth_ids[m_id]}\n")
+
+    N_gene = len(missing_gene_ids)
+    N_meth = len(missing_meth_ids)
+    logger.info(f"[assignRegion] Annotation missing: {N_gene} unique genes, {N_meth} unique CpGs (full list -> {os.path.abspath(sidecar_path)})")
 
     logger.info(f"[assignRegion] eCpgs Processed: {nlp} Assigned: {assigned_total} Excluded (any): {ne}")
     logger.info(f"[assignRegion] eCpgs Excluded: p-value filter: {npvalx} p-value missing: {npskip} gx annotation: {negx} mt annotation: {nemt}")
