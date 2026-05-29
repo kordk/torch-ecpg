@@ -12,10 +12,17 @@ docker build -t tecpg-pipeline -f docker-related/Dockerfile .
 
 ## Running the Container
 
-The default command of the container acts as the `tecpg` CLI. You can mount a local directory for input data, intermediate files, and outputs. A typical invocation on a GPU-enabled host looks like:
+The container runs the `tecpg` CLI by default. Because it uses `CMD ["python3", "-m", "tecpg"]` without an `ENTRYPOINT`, you must provide the full command if you wish to override the default. You can mount a local directory for input data, intermediate files, and outputs.
+
+A typical invocation on a GPU-enabled host looks like:
 
 ```bash
-docker run --rm -it --gpus all -v /path/to/host/dir:/work tecpg-pipeline [tecpg_args...]
+docker run --rm -it --gpus all -v /path/to/host/dir:/work tecpg-pipeline python3 -m tecpg [tecpg_args...]
+```
+
+For example, to run the MLR module:
+```bash
+docker run --rm -it --gpus all -v /path/to/host/dir:/work tecpg-pipeline python3 -m tecpg run mlr ...
 ```
 
 To run a shell inside the container instead of the `tecpg` CLI:

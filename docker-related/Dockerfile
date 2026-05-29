@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc \
     && add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" \
     && apt-get update && apt-get install -y --no-install-recommends \
-    r-base \
-    r-base-dev \
+    r-base=4.4.1-1.2204.0 \
+    r-base-dev=4.4.1-1.2204.0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -57,16 +57,15 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    software-properties-common \
-    dirmngr \
     wget \
     curl \
     coreutils \
     gzip \
     && wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc \
-    && add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" \
+    && echo "deb https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" > /etc/apt/sources.list.d/cran.list \
+
     && apt-get update && apt-get install -y --no-install-recommends \
-    r-base \
+    r-base=4.4.1-1.2204.0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -75,8 +74,14 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy R packages
-COPY --from=builder /usr/local/lib/R/site-library /usr/local/lib/R/site-library
+# Copy R packages resiliently (by copying parent dirs, ensuring existence)
+# Copying /usr/local/lib/R and /usr/lib/R covers all standard Debian/Ubuntu R installation paths
+COPY --from=builder /usr/local/lib/R /usr/local/lib/R
+COPY --from=builder /usr/lib/R /usr/lib/R
+
+# Verify R installations in runtime
+RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
+
 
 # Copy application files
 COPY . .
@@ -88,8 +93,7 @@ RUN python3 -c "import fa2"
 RUN mkdir -p /work
 WORKDIR /work
 
-# Ensure Python path includes /app
-ENV PYTHONPATH="/app:\${PYTHONPATH}"
+# Rely on the pip-installed tecpg package in dist-packages; dropping PYTHONPATH=/app to avoid shadowing
 
 # Entrypoint setup
 CMD ["python3", "-m", "tecpg"]
