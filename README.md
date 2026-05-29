@@ -283,8 +283,22 @@ the flags explicitly there.
 and `--meth-loci-per-chunk` options no longer accept the `-g` / `-m`
 short forms (they collided with the top-level `--gene-file` /
 `--meth-file` short flags). Use the long forms exclusively for
-`tecpg run mlr`. The `data dummy` and `chunks` subcommands' own `-g`/`-m`
-short flags are unchanged.
+`tecpg run mlr`. Migration example — replace:
+
+```bash
+# old (pre-1.21.0-dev): no longer accepted
+tecpg run mlr --cis -g 10000 -m 10000
+```
+
+with the long forms:
+
+```bash
+# new (1.21.0-dev and later)
+tecpg run mlr --cis --gene-loci-per-chunk 10000 --meth-loci-per-chunk 10000
+```
+
+The `data dummy` and `chunks` subcommands' own `-g`/`-m` short flags are
+unchanged.
 
 ## Filtration
 
