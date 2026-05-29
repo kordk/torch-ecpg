@@ -8,7 +8,7 @@ def fetch_ucsc_illuminaProbes():
     print("Fetching UCSC illuminaProbes track for hg19...")
     url = "https://api.genome.ucsc.edu/getData/track?genome=hg19;track=illuminaProbes"
     try:
-        response = urllib.request.urlopen(url)
+        response = urllib.request.urlopen(url)  # nosec B310
         data = json.loads(response.read())
         return data
     except Exception as e:
