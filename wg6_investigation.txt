@@ -1,0 +1,68 @@
+=== Starting WG-6 Investigation ===
+Loading UCSC data from local cache...
+Parsed 44088 probes from UCSC illuminaProbes track.
+UCSC track coordinate convention: 0-based start, 1-based end (BED format).
+UCSC chromosome convention: 'chr1' (chr-prefixed).
+Total unique probes in combined V4+V3 universe: 57490
+Total unmapped probes in base pipeline: 10002
+Number of residual unmapped probes recovered by UCSC track: 8350
+Number of probes remaining unmapped even after UCSC: 1652
+
+--- Recovery Breakdown by Platform Origin ---
+  V4-only: 1872 recovered out of 4914 unmapped
+  Shared: 5894 recovered out of 4697 unmapped
+  V3-only: 584 recovered out of 391 unmapped
+
+--- Chromosome Distribution of UCSC-recovered Probes ---
+  chr1: 807
+  chrX: 614
+  chr5: 594
+  chr7: 529
+  chr2: 500
+  chr17: 430
+  chr9: 426
+  chr16: 424
+  chr4: 393
+  chr15: 376
+  chr10: 372
+  chr8: 343
+  chrY: 332
+  chr6: 299
+  chr3: 279
+  chr11: 259
+  chr12: 230
+  chr19: 193
+  chr13: 193
+  chr14: 186
+  chr22: 184
+  chr20: 124
+  chr18: 120
+  chr21: 100
+  chr19_gl000209_random: 13
+  chr4_gl000194_random: 5
+  chr1_gl000191_random: 5
+  chr17_gl000205_random: 4
+  chrUn_gl000212: 4
+  chrUn_gl000211: 3
+  chr7_gl000195_random: 3
+  chrUn_gl000218: 2
+  chr17_gl000204_random: 2
+  chr4_gl000193_random: 1
+  chr8_gl000197_random: 1
+
+--- Concordance Cross-Check (Re-Annotator vs UCSC) ---
+Probes present in both Base Pipeline and UCSC WG-6: 27349
+
+Offset Distribution (comparing start coordinates):
+  Exact match (0 bp): 12166
+  Within 1-25 bp: 12981
+  Within 26-1000 bp: 707
+  > 1000 bp: 923
+  Different chromosome: 572
+
+Example Disagreements (diff chr or >25bp diff):
+  ID: ILMN_1805177 | Base Pipeline: chr18:19088353.0 | UCSC: chr18:19088378
+  ID: ILMN_2246555 | Base Pipeline: chr3:195505315.0 | UCSC: chr3:195505670
+  ID: ILMN_1744784 | Base Pipeline: chr11:121059857.0 | UCSC: chr11:121060472
+  ID: ILMN_1669747 | Base Pipeline: chr9:35405026.0 | UCSC: chr9:35405063
+  ID: ILMN_1707128 | Base Pipeline: chr1:180910416.0 | UCSC: chr1:180913524

@@ -176,3 +176,8 @@ cython_debug/
 patch*.py
 test_data/
 test_out/
+ucsc_illuminaProbes.json
+ucsc_illuminaProbes.json
+ucsc_illuminaProbes.json
+temp_geo/
+temp_geo/
