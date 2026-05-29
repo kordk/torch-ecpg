@@ -356,6 +356,12 @@ This image from https://en.wikipedia.org/wiki/Student%27s_t-distribution shows t
 
 Currently, the README and the `tecpg ... --help` commands serve as documentation. Within the code, the function docstrings provide a lot of information about the function. The extensive type hints give added insight into the purpose of functions.
 
+For an end-to-end walkthrough of how eCpGs are filtered, prioritized, tested
+for enrichment, and visualized across the `pipeline.sh`/`pipelinePost.sh`
+workflow (regions, p-values, lstsq stats, precise p-values, FDR, bootstrap
+scores, network nodes/edges), see the living document
+[`docs/ecpg-filtering-prioritization.md`](docs/ecpg-filtering-prioritization.md).
+
 ## Demo datasets (GTP and MESA)
 
 Two real-world public datasets are bundled as turn-key demonstrations,
