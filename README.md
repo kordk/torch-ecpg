@@ -86,44 +86,62 @@ Options:
   recomputed from the on-disk artifacts so any stage can run on its own.
 
 The script creates per-dataset working directories `data_<dataset>/`,
-`annot_<dataset>/`, and `output_<dataset>/`, and runs the following stages:
+`annot_<dataset>/`, and `output_<dataset>/`, and runs the following
+stages. Each stage name (in `code`) matches the value accepted by
+`--start-stage`, so any individual step can be re-run in isolation.
 
-1. **Data preparation.** Downloads/generates the dataset, applies the EPIC
-   probe blacklist (`tools/generateEpicProbeBlacklist.sh` +
+1. **`prep` — Data preparation** *(stage `[1/9]`)*. Downloads or
+   generates the dataset (`tecpg data {dummy,gtp,mesa}`), copies the
+   default comprehensive BED6 annotations into `annot_<dataset>/`
+   (with a graceful fallback to the original `annoEPIC.hg19.bed6` /
+   `annoHT12.hg19.bed6`), applies the EPIC probe blacklist
+   (`tools/generateEpicProbeBlacklist.sh` +
    `tools/exclude_blacklisted_probes.py`) to produce `M.csv` from
-   `M_orig.csv`, and runs `tools/exploreOmics.py` to write QC plots and an
-   HTML report under `data_<dataset>/qc/`.
-2. **Immune cell-proportion estimation.** `tools/estimateCellProportions.sh`
-   runs EpiDISH (M-value aware) on real datasets to produce
-   `C_post_cellTypes.csv`. Skipped for `dummy`.
-3. **Residualization & PCA.** `tools/residualize_pca.sh` generates expression
-   and methylation principal components, which are merged with covariates to
-   produce the final `C.csv`.
-4. **eQTM mapping.** Runs `tecpg ... run mlr --mlr-method lstsq --<mapping>
-   --compute-ig`, with chunk sizes auto-selected by the CLI's `_auto_chunk_sizes`
-   (overridable by exporting `TECPG_M_CHUNK` / `TECPG_G_CHUNK`). Logs are
-   tee'd to `mlr_run_<dataset>.log`.
-5. **Merge chunked output.** `tools/mergeOutputs.py` combines per-chunk
-   files into a single `output_<dataset>/merged.parquet`; intermediate
-   chunk files are deleted.
-6. **Region annotation.** `tools/assignRegionToEcpg_parquet.py` annotates
-   each pair with `CIS`/`DISTAL`/`TRANS`/`PROMOTER`/`GENEBODY` and writes
-   `annotated.parquet`. Missing-annotation probe IDs are collected into a
-   sidecar `annotation_missing_ids.txt` (since `1.27.6-dev`).
-7. **High-precision p-values.** `tools/recalculate_pvalues_parquet.py`
-   replaces the normal-CDF approximation with Student's-t p-values using the
-   degrees of freedom derived from `C.csv`, writing `annotated_pcalc.parquet`.
-8. **FDR and summary.** `tools/summarizeOutput_parquet.py` computes a global
-   Benjamini–Hochberg FDR (using `TOTAL_TESTS` dynamically extracted from the
-   `mlr` log), writes `summarized.parquet`, and emits QQ, histogram, and
-   saliency diagnostic plots.
-9. **Bootstrap candidate list.** `tools/createBootstrapList.py` selects the
-   top hits (ranked by p-value) for bootstrapping into
-   `bootstrap_list.csv`.
-10. **Bootstrap evaluation.** Runs `tecpg ... run mlr --mlr-method
-    lstsq_bootstrap --pairs-file ... --master-parquet ...
-    --bootstrap-iterations 100 --bootstrap-batch-size 10 --compute-ig` to
-    attach empirical bootstrap p-values to the top candidates and write
+   `M_orig.csv`, and runs `tools/exploreOmics.py` to write QC plots
+   and an HTML report under `data_<dataset>/qc/`.
+2. **`cell_prop` — Immune cell-proportion estimation** *(stage
+   `[1.5/9]`)*. `tools/estimateCellProportions.sh` runs EpiDISH
+   (M-value aware) on real datasets to produce
+   `C_post_cellTypes.csv`. Skipped for `dummy` (random noise causes
+   singular fits); `C_orig.csv` is copied through instead.
+3. **`pca` — Residualization & PCA** *(stage `[2/9]`)*.
+   `tools/residualize_pca.sh` generates expression and methylation
+   principal components, which are merged with the cell-proportion
+   covariates to produce the final `C.csv`. Degrees of freedom
+   (`DF = SAMPLES − COVARS − 2`) are recomputed from `C.csv` for use
+   by the precise-p-value stage.
+4. **`map` — eQTM mapping** *(stage `[3/9]`)*. Runs `tecpg ... run
+   mlr --mlr-method lstsq --<mapping> --compute-ig`, with chunk sizes
+   auto-selected by the CLI's `_auto_chunk_sizes` (overridable by
+   exporting `TECPG_M_CHUNK` / `TECPG_G_CHUNK`). Logs are tee'd to
+   `mlr_run_<dataset>.log` and `TOTAL_TESTS` is extracted from that
+   log for downstream FDR.
+5. **`merge` — Merge chunked output** *(stage `[4/9]`)*.
+   `tools/mergeOutputs.py` combines per-chunk files into a single
+   `output_<dataset>/merged.parquet`; intermediate chunk files are
+   deleted.
+6. **`annotate` — Region annotation** *(stage `[5/9]`)*.
+   `tools/assignRegionToEcpg_parquet.py` annotates each pair with
+   `CIS`/`DISTAL`/`TRANS`/`PROMOTER`/`GENEBODY` and writes
+   `annotated.parquet`. Missing-annotation probe IDs are collected
+   into a sidecar `annotation_missing_ids.txt` (since `1.27.6-dev`).
+7. **`precise_p` — High-precision p-values** *(stage `[6/9]`)*.
+   `tools/recalculate_pvalues_parquet.py` replaces the normal-CDF
+   approximation with Student's-t p-values using the degrees of
+   freedom derived from `C.csv`, writing `annotated_pcalc.parquet`.
+8. **`summarize` — FDR and summary** *(stage `[7/9]`)*.
+   `tools/summarizeOutput_parquet.py` computes a global
+   Benjamini–Hochberg FDR (using `TOTAL_TESTS` dynamically extracted
+   from the `mlr` log), writes `summarized.parquet`, and emits QQ,
+   histogram, and saliency diagnostic plots into `output_<dataset>/`.
+9. **`boot_list` — Bootstrap candidate list** *(stage `[8/9]`)*.
+   `tools/createBootstrapList.py` selects the top hits (ranked by
+   p-value) for bootstrapping into `bootstrap_list.csv`.
+10. **`bootstrap` — Bootstrap evaluation** *(stage `[9/9]`)*. Runs
+    `tecpg ... run mlr --mlr-method lstsq_bootstrap --pairs-file ...
+    --master-parquet ... --bootstrap-iterations 100
+    --bootstrap-batch-size 10 --compute-ig` to attach empirical
+    bootstrap p-values to the top candidates and write
     `bootstrap_merged.parquet`.
 
 The annotation files used in stage 1 default to the comprehensive BED6
@@ -218,12 +236,11 @@ X       24072640        24072640        cg09835024      0       -
 9       131463936       131463936       cg14361672      0       +
 17      80159506        80159506        cg01763666      0       +
 ```
-Example data for evaluation can be created with tecpg:
+Example data for evaluation can be created or downloaded with tecpg:
 ```bash
 tecpg data --help
 ```
 ```
-[INFO] CUDA GPU detected. This device supports CUDA.
 Usage: tecpg data [OPTIONS] COMMAND [ARGS]...
 
   Base group for data management.
@@ -234,7 +251,11 @@ Options:
 Commands:
   dummy  Generates dummy data.
   gtp    Downloads and extracts GTP data.
+  mesa   Downloads and extracts MESA data.
 ```
+
+See the *Demo datasets (GTP and MESA)* section below for background on
+the two real-world demo datasets and where they come from.
 
 ## Output
 
@@ -335,124 +356,104 @@ This image from https://en.wikipedia.org/wiki/Student%27s_t-distribution shows t
 
 Currently, the README and the `tecpg ... --help` commands serve as documentation. Within the code, the function docstrings provide a lot of information about the function. The extensive type hints give added insight into the purpose of functions.
 
+## Demo datasets (GTP and MESA)
+
+Two real-world public datasets are bundled as turn-key demonstrations,
+in addition to the synthetic `dummy` dataset used for smoke tests. Both
+are downloaded directly from GEO by the `tecpg data` sub-commands and
+are the same datasets used by Kennedy et al. *BMC Genomics* (2018)
+**19:476** (`10.1186/s12864-018-4842-3`), whose published eCpG–transcript
+pairs are automatically downloaded alongside the raw matrices for use as
+a benchmark reference list.
+
+* **GTP — Grady Trauma Project** (`tecpg data gtp`,
+  `./pipeline.sh --dataset gtp`). A study of *n ≈ 340* primarily
+  African-American adults recruited from urban primary-care clinics in
+  Atlanta, GA, designed to characterize the genetic and epigenetic
+  correlates of trauma exposure and PTSD. Whole-blood DNA methylation
+  was assayed on the Illumina HumanMethylation450 BeadChip (GEO
+  accession **GSE72680**, ~349k CpG loci) and gene expression on the
+  Illumina HumanHT-12 v4 BeadChip (GEO accession **GSE58137**,
+  ~39k expression probes). The matched Kennedy 2018 eCpG list is
+  pulled from
+  `MOESM1_ESM.txt` of the supplementary materials.
+
+* **MESA — Multi-Ethnic Study of Atherosclerosis** (`tecpg data mesa`,
+  `./pipeline.sh --dataset mesa`). A multi-site, multi-ethnic
+  longitudinal cohort focused on the subclinical-to-clinical
+  progression of cardiovascular disease. CD14+ monocyte DNA
+  methylation was assayed on the Illumina HumanMethylation450 BeadChip
+  (GEO accession **GSE56046**) and matching gene expression on the
+  Illumina HumanHT-12 v4 BeadChip (GEO accession **GSE56045**), giving
+  a several-hundred-sample paired methylation/expression cohort. The
+  matched Kennedy 2018 eCpG list is pulled from `MOESM2_ESM.txt`.
+
+Both datasets share the same downstream array combination
+(HumanMethylation450 + HumanHT-12 v4), so the comprehensive BED6
+annotation files shipped under `demo/` apply unchanged to either, and
+`pipeline.sh` wires up identical processing for `--dataset gtp` and
+`--dataset mesa` (data prep → EpiDISH cell proportions → residualized
+PCA → MLR + IG → merge → region annotation → precise p-values →
+BH-FDR / diagnostics → bootstrap candidate list → bootstrap
+evaluation).
+
 ## Demonstration
 
-Here is a demonstration of tecpg using real data publicly available from the n=340 participants from the Grady Trauma Project (GTP) (Gene Expression Omnibus (GEO) accession numbers GSE72680, GSE58137). The participants were assayed using the Illumina HumanMethylation450 (n=349,220 CpG loci) and HumanHT-12 (n=39,353 expression probes) arrays.
-
-1. Create the evaluation directory
-```bash
-mkdir test; cd test
-```
-
-2. Download and prepare the GTP example dataset
-```bash
-tecpg data gtp
-```
-```
-[INFO] CUDA GPU detected. This device supports CUDA.
-Are you sure you want to overwrite the data directory? [y/N]: y
-[INFO] Creating directory /home/kord-test/proj/torch-ecpg/eval/GTP...
-[INFO] Removing directory /home/kord-test/proj/torch-ecpg/eval/GTP...
-[INFO] Creating directory /home/kord-test/proj/torch-ecpg/eval/GTP...
-[INFO] Downloading GTP raw data (this could take a very long time)
-[INFO] Downloading 4 files...
-[INFOTIMER] Downloading 1/4: CovariateMatrix.txt.gz...
-[INFOTIMER] Downloaded in 0.0631 seconds
-[INFOTIMER] Downloading 2/4: MethylationBetaValues.tsv.gz…
-[INFO] Reading 3 csv files...
-[INFOTIMER] Reading 1/3: MethylationBetaValues.tsv.gz
-[INFO] Reading csv file /home/kord-test/proj/torch-ecpg/test/GTP/MethylationBetaValues.tsv.gz with separator [tab]
-[INFOTIMER] Read 1/3 in 105.2349 seconds
-[INFOTIMER] Reading 2/3: GeneExpressionValues_1.tsv.gz
-[INFO] Reading csv file /home/kord-test/proj/torch-ecpg/test/GTP/GeneExpressionValues_1.tsv.gz with separator [tab]
-[INFOTIMER] Read 2/3 in 1.8076 seconds
-[INFOTIMER] Reading 3/3: GeneExpressionValues_2.tsv.gz
-[INFO] Reading csv file /home/kord-test/proj/torch-ecpg/test/GTP/GeneExpressionValues_2.tsv.gz with separator [tab]
-[INFOTIMER] Read 3/3 in 4.6601 seconds
-[INFOTIMER] Finished reading GTP csv files in 111.703 seconds.
-[INFO] Concatenating gene expression parts
-[INFO] Removing covariates without enough data for all samples
-[INFO] Dropping unneeded columns (p-values)
-[INFO] Normalizing column names
-[INFO] Removing nonoverlapping columns
-[INFO] Dropped 17337 rows of G with missing values (69.4173% remaining)
-[INFO] Dropped 104132 rows of M with missing values (77.0306% remaining)
-[INFO] Sorting columns
-[INFO] Saving into /home/kord-test/proj/torch-ecpg/test/data
-[INFO] Creating directory /home/kord-test/proj/torch-ecpg/test/data...
-[INFO] Saving 3 dataframes...
-[INFOTIMER] Saving 1/3: M.csv
-[INFOTIMER] Saved 1/3 in 151.9341 seconds
-[INFOTIMER] Saving 2/3: G.csv
-[INFOTIMER] Saved 2/3 in 9.7193 seconds
-[INFOTIMER] Saving 3/3: C.csv
-[INFOTIMER] Saved 3/3 in 0.0022 seconds
-[INFOTIMER] Finished saving 3 dataframes in 161.6562 seconds.
-[WARNING] GTP methylation, gene expression, and covariates downloaded. If you would like to use region filtration, please manually copy the associated files from the tecpg/demo directory or produce them yourself.
-```
-
-3. Copy and rename the demo annotation files to their default locations. We created these annotation files to be used with these arrays. The users will need to create their own for datasets using other arrays or measuring approaches (e.g., RNA-seq).
+The recommended way to reproduce an end-to-end demo run is via
+`pipeline.sh`, which is the authoritative entry point and uses the
+same `mlr --mlr-method lstsq --compute-ig` invocation, dataset
+defaults, and downstream tools described in
+*Full analysis pipeline* above.
 
 ```bash
-mkdir annot
-cp ../demo/annoEPIC.hg19.bed6 annot/M.bed6
-cp ../demo/annoHT12.hg19.bed6 annot/G.bed6
+# CIS-only run on the GTP demo dataset
+./pipeline.sh --dataset gtp --mapping cis
+
+# Genome-wide run on the MESA demo dataset
+./pipeline.sh --dataset mesa --mapping all
+
+# Smoke-test the full pipeline on synthetic data
+./pipeline.sh --dataset dummy --mapping all
 ```
 
-4. Run the CIS loci analysis. This analysis has a small memory footprint and completes quickly.
+The first invocation will download the dataset (GTP/MESA only),
+populate `data_<dataset>/`, copy the comprehensive BED6 annotations
+from `demo/` into `annot_<dataset>/`, and walk through all nine
+pipeline stages, writing artifacts and diagnostic plots into
+`output_<dataset>/`. Any individual stage can be resumed with
+`--start-stage <name>` (see the stage list above).
+
+After `pipeline.sh` finishes, run `./pipelinePost.sh <dataset>` to
+produce Circos / volcano / Manhattan / bipartite network
+visualizations from `output_<dataset>/bootstrap_merged.parquet`.
+
+### Manual CIS-only mapping (advanced)
+
+If you need to invoke `tecpg run mlr` directly — for example to
+prototype a non-default backend or to integrate `tecpg` into another
+pipeline — the equivalent of the `pipeline.sh` mapping stage is:
+
 ```bash
-tecpg run mlr --help
-```
-```
-[INFO] CUDA GPU detected. This device supports CUDA.
-Usage: tecpg run mlr [OPTIONS]
-
-Options:
-  --gene-loci-per-chunk INTEGER
-  --meth-loci-per-chunk INTEGER
-  -p, --p-thresh FLOAT
-  --all                           [default: all]
-  -w, --window INTEGER
-  --cis                           [default: all]
-  --distal                        [default: all]
-  --trans                         [default: all]
-  -f, --full-output               [default: False]
-  -P, --p-only                    [default: False]
-  --help                          Show this message and exit.
-```
-```bash
-tecpg run mlr --cis -p 0.00001 --gene-loci-per-chunk 10000 --meth-loci-per-chunk 10000
+tecpg -i data -a annot -o output run mlr \
+    --mlr-method lstsq --cis --compute-ig
 ```
 
-> **Tip:** for a turn-key end-to-end run (data prep → cell-type estimation →
-> PCA → mapping with IG → merge → annotate → precise p-values → FDR/summary
-> → bootstrap), prefer `./pipeline.sh --dataset gtp --mapping cis` instead
-> of invoking `tecpg run mlr` directly. See *Full analysis pipeline* above.
+Chunk sizes are auto-selected by the CLI on server-class hosts. See
+*Chunking* and *Performance tuning* below for the available
+overrides, and run `tecpg run mlr --help` for the up-to-date option
+list (it is the authoritative source — the README intentionally no
+longer reproduces it).
 
 ## Alternative annotation and assignment of regions
 
-There are times when we may want to define our own classifications for a region (e.g., CIS) and apply different annotations to our mapping data. 
+There are times when we may want to define our own classifications
+for a region (e.g., CIS) and apply different annotations to our
+mapping data. The standard, supported path is the Parquet-based
+classifier driven by `pipeline.sh` (stage `annotate`,
+`[5/9]`).
 
-In these cases, we first run the mapping for all eCpG gene combinations:
-```bash
-tecpg run mlr --all --gene-loci-per-chunk 100 --meth-loci-per-chunk 100000
-```
-
-This analsis will produce a large number of mapping results:
-```bash
-ls output/
-1-100.csv
-1-101.csv
-1-102.csv
-1-103.csv
-...
-```
-
-We then use a script to classify the mappings in each file. For modern
-Parquet-based runs (the default on server-class hosts, and the format
-produced by `pipeline.sh`), use `tools/assignRegionToEcpg_parquet.py`,
-which reads a merged Parquet file and writes an annotated Parquet file
-with region labels:
+To run it standalone against a merged Parquet produced by an
+out-of-band `tecpg run mlr --all ...` invocation:
 
 ```bash
 python3 tools/assignRegionToEcpg_parquet.py \
@@ -462,155 +463,29 @@ python3 tools/assignRegionToEcpg_parquet.py \
     -o output/annotated.parquet
 ```
 
-Pre-built comprehensive BED6 annotation files for the Illumina EPIC and
-HT-12 v4 arrays are shipped under `demo/`:
+Pre-built comprehensive BED6 annotation files for the Illumina EPIC
+and HT-12 v4 arrays are shipped under `demo/`:
 
 * `demo/annoEPIC_comprehensive.hg19.bed6` and
   `demo/annoEPIC_comprehensive.hg38.bed6`
 * `demo/annoHT12_comprehensive.hg19.bed6` and
   `demo/annoHT12_comprehensive.hg38.bed6`
 
-These were regenerated in `1.27.4-dev` with `tools/generate_annotations.py`,
-which uses a validated multi-source HT-12 mapping pipeline
-(Re-Annotator → GEO → UCSC WG-6, with NA fallback and provenance tracking)
-and correctly handles unmapped probes, alternate/unplaced contigs, and
-pseudoautosomal labels.
+These were regenerated in `1.27.4-dev` with
+`tools/generate_annotations.py`, which uses a validated multi-source
+HT-12 mapping pipeline (Re-Annotator → GEO → UCSC WG-6, with NA
+fallback and provenance tracking) and correctly handles unmapped
+probes, alternate/unplaced contigs, and pseudoautosomal labels. The
+defaults follow Kennedy et al. *BMC Genomics* (2018) **19:476**:
+`PVALCUTOFF = 1e-6` (exploratory), `CIS < 50 kb` upstream of TSS,
+`DISTAL > 50 kb` from TSS, and `PROMOTER ± 2.5 kb` of TSS. Override
+these in the script's defaults block if you need different cutoffs.
 
-For the CSV path, `tools/assignRegionToEcpg.py` (in `tools/`) is the
-original per-chunk classifier:
-```
-./assignRegionToEcpg.py -h
-
-assignRegionToEcpg.py - assign a region class to eCpGs
-
-usage: assignRegionToEcpg.py [hD] -d <tecpg eQTM output> -g <gene annotation file> -m <methylation annotation file> -o <outfile name>
- e.g.: assignRegionToEcpg.py -d 1-1.csv -g G.bed6 -m M.bed6 -o ecpg.annot.csv
-
-```
-
-Here is an example using the assignRegionToEcpg.py script (available in the tools/ directory):
-```bash
-assignRegionToEcpg.py \
-    -d output/1-100.csv \
-    -g annot/G.bed6 \
-    -m annot/M.bed6 \
-    -o 1-100.annot.csv > assignRegionToEcpg.py.log
-```
-
-The script has visual descriptions of the region being classified in the code. For example, for CIS regions below are separate definitions for the '+' and '-' strands. These offsets can be changed in the defaults section at the start of the script. We welcome updates and modifications to the script to improve usability (e.g., user flags to set the offsets, etc.).
-
-```
-## DEFAULTS - Kennedy et al. BMC Genomics (2018) 19:476
-
-#PVALCUTOFF=0.00001                   ## 10-5 is "suggestive" in Kennedy 2018
-#PVALCUTOFF=0.00000000001             ## 10-11 is "significant" in Kennedy 2018
-PVALCUTOFF=np.float32(0.000001)       ## 10-6 is our "exploratory" cutoff
-
-## DISTAL >50Kb TSS
-DISTAL_OFFSET=50000
-
-## CIS <50Kb TSS
-CIS_OFFSET=0
-CIS_UPSTREAM_DISTANCE=50000
-
-## PROMOTER +/- 2500 bp TSS
-PROMOTER_OFFSET=0
-PROMOTER_UPSTREAM_DISTANCE=2500
-PROMOTER_DOWNSTREAM_DISTANCE=2500
-
-        ##
-        ## check for CIS - positive strand
-        ##
-
-        # CIS:    < 50Kb upstream from TSS
-
-        #                         |>>>>>>>| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                         | TSS (strand=“+”)
-        #                         | -offset (0Kb)
-        #                 | -region start (50Kb)
-        #                    | cpg
-        #                 |-------| target region
-        # upstream                                   downstream
-
-        ##
-        ## check for CIS - negative strand
-        ##
-
-        # CIS:    < 50Kb upstream from TSS
-
-        #           |<<<<<<| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                  | TSS (strand=“-”)
-        #                         | +offset (50Kb)
-        #                         | region end
-        #                      | cpg
-        #                  |------| target region
-        # downstream                                   upstream
-```
-
-This script will provide information regarding the mappings for which classes were called, as well as thoses annotations that were missing.
-
-If memory is no issue, all of the output files can be concatenated together and the classification can be done at once. Fair warning that the script is not memory efficient and can quickly consume all available memory.
-
-```bash
-head -1` output/1-1.csv >all.ecpg.csv
-cat output/*csv | fgrep -v gt_id >>all.ecpg.csv
-```
-
-```bash
-/usr/bin/time -v ./assignRegionToEcpg.py \
-    -d output/1-1.csv \
-    -g annot/G.bed6 \
-    -m annot/M.bed6 \
-    -o 1-1.annot.csv > assignRegionToEcpg.py.1-1.log 2>&1
-```
-
-The script outputs brief information about the annotation and mappings.
-```bash
-egrep -v "Excluding|missing"  assignRegionToEcpg.py.1-1.log
-
-[MAIN][INFO] eCpG datafile: output/1-1.csv
-[MAIN][INFO] gene anntoation file: annot/G.bed6
-[MAIN][INFO] methylation anntoation file: annot/M.bed6
-[MAIN][INFO] output file name: 1-1.annot.csv
-[readBed6AnnotatioFileToDict][INFO] Skipped (NA) 10002 loci from annot/G.bed6
-[readBed6AnnotatioFileToDict][INFO] Processed 44938 loci from annot/G.bed6
-[readBed6AnnotatioFileToDict][INFO] Skipped (NA) 0 loci from annot/M.bed6
-[readBed6AnnotatioFileToDict][INFO] Processed 865859 loci from annot/M.bed6
-[MAIN][INFO] Using default p-value cutoff of 1e-06
-[reportPvalues][INFO] P-values read: 9999800
-[reportPvalues][INFO] P < 0.000001 2489
-[reportPvalues][INFO] P < 0.0000001 1262
-[reportPvalues][INFO] P < 0.00000001 919
-[reportPvalues][INFO] P < 0.000000001 919
-[assignRegion][INFO] eCpgs Processed: 9999800 Assigned: 2198 Excluded (any): 9997503
-[assignRegion][INFO] eCpgs Counts by Region: {'trans': 2164, 'distal': 34, 'cis': 0, 'promoter': 0, 'genebody': 0}
-[MAIN][INFO] Saving annotated data to: 1-1.annot.csv
-```
-
-The annotated CSV file has the region in the final column:
-```bash
-head 1-1.annot.csv
-mt_id,mt_chrom,mt_chromStart,mt_strand,gt_id,gt_chrom,gt_chromStart,gt_strand,region
-cg00004105,10,100022608,+,ILMN_1662364,16,70286329,-,TRANS
-cg00005619,11,47608722,-,ILMN_1662364,16,70286329,-,TRANS
-cg00009088,11,60930188,-,ILMN_1662364,16,70286329,-,TRANS
-cg00009196,20,19954588,+,ILMN_1662364,16,70286329,-,TRANS
-cg00010853,6,30653167,+,ILMN_1662364,16,70286329,-,TRANS
-cg00017826,2,30644955,-,ILMN_1662364,16,70286329,-,TRANS
-cg00017931,6,157932180,-,ILMN_1662364,16,70286329,-,TRANS
-cg00025591,21,48026043,+,ILMN_1662364,16,70286329,-,TRANS
-cg00026290,4,10686554,+,ILMN_1662364,16,70286329,-,TRANS
-```
-
-
-```
-cut -d, -f9 1-1.annot.csv | sort | uniq -c
-     34 DISTAL
-      1 region
-   2164 TRANS
-```
+> **Legacy CSV path:** the original per-chunk CSV classifier
+> `tools/assignRegionToEcpg.py` is retained for backwards
+> compatibility with pre-Parquet outputs but is no longer the
+> recommended entry point. New work should use the Parquet variant
+> above, which is what `pipeline.sh` runs.
 
 ## Selecting a GPU when multiple are available
 
