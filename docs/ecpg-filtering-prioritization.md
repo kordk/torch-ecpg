@@ -54,24 +54,24 @@ intercept), computed dynamically in `pipeline.sh:275-284`.
 ### 3a. `pipeline.sh` — mapping & prioritization (9 stages)
 
 ```
- ┌─────────────────────────────────────────────────────────────────────────┐
- │ STAGE                     TOOL / COMMAND                 KEY OUTPUT       │
- ├─────────────────────────────────────────────────────────────────────────┤
- │ [1]   prep                tecpg data gtp                 M/G/C_orig.csv   │
- │       + blacklist         tools/exclude_blacklisted_…    M.csv           │
- │       + QC                tools/exploreOmics.py          data_gtp/qc/     │
- │ [1.5] cell_prop           tools/estimateCellProportions  C_post_cellTypes │
- │ [2]   pca                 tools/residualize_pca.sh (G,M) C.csv (+PCs)     │
- │ [3]   map  ★              tecpg run mlr --lstsq --all     output chunks   │
- │             --compute-ig    (per-pair betas, t, p, IG)                    │
- │ [4]   merge               tools/mergeOutputs.py          merged.parquet   │
- │ [5]   annotate ★          tools/assignRegionToEcpg_…     annotated.parquet│
- │ [6]   precise_p ★         tools/recalculate_pvalues_…    annotated_pcalc  │
+ ┌────────────────────────────────────────────────────────────────────────────┐
+ │ STAGE                     TOOL / COMMAND                 KEY OUTPUT        │
+ ├────────────────────────────────────────────────────────────────────────────┤
+ │ [1]   prep                tecpg data gtp                 M/G/C_orig.csv    │
+ │       + blacklist         tools/exclude_blacklisted_…    M.csv             │
+ │       + QC                tools/exploreOmics.py          data_gtp/qc/      │
+ │ [1.5] cell_prop           tools/estimateCellProportions  C_post_cellTypes  │
+ │ [2]   pca                 tools/residualize_pca.sh (G,M) C.csv (+PCs)      │
+ │ [3]   map  ★              tecpg run mlr --lstsq --all     output chunks    │
+ │             --compute-ig    (per-pair betas, t, p, IG)                     │
+ │ [4]   merge               tools/mergeOutputs.py          merged.parquet    │
+ │ [5]   annotate ★          tools/assignRegionToEcpg_…     annotated.parquet │
+ │ [6]   precise_p ★         tools/recalculate_pvalues_…    annotated_pcalc   │
  │ [7]   summarize ★         tools/summarizeOutput_parquet  summarized.parquet│
- │             + FDR + plots   (BH-FDR, QQ, hist, saliency, enrichment)      │
+ │             + FDR + plots   (BH-FDR, QQ, hist, saliency, enrichment)       │
  │ [8]   boot_list ★         tools/createBootstrapList.py   bootstrap_list.csv│
  │ [9]   bootstrap ★         tecpg run mlr --lstsq_bootstrap bootstrap_merged │
- └─────────────────────────────────────────────────────────────────────────┘
+ └────────────────────────────────────────────────────────────────────────────┘
    ★ = a filtering / prioritization / statistics step (detailed below)
 ```
 
@@ -172,7 +172,7 @@ ASCII view of regions relative to a **+strand** gene (TSS at left):
 
 ```
         −50kb        −2.5kb    TSS=========gene body=========TES      +50kb
-   ───────┼─────────────┼────────┼───────────────────────────┼─────────┼──────►
+   ───────┼──────────────┼────────┼────────────────────────────┼─────────┼──────►
   DISTAL5 │    CIS5      │ PROMOT.│         GENEBODY           │  CIS3   │ DISTAL3
           │ (upstream)   │ ±2.5kb │                            │(downstr)│
 ```
@@ -303,13 +303,13 @@ Filter order (`:51-80`): `--min-effect` (|`mt_est`|) → `--max-boot-p`
 
 ```
    cytoscape_edges.csv                         cytoscape_nodes.csv
-   ┌───────────────────────────────┐          ┌──────────────────────────────┐
+   ┌────────────────────────────────┐          ┌──────────────────────────────┐
    │ Source (mt_id)                 │          │ Node_ID                      │
    │ Target (gt_id)                 │          │ Chrom, Start, Strand         │
    │ Interaction (region)           │          │ Node_Type  = CpG | Gene      │
    │ mt_est, mt_p, mt_t, abs_t      │          │ Region     (CpG only)        │
    │ fdr_est, *_ig                  │          │                              │
-   └───────────────────────────────┘          └──────────────────────────────┘
+   └────────────────────────────────┘          └──────────────────────────────┘
 ```
 
 Bipartite structure:
@@ -317,7 +317,7 @@ Bipartite structure:
 ```
         CpG nodes              Gene nodes
        (left, by region)      (right)
-        cg0001 ───── mt_ig ─────► ENSG…A
+        cg0001 ───── mt_ig ───► ENSG…A
         cg0002 ──┬────────────► ENSG…B
                  └────────────► ENSG…C
         cg0003 ───────────────► ENSG…B
