@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc \
     && add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" \
     && apt-get update && apt-get install -y --no-install-recommends \
-    r-base=4.4.1-1.2204.0 \
-    r-base-dev=4.4.1-1.2204.0 \
+    r-base \
+    r-base-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -55,17 +55,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # Install runtime system dependencies and R
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-pip \
-    wget \
-    curl \
-    coreutils \
-    gzip \
+   python3 python3-pip wget curl coreutils gzip libxml2 libcurl4 libssl3 \
     && wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc \
     && echo "deb https://cloud.r-project.org/bin/linux/ubuntu jammy-cran40/" > /etc/apt/sources.list.d/cran.list \
-
     && apt-get update && apt-get install -y --no-install-recommends \
-    r-base=4.4.1-1.2204.0 \
+    r-base \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
