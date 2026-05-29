@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **1.24.4-dev**.
+The current development version on the `dev` branch is **1.27.6-dev**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 Entries below describe the work accumulated on `dev` since the last
@@ -11,6 +11,244 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 1.27.6-dev
+
+### Improvements / Performance
+- Refactor missing annotation logging in
+  `tools/assignRegionToEcpg_parquet.py` (PR #236). Removes per-pair
+  `Annotation missing` log statements that previously flooded the
+  main log. Missing probe IDs (gene and methylation) are collected
+  along with their exclusion reason (`missing_id` or `missing_chrom`)
+  and written to a sidecar file named `annotation_missing_ids.txt`
+  alongside the output parquet. A single summary line is emitted to
+  the main log with the unique counts of missing genes and CpGs and
+  the absolute path to the sidecar file.
+
+## 1.27.5-dev
+
+### Bug Fixes
+- Skip BED6 annotation rows with missing coordinates in
+  `tools/assignRegionToEcpg_parquet.py` and `tools/generate_annotations.py`.
+  `readAnnotationFileToDict` previously crashed on `int('')` when
+  comprehensive annotation files retained unmapped probes as
+  NA-coordinate rows. The BED6 branch now reads and validates
+  `chrom`/`start`/`end` before inserting a dict entry; rows with
+  missing or NA-like coordinates (`''`, `NA`, `<NA>`, `NAN`)
+  increment `nskip` and are skipped so unmapped probes leave no key
+  behind and are correctly treated as absent downstream. Verified on
+  the `gtp` annotate stage: 5937 NA loci skipped from `G.bed6` and
+  703 from `M.bed6`, with no `int()` crash and no `chr22.0`
+  coordinate failures.
+
+## 1.27.4-dev
+
+### Features
+- Rewrite of `tools/generate_annotations.py` introducing a corrected,
+  validated multi-source HT-12 mapping pipeline with provenance
+  tracking. Fixes chromosome-labeling and probe-dropping bugs that
+  produced spurious X/Y eCpG enrichment in the eQTM Circos plots.
+  - **Chromosome handling:** add `clean_geo_chromosome()` to
+    normalize labels to canonical tokens (`chr1`-`chr22`, `X`, `Y`,
+    `M`/`MT`) and reject pipe-delimited contigs, unplaced/alt
+    scaffolds (`NT_`/`NW_`/`GL`/`KI`, `*_random`, `*_hap`),
+    pseudoautosomal labels (`chrXY`/`chrYX`), and stray header text.
+    Float-contaminated labels (`chr22.0`) are corrected via
+    dtype-safe normalization. A single `chr`-prefixed convention is
+    enforced through one `write_bed6()` gate with a pre-write
+    validation guard, and `normalize_chrom` no longer serializes
+    `pd.NA` as `chr<NA>`.
+  - **Probe retention and recovery:** unmapped probes are retained
+    with NA coordinates and a preserved probe ID for downstream
+    ID-level joins. Three coordinate sources are layered by priority:
+    Re-Annotator -> GEO -> UCSC WG-6, falling back to NA, and each
+    probe is tagged with a provenance value. A UCSC `illuminaProbes`
+    (WG-6, hg19) loader is added as a recovery source, converting
+    UCSC 0-based starts to the 1-based convention used elsewhere
+    (`+1`) and degrading gracefully if the file is absent. Net
+    effect: HT-12 hg19 valid mappings rise 42,692 -> 51,553
+    (ReAnnotator 34,936 / UCSC_WG6 8,861 / GEO 7,756; NA 5,937).
+  - Adds `tests/test_ucsc_integration.py` with 28 synthetic checks
+    covering chromosome cleaning, 0-based -> 1-based conversion,
+    source priority, contig rejection, NA-row ID retention, and
+    `chr<NA>` prevention. Runs offline with no downloads.
+- Regenerated comprehensive BED6 annotations for EPIC and HT-12
+  (hg19/hg38) produced by the rewritten generator.
+
+## 1.27.3-dev
+
+### Bug Fixes
+- Fix the Docker runtime stage in `docker-related/Dockerfile`: unpin
+  R and add the runtime shared libraries `libxml2`, `libcurl4`, and
+  `libssl3` required for R package loading.
+
+## 1.27.2-dev
+
+### Features
+- Updated comprehensive BED6 annotations for EPIC and HT-12
+  (`demo/annoEPIC_comprehensive.*.bed6` and
+  `demo/annoHT12_comprehensive.*.bed6`).
+
+## 1.27.1-dev
+
+### Features
+- `tools/generate_annotations.py` now uses Re-Annotator data as the
+  primary HT-12 coordinate source with a GEO-based fallback.
+
+## 1.27.0-dev
+
+### Features
+- Add Re-Annotator (J. Arloth) HT-12 v4 annotation data
+  (`demo/reannotator_humanHt12v4.txt`), sourced from
+  <https://sourceforge.net/projects/reannotator/files/annotations/humanHt12v4.txt/download>
+  (see <https://www.biorxiv.org/content/10.1101/019596v1> and
+  <https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0139516>).
+- New pipeline restart option (PR #230). `pipeline.sh` accepts a
+  `-s` / `--start-stage` argument so the pipeline can be resumed
+  from an intermediate stage (e.g. `pca`, `map`, `summarize`).
+  Context variables (`DF`, `TOTAL_TESTS`) are calculated
+  independently of earlier stage execution, and all major steps are
+  wrapped in a conditional switch so they run sequentially from the
+  chosen starting point.
+- `pipeline.sh` checks for comprehensive annotation files
+  (`annoEPIC_comprehensive.hg19.bed6` and
+  `annoHT12_comprehensive.hg19.bed6`) before copying them for both
+  the GTP and MESA dataset paths, and gracefully falls back to the
+  standard annotation files when they are absent (PR #231).
+- Rebuild the Docker image against `dev` using a multi-stage build
+  with full pipeline support (PR #233), and add
+  `docker-related/REBUILD_DESIGN.md` design memo (PR #232).
+
+### Bug Fixes
+- Fix cross-stage R library copy and de-duplicate package install in
+  the Docker image (PR #234).
+
+## 1.26.7-dev
+
+### Features
+- Add extensive raw diagnostic logging to `tools/plotCircos.py`
+  before merging/filtering to diagnose coordinate-mismatch and
+  lookup failures (PR #229).
+
+## 1.26.6-dev
+
+- Version bump only; no functional changes.
+
+## 1.26.5-dev
+
+### Features
+- Add `tools/generate_annotations.py` script to generate
+  comprehensive BED6 annotations (PR #228).
+- Edge filtering for bipartite network export and visualization
+  (PR #226). `tools/exportBipartiteNetwork.py` gains optional
+  `--min-effect` and `--max-boot-p` arguments to reduce "hairball"
+  visualizations; filtering is applied in order (effect size ->
+  bootstrap p-value -> top K), and the node table implicitly drops
+  isolated nodes based on the remaining edges.
+  `tools/visualizeBipartiteNetwork.py` logs initial counts of loaded
+  edges and nodes for visibility into filtering, and `pipelinePost.sh`
+  uses sensible filtering defaults in Stage 4. Unit tests cover
+  filtering and graceful fallback for missing statistical columns.
+
+### Improvements / Performance
+- `tools/plotCircos.py` reports detailed reasons for excluded
+  CpG-Gene pairs (PR #227), distinguishing missing/invalid
+  methylation coordinates, missing/invalid gene coordinates, and
+  cases where the methylation or gene chromosome is not present in
+  the cytoband annotation file.
+
+## 1.26.3-dev
+
+### Features
+- New `pipelinePost.sh` script that automates downstream
+  visualizations and network analyses (PR #223).
+
+### Improvements / Performance
+- `tools/plotCircos.py` improves missing-data reporting (PR #224),
+  breaking down the exact reasons pairs are excluded (Missing
+  Methylation Coordinates, Missing Gene Coordinates, Methylation
+  Chromosome not in Cytoband, Gene Chromosome not in Cytoband). Also
+  fixes a local test failure in `test_pearson_single.py` caused by a
+  scoping error involving the `time` variable.
+
+### Bug Fixes
+- Switch Circos plot generation from hg38 to hg19 (PR #225).
+  `pipelinePost.sh` now downloads the hg19 `cytoBand.txt` file from
+  UCSC, and `tools/plotCircos.py` help text is updated to match this
+  requirement for the default GTP and MESA datasets.
+
+## 1.26.2-dev
+
+### Bug Fixes
+- Handle duplicate edges in `tools/visualizeBipartiteNetwork.py`
+  (PR #222). `cytoscape_edges.csv` inputs may contain duplicate
+  `(Source, Target)` pairs (e.g. from multiple genomic region
+  assignments), which previously caused a `ValueError` during
+  `pandas.pivot` operations for UMAP and heatmaps. `prepare_network`
+  now detects duplicates, keeps the edge with the maximum weight,
+  and saves the dropped rows to `dropped_duplicate_edges.csv` in
+  `args.out_dir`, with a log line reporting the count of dropped
+  duplicates.
+
+## 1.26.1-dev
+
+### Bug Fixes
+- Prevent `KeyError` on Parquet -> Pandas conversion (PR #221).
+  When `tecpg` chunks are merged or output directly from PyTorch
+  logic to Parquet, `gt_id` can end up as the DataFrame index
+  instead of a column. Downstream scripts such as
+  `tools/assignRegionToEcpg_parquet.py` and `tools/visualizeFindings.py`
+  expected `gt_id` as a column and crashed with `KeyError` otherwise.
+  This release conditionally injects `reset_index()` across all such
+  Parquet readers to safely recover the index into columns.
+
+## 1.26.0-dev
+
+### Improvements / Performance
+- Improve bottleneck logs and correct the ETA calculation in the
+  PyTorch MLR/Pearson runs (PR #220).
+
+## 1.25.3-dev
+
+### Bug Fixes
+- Ignore `sample_reservoir.csv` when merging outputs (PR #219).
+  The `sample_reservoir.csv` file produced by `tecpg` is an
+  unfiltered random sample used for metric generation and its schema
+  differs from the standard chunked Parquet/CSV outputs. Previously
+  `tools/mergeOutputs.py` matched it via `*.*`, causing schema
+  mismatches and a downstream `KeyError: 'gt_id'` in
+  `tools/assignRegionToEcpg_parquet.py`. The file is now explicitly
+  filtered out of the file-processing list.
+
+## 1.25.2-dev
+
+### Bug Fixes
+- Fix PyTorch MLR failure with dummy data and a Parquet `gt_id`
+  index issue (PR #218).
+
+## 1.25.1-dev
+
+### Bug Fixes
+- Fix `tools/mergeOutputs.py` unique counts for Parquet files
+  (PR #217). When reading from Parquet, `batch.to_pandas()` returns
+  `gt_id` and `mt_id` in `df.index` due to how PyArrow converts
+  Parquet index metadata, but the script attempted to read them as
+  standard columns and therefore reported `0` unique genes and CpGs.
+  `df.reset_index()` is now called when reading the batches so the
+  indices are exposed as columns and counted correctly.
+
+## 1.25.0-dev
+
+### Bug Fixes
+- Avoid pandas type inference for integer columns with nulls in
+  Parquet conversion (PR #215). `tools/recalculate_pvalues_parquet.py`
+  now reads the `mt_t` column via native PyArrow array access
+  (`to_numpy(zero_copy_only=False)`) instead of `batch.to_pandas()`,
+  preventing Pandas from upcasting PyArrow nullable `int64` columns
+  (such as annotations with missing mappings) into `float64` arrays
+  and breaking Parquet output schemas across chunks.
+- Fix Parquet chunk merging to prevent 1,000,000 hit-limit
+  contamination (PR #216).
 
 ## 1.24.4-dev
 
