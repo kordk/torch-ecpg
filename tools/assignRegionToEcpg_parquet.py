@@ -99,11 +99,24 @@ def readAnnotationFileToDict(my_annotFile):
             elif num_cols >= 6:
                 # BED6 format
                 my_name = dataA[3]
-                my_lociH[my_name] = {}
 
-                my_lociH[my_name]["chrom"]      = str(dataA[0])
-                my_lociH[my_name]["chromStart"] = int(dataA[1])
-                my_lociH[my_name]["chromEnd"]   = int(dataA[2])
+                # Read + validate coordinates FIRST, before creating the entry.
+                chrom_val = dataA[0].strip()
+                start_val = dataA[1].strip()
+                end_val   = dataA[2].strip()
+
+                # NA / unmapped probe: no usable coordinates. Skip WITHOUT
+                # creating a dict entry, so downstream lookup treats the probe
+                # as absent -> NULL coordinates -> excluded for missing coords.
+                if (not chrom_val or chrom_val.upper() in ("NA", "<NA>", "NAN")
+                        or not start_val or not end_val):
+                    nskip += 1
+                    continue
+
+                my_lociH[my_name] = {}
+                my_lociH[my_name]["chrom"]      = str(chrom_val)
+                my_lociH[my_name]["chromStart"] = int(start_val)
+                my_lociH[my_name]["chromEnd"]   = int(end_val)
                 my_lociH[my_name]["strand"]     = str(dataA[5])
             else:
                 logger.warning(f"[readAnnotationFileToDict] Unsupported number of columns ({num_cols}) in line: {line.strip()}")

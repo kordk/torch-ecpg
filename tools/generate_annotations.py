@@ -42,8 +42,8 @@ def write_bed6(df, filepath):
  
     print(f"[{filepath}] Total: {total} | Valid: {valid_coords} | NA: {na_coords}{prov_summary}")
  
-    df.to_csv(filepath, sep='\t', index=False)
- 
+    #df.to_csv(filepath, sep='\t', index=False)
+    df.to_csv(filepath, sep='\t', index=False, na_rep='NA') 
  
 # ---------------------------------------------------------------------------
 # Chromosome sanitization helpers
