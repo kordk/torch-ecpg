@@ -92,38 +92,72 @@ df_meth_hg19.to_csv("demo/annoEPIC_comprehensive.hg19.bed6", sep="\t", index=Fal
 df_meth_hg38.to_csv("demo/annoEPIC_comprehensive.hg38.bed6", sep="\t", index=False)
 
 print("Processing Gene Expression Data...")
-ht12_v4_df = gpl_ht12_v4.table[['ID', 'Chromosome', 'Probe_Coordinates']].dropna()
-ht12_v3_df = gpl_ht12_v3.table[['ID', 'Chromosome', 'Probe_Coordinates']].dropna()
+ht12_v4_df = gpl_ht12_v4.table[['ID', 'Chromosome', 'Probe_Coordinates', 'Probe_Chr_Orientation']].dropna(how='all')
+ht12_v3_df = gpl_ht12_v3.table[['ID', 'Chromosome', 'Probe_Coordinates', 'Probe_Chr_Orientation']].dropna(how='all')
 
 ge_df = pd.concat([ht12_v4_df, ht12_v3_df]).drop_duplicates(subset=['ID'])
+
+reannotator = pd.read_csv("demo/reannotator_humanHt12v4.txt", sep="	")
+reannotator = reannotator[['X.PROBE_ID', 'Chr', 'P_start', 'P_end', 'Strand']].drop_duplicates(subset=['X.PROBE_ID'])
+reannotator.columns = ['ID', 'Re_Chr', 'Re_Start', 'Re_End', 'Re_Strand']
+
+merged = ge_df.merge(reannotator, on='ID', how='left')
 
 ge_hg19 = []
 ge_hg38 = []
 
-for idx, row in ge_df.iterrows():
-    chrom = str(row['Chromosome']).strip()
-    if not chrom: continue
-    coords = row['Probe_Coordinates']
-    start, end = parse_hg19_coords(coords)
+for idx, row in merged.iterrows():
     name = row['ID']
+    
+    chrom = None
+    start = None
+    end = None
+    strand = '+'
 
-    if start is not None and end is not None:
+    # Try Reannotator first
+    if not pd.isna(row['Re_Chr']) and not pd.isna(row['Re_Start']) and not pd.isna(row['Re_End']):
+        chrom = str(row['Re_Chr']).strip()
+        start = int(row['Re_Start'])
+        end = int(row['Re_End'])
+        if not pd.isna(row['Re_Strand']):
+            re_str = str(row['Re_Strand']).strip()
+            if re_str in ('+', '-'):
+                strand = re_str
+    else:
+        # Fallback to GEO
+        geo_chrom = str(row['Chromosome']).strip() if not pd.isna(row['Chromosome']) else None
+        if geo_chrom:
+            coords = row['Probe_Coordinates']
+            geo_start, geo_end = parse_hg19_coords(coords)
+            if geo_start is not None and geo_end is not None:
+                chrom = geo_chrom
+                start = geo_start
+                end = geo_end
+                
+                # Check GEO strand
+                if not pd.isna(row['Probe_Chr_Orientation']):
+                    geo_strand = str(row['Probe_Chr_Orientation']).strip()
+                    if geo_strand in ('+', '-'):
+                        strand = geo_strand
+
+    if chrom and start is not None and end is not None:
         ge_hg19.append({
-            'chrom': chrom, 'chromStart': start, 'chromEnd': end,
-            'name': name, 'score': 0, 'strand': '+'
+            'chrom': format_chrom(chrom), 'chromStart': start, 'chromEnd': end,
+            'name': name, 'score': 0, 'strand': strand
         })
 
         c38, s38, e38 = liftover_coords(chrom, start, end)
         if c38 is not None:
             ge_hg38.append({
-                'chrom': c38, 'chromStart': s38, 'chromEnd': e38,
-                'name': name, 'score': 0, 'strand': '+'
+                'chrom': format_chrom(c38), 'chromStart': s38, 'chromEnd': e38,
+                'name': name, 'score': 0, 'strand': strand
             })
 
 df_ge_hg19 = pd.DataFrame(ge_hg19)
 df_ge_hg38 = pd.DataFrame(ge_hg38)
 
-df_ge_hg19.to_csv("demo/annoHT12_comprehensive.hg19.bed6", sep="\t", index=False)
-df_ge_hg38.to_csv("demo/annoHT12_comprehensive.hg38.bed6", sep="\t", index=False)
+df_ge_hg19.to_csv("demo/annoHT12_comprehensive.hg19.bed6", sep="	", index=False)
+df_ge_hg38.to_csv("demo/annoHT12_comprehensive.hg38.bed6", sep="	", index=False)
 
 print("Done generating annotations.")
+
