@@ -37,7 +37,7 @@ class TestExportCytoscape(unittest.TestCase):
             'gt_strand': ['+', '-'],
             'mt_est': [0.5, -0.3],
             'mt_p': [0.01, 0.05],
-            'region': ['PROMOTER', 'DISTAL'],
+            'region': ['PROMOTER', 'DISTAL5'],
             'mt_ig': [1.5, 2.5],  # cpg2 should sort first
             'age_ig': [0.1, 0.2]
         }
@@ -79,7 +79,7 @@ class TestExportCytoscape(unittest.TestCase):
             'gt_strand': ['+', '-'],
             'mt_est': [0.5, -0.3],
             'mt_p': [0.01, 0.05],
-            'region': ['PROMOTER', 'DISTAL'],
+            'region': ['PROMOTER', 'DISTAL5'],
             'mt_t': [-5.0, 2.0] # cpg1 abs_t is 5.0, should be first
         }
         self.create_dummy_parquet(data, self.input_file)
