@@ -18,49 +18,194 @@ import zipfile
 import gzip
 import shutil
 
-def clean_and_translate_ensembl_ids(ensembl_ids):
+def download_gencode_gtf(target_dir):
     """
-    Strips version suffixes from Ensembl IDs and translates them to HGNC gene symbols using mygene.
+    Downloads GENCODE v49lift37 GTF file to the target directory.
+    """
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir)
+
+    url = "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_49/GRCh37_mapping/gencode.v49lift37.annotation.gtf.gz"
+    filename = url.split('/')[-1]
+    filepath = os.path.join(target_dir, filename)
+    if not os.path.exists(filepath):
+        print(f"Downloading GENCODE GTF track from {url} ...")
+        try:
+            if not url.lower().startswith(('http://', 'https://')):
+                raise ValueError(f"Refusing to download non-http(s) URL: {url}")
+            urllib.request.urlretrieve(url, filepath)  # nosec B310 - scheme validated above
+        except Exception as e:
+
+            print(f"Error downloading {url}: {e}")
+            return None
+
+    return filepath
+
+def get_illumina_coordinates(unmapped_ids):
+    """
+    Attempts to get genomic coordinates for unmapped ILMN_ IDs using demo/ucsc_illuminaProbes.hg19.txt or demo/annoHT12.hg19.bed6 (or comprehensive versions).
+    Returns a pandas DataFrame with ['Chromosome', 'Start', 'End', 'name']
+    """
+    ucsc_file = 'demo/ucsc_illuminaProbes.hg19.txt'
+    bed_files = ['demo/annoHT12.hg19.bed6', 'demo/annoHT12_comprehensive.hg19.bed6']
+
+    coords = []
+
+    if os.path.exists(ucsc_file):
+        try:
+            with open(ucsc_file) as fh:
+                first = fh.readline().strip().split('	')
+            has_header = (first and first[0] in ('#bin', 'bin')) or ('chrom' in first)
+            if has_header:
+                udf = pd.read_csv(ucsc_file, sep='	')
+                udf.columns = [c.lstrip('#') for c in udf.columns]
+            else:
+                UCSC_COLNAMES = ['bin', 'chrom', 'chromStart', 'chromEnd', 'name', 'score', 'strand', 'thickStart', 'thickEnd', 'itemRgb', 'blockCount', 'blockSizes', 'chromStarts']
+                udf = pd.read_csv(ucsc_file, sep='	', header=None, names=UCSC_COLNAMES)
+
+            needed = ['chrom', 'chromStart', 'chromEnd', 'name']
+            if all(c in udf.columns for c in needed):
+                udf = udf[needed].dropna(subset=['name'])
+                udf = udf[udf['name'].isin(unmapped_ids)]
+                for _, row in udf.iterrows():
+                    coords.append({'Chromosome': row['chrom'], 'Start': int(row['chromStart']), 'End': int(row['chromEnd']), 'name': row['name']})
+
+                # Remove found ids from unmapped
+                found_ids = set([c['name'] for c in coords])
+                unmapped_ids = list(set(unmapped_ids) - found_ids)
+        except Exception as e:
+            print(f"Error reading UCSC file: {e}")
+
+    for bed_file in bed_files:
+        if not unmapped_ids:
+            break
+        if os.path.exists(bed_file):
+            try:
+                bdf = pd.read_csv(bed_file, sep='	')
+
+                if 'chrom' not in bdf.columns or 'name' not in bdf.columns:
+                    bdf = pd.read_csv(bed_file, sep='	', header=None)
+                    if len(bdf.columns) >= 4:
+                        bdf.columns = ['chrom', 'chromStart', 'chromEnd', 'name'] + list(bdf.columns[4:])
+
+                bdf = bdf[bdf['name'].isin(unmapped_ids)]
+                for _, row in bdf.iterrows():
+                    if pd.notna(row['chrom']) and pd.notna(row['chromStart']) and pd.notna(row['chromEnd']):
+                        coords.append({'Chromosome': str(row['chrom']), 'Start': int(float(row['chromStart'])), 'End': int(float(row['chromEnd'])), 'name': row['name']})
+
+                found_ids = set([c['name'] for c in coords])
+                unmapped_ids = list(set(unmapped_ids) - found_ids)
+            except Exception as e:
+                print(f"Error reading BED file {bed_file}: {e}")
+
+    return pd.DataFrame(coords) if coords else pd.DataFrame(columns=['Chromosome', 'Start', 'End', 'name'])
+
+def clean_and_translate_gene_ids(gene_ids):
+    """
+    Translates gene IDs to HGNC gene symbols.
+    Handles Ensembl IDs via mygene, and Illumina ILMN_ IDs via Re-Annotator and GENCODE intersections.
     Logs unmapped genes and returns a list of mapped symbols and the count of unmapped ones.
     """
-    if not ensembl_ids:
+    if not gene_ids:
         return [], 0
 
-    # Clean IDs: strip everything after '.'
-    cleaned_ids = [str(gene_id).split('.')[0] for gene_id in ensembl_ids]
+    # Clean IDs: strip everything after '.' (relevant mostly for Ensembl)
+    cleaned_ids = [str(g).split('.')[0] for g in gene_ids]
 
-    print(f"Translating {len(cleaned_ids)} cleaned Ensembl IDs to Gene Symbols...")
+    is_illumina = any(g.startswith('ILMN_') for g in cleaned_ids)
 
-    # Initialize mygene info
-    mg = mygene.MyGeneInfo()
-
-    # Query mygene to translate
-    try:
-        # We expect cleaned_ids to be Ensembl gene IDs
-        results = mg.querymany(cleaned_ids, scopes='ensembl.gene', fields='symbol', species='human', verbose=False)
-    except Exception as e:
-        print(f"Error querying mygene: {e}")
-        return [], len(cleaned_ids)
-
-    mapped_symbols = []
+    mapped_symbols = set()
     unmapped_ids = []
 
-    for res in results:
-        if 'symbol' in res:
-            mapped_symbols.append(res['symbol'])
-        else:
-            unmapped_ids.append(res['query'])
+    if is_illumina:
+        print(f"Translating {len(cleaned_ids)} Illumina Probe IDs to Gene Symbols...")
+
+        # 1. Try Re-Annotator file
+        reann_file = 'demo/reannotator_humanHt12v4.txt'
+        still_unmapped = cleaned_ids.copy()
+
+        if os.path.exists(reann_file):
+            try:
+                reann_df = pd.read_csv(reann_file, sep='	')
+                if 'X.PROBE_ID' in reann_df.columns and 'Gene_symbol' in reann_df.columns:
+                    reann_df = reann_df.dropna(subset=['Gene_symbol'])
+                    # Map the ones that exist
+                    mapping = dict(zip(reann_df['X.PROBE_ID'], reann_df['Gene_symbol']))
+
+                    new_unmapped = []
+                    for g in still_unmapped:
+                        if g in mapping:
+                            syms = str(mapping[g]).split(',')
+                            for s in syms:
+                                mapped_symbols.add(s.strip())
+                        else:
+                            new_unmapped.append(g)
+                    still_unmapped = new_unmapped
+            except Exception as e:
+                print(f"Error reading Re-Annotator file: {e}")
+
+        # 2. Try GENCODE intersection for remaining
+        if still_unmapped:
+            print(f"Attempting to map {len(still_unmapped)} remaining ILMN_ IDs using GENCODE intersection...")
+            coords_df = get_illumina_coordinates(still_unmapped)
+
+            if not coords_df.empty:
+                encode_dir = "encode_beds"
+                gtf_path = download_gencode_gtf(encode_dir)
+
+                if gtf_path:
+                    try:
+                        print("Loading GENCODE GTF...")
+                        gencode_pr = pr.read_gtf(gtf_path)
+                        # Filter for genes to speed up
+                        genes_pr = gencode_pr[gencode_pr.Feature == 'gene']
+
+                        # Ensure 'chr' prefix
+                        if not coords_df['Chromosome'].astype(str).str.startswith('chr').all():
+                            coords_df['Chromosome'] = 'chr' + coords_df['Chromosome'].astype(str)
+
+                        probes_pr = pr.PyRanges(coords_df)
+                        print("Intersecting probes with GENCODE...")
+                        joined = probes_pr.join(genes_pr, apply_strand_suffix=False)
+
+                        if not joined.df.empty and 'gene_name' in joined.df.columns:
+                            for _, row in joined.df.iterrows():
+                                if pd.notna(row['gene_name']):
+                                    mapped_symbols.add(str(row['gene_name']).strip())
+                                    if row['name'] in still_unmapped:
+                                        still_unmapped.remove(row['name'])
+                    except Exception as e:
+                        print(f"Error during GENCODE intersection: {e}")
+
+        unmapped_ids = still_unmapped
+    else:
+        print(f"Translating {len(cleaned_ids)} cleaned Ensembl IDs to Gene Symbols...")
+
+        # Initialize mygene info
+        mg = mygene.MyGeneInfo()
+
+        # Query mygene to translate
+        try:
+            # We expect cleaned_ids to be Ensembl gene IDs
+            results = mg.querymany(cleaned_ids, scopes='ensembl.gene', fields='symbol', species='human', verbose=False)
+
+            for res in results:
+                if 'symbol' in res:
+                    mapped_symbols.add(res['symbol'])
+                else:
+                    unmapped_ids.append(res['query'])
+        except Exception as e:
+            print(f"Error querying mygene: {e}")
+            unmapped_ids = cleaned_ids
 
     # Log unmapped IDs
     if unmapped_ids:
-        # unique just in case
         unmapped_ids = list(set(unmapped_ids))
         print(f"  Warning: {len(unmapped_ids)} gene IDs could not be mapped to an HGNC symbol.")
-        # log up to first 20 for brevity, or all if you prefer
         print(f"  Unmapped examples: {', '.join(unmapped_ids[:20])}" + ("..." if len(unmapped_ids) > 20 else ""))
 
-    # Return unique mapped symbols
-    return list(set(mapped_symbols)), len(unmapped_ids)
+    return list(mapped_symbols), len(unmapped_ids)
+
 
 
 # Worker function must be top-level for multiprocessing
@@ -866,7 +1011,7 @@ Outputs and Metrics Calculated:
             print(f"\nProcessing region: {region} with {len(genes)} significant Ensembl IDs")
 
             # Clean and translate
-            mapped_symbols, unmapped_count = clean_and_translate_ensembl_ids(list(genes))
+            mapped_symbols, unmapped_count = clean_and_translate_gene_ids(list(genes))
 
             if not mapped_symbols:
                 print(f"Skipping enrichment for {region} due to no mapped gene symbols.")
