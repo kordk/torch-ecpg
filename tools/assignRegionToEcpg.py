@@ -113,10 +113,8 @@ def reportPvalues(my_ecpgDataFile):
 def assignRegion(my_ecpgDataFile, gH, mH):
     my_eqtmA = []
 
-    my_typeCountH = {}
+    my_typeCountH = {"trans": 0, "distal5": 0, "cis5": 0, "promoter": 0, "genebody": 0, "cis3": 0, "distal3": 0}
     my_typeCountH["trans"] = 0
-    my_typeCountH["distal"] = 0
-    my_typeCountH["cis"] = 0
     my_typeCountH["promoter"] = 0
     my_typeCountH["genebody"] = 0
 
@@ -240,176 +238,34 @@ def assignRegion(my_ecpgDataFile, gH, mH):
             continue   ## Move on to the next. CpGs cannot be TRANS && another region
 
         ##
-        ## check for DISTAL - positive strand
+        ## Region assignment - positive strand
         ##
-
-        # DISTAL: > 50Kb upstream from TSS 
-
-        #                         |>>>>>>>| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                         | TSS (strand=“+”)
-        #               | -offset (50Kb)
-        #               | region start
-        #       | cpg
-        # no upstream window limit
-        # ...-----------| target region
-        # upstream                       downstream
-
         if gH[gt_id]["strand"] == "+":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            regionRef_pos = geneStart_pos - DISTAL_OFFSET
-            if (cpg_pos < regionRef_pos):
-                cpgA = []
-                cpgA.append(mt_id)
-                cpgA.append(mH[mt_id]["chrom"])
-                cpgA.append(mH[mt_id]["chromStart"])
-                cpgA.append(mH[mt_id]["strand"])
-                cpgA.append(gt_id)
-                cpgA.append(gH[gt_id]["chrom"])
-                cpgA.append(gH[gt_id]["chromStart"])
-                cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("DISTAL")
-                my_typeCountH["distal"] += 1
-                if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
-                my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
+            mt_chromStart = mH[mt_id]["chromStart"]
+            gt_chromStart = gH[gt_id]["chromStart"]
+            gt_chromEnd = gH[gt_id]["chromEnd"]
 
-
-        ##
-        ## check for CIS - positive strand
-        ##
-
-        # CIS:    < 50Kb upstream from TSS
-
-        #                         |>>>>>>>| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                         | TSS (strand=“+”)
-        #                         | -offset (0Kb)
-        #                 | -region start (50Kb)
-        #                    | cpg
-        #                 |-------| target region
-        # upstream                                   downstream
-
-
-        if gH[gt_id]["strand"] == "+":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            regionRef_pos = geneStart_pos - CIS_OFFSET
-            regionUpStreamRange = geneStart_pos - CIS_UPSTREAM_DISTANCE
-            if (regionUpStreamRange < cpg_pos) & (cpg_pos < geneStart_pos):
-                cpgA = []
-                cpgA.append(mt_id)
-                cpgA.append(mH[mt_id]["chrom"])
-                cpgA.append(mH[mt_id]["chromStart"])
-                cpgA.append(mH[mt_id]["strand"])
-                cpgA.append(gt_id)
-                cpgA.append(gH[gt_id]["chrom"])
-                cpgA.append(gH[gt_id]["chromStart"])
-                cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("CIS")
-                my_typeCountH["cis"] += 1
-                if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
-                my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
-
-
-        ##
-        ## check for PROMOTER - positive strand
-        ##
-
-        # PROMOTER: +/- 2500bp from TSS
-
-        #                         |>>>>>>>| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                         | TSS (strand=“+”)
-        #                         | -offset (0Kb)
-        #                 | region start (-2500)
-        #                      | cpg
-        #                                 | region end (+2500)
-        #                 |---------------| target region
-        # upstream                                   downstream
-
-        if gH[gt_id]["strand"] == "+":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            regionRef_pos = geneStart_pos - PROMOTER_OFFSET
-            regionUpStreamRange = regionRef_pos - PROMOTER_UPSTREAM_DISTANCE
-            regionDnStreamRange = regionRef_pos + PROMOTER_DOWNSTREAM_DISTANCE
-            if (regionUpStreamRange < cpg_pos) & (cpg_pos < regionDnStreamRange):
-                cpgA = []
-                cpgA.append(mt_id)
-                cpgA.append(mH[mt_id]["chrom"])
-                cpgA.append(mH[mt_id]["chromStart"])
-                cpgA.append(mH[mt_id]["strand"])
-                cpgA.append(gt_id)
-                cpgA.append(gH[gt_id]["chrom"])
-                cpgA.append(gH[gt_id]["chromStart"])
-                cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("PROMOTER")
+            region = None
+            if mt_chromStart < gt_chromStart - 50000:
+                region = 'DISTAL5'
+                my_typeCountH["distal5"] += 1
+            elif gt_chromStart - 50000 <= mt_chromStart < gt_chromStart - 2500:
+                region = 'CIS5'
+                my_typeCountH["cis5"] += 1
+            elif gt_chromStart - 2500 <= mt_chromStart <= gt_chromStart + 2500:
+                region = 'PROMOTER'
                 my_typeCountH["promoter"] += 1
-                if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
-                my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
-
-        ##
-        ## check for GENE BODY - positive strand
-        ##
-
-        # GENE BODY: TSS to TES
-
-        #                         |>>>>>>>| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                         | TSS (strand=“+”)
-        #                         | -offset (0Kb)
-        #                         | region start (-2500)
-        #                             | cpg
-        #                                 | TES
-        #                                 | region end (+2500)
-        #                         |-------| target region
-        # upstream                                   downstream
-
-        if gH[gt_id]["strand"] == "+":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            geneEnd_pos = gH[gt_id]["chromEnd"]
-            if (geneStart_pos < cpg_pos) & (cpg_pos < geneEnd_pos):
-                cpgA = []
-                cpgA.append(mt_id)
-                cpgA.append(mH[mt_id]["chrom"])
-                cpgA.append(mH[mt_id]["chromStart"])
-                cpgA.append(mH[mt_id]["strand"])
-                cpgA.append(gt_id)
-                cpgA.append(gH[gt_id]["chrom"])
-                cpgA.append(gH[gt_id]["chromStart"])
-                cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("GENEBODY")
+            elif gt_chromStart + 2500 < mt_chromStart < gt_chromEnd:
+                region = 'GENEBODY'
                 my_typeCountH["genebody"] += 1
-                if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
-                my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
+            elif gt_chromEnd <= mt_chromStart <= gt_chromEnd + 50000:
+                region = 'CIS3'
+                my_typeCountH["cis3"] += 1
+            elif mt_chromStart > gt_chromEnd + 50000:
+                region = 'DISTAL3'
+                my_typeCountH["distal3"] += 1
 
-        ##
-        ## check for DISTAL - negative strand
-        ##
-
-        # DISTAL: > 50Kb upstream from TSS
-
-        #       |<<<<<<<| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #               | TSS (strand=“-”)
-        #                       | +offset (50Kb)
-        #                       | region start
-        #                               | cpg
-        #                               no upstream window limit
-        #                       |--------------... target region
-        # downstream                                   upstream
-
-        if gH[gt_id]["strand"] == "-":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            regionRef_pos = geneStart_pos + DISTAL_OFFSET
-            if (regionRef_pos < cpg_pos):
+            if region:
                 cpgA = []
                 cpgA.append(mt_id)
                 cpgA.append(mH[mt_id]["chrom"])
@@ -419,108 +275,39 @@ def assignRegion(my_ecpgDataFile, gH, mH):
                 cpgA.append(gH[gt_id]["chrom"])
                 cpgA.append(gH[gt_id]["chromStart"])
                 cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("DISTAL")
-                my_typeCountH["distal"] += 1
+                cpgA.append(region)
                 if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
                 my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
 
         ##
-        ## check for CIS - negative strand
+        ## Region assignment - negative strand
         ##
-
-        # CIS:    < 50Kb upstream from TSS
-
-        #           |<<<<<<| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                  | TSS (strand=“-”)
-        #                         | +offset (50Kb)
-        #                         | region end 
-        #                      | cpg
-        #                  |------| target region
-        # downstream                                   upstream
-
         if gH[gt_id]["strand"] == "-":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            regionRef_pos = geneStart_pos
-            regionUpStreamRange = regionRef_pos + CIS_OFFSET
-            if (geneStart_pos < cpg_pos ) & (cpg_pos < regionUpStreamRange):
-                cpgA = []
-                cpgA.append(mt_id)
-                cpgA.append(mH[mt_id]["chrom"])
-                cpgA.append(mH[mt_id]["chromStart"])
-                cpgA.append(mH[mt_id]["strand"])
-                cpgA.append(gt_id)
-                cpgA.append(gH[gt_id]["chrom"])
-                cpgA.append(gH[gt_id]["chromStart"])
-                cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("CIS")
-                my_typeCountH["cis"] += 1
-                if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
-                my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
+            mt_chromStart = mH[mt_id]["chromStart"]
+            gt_chromStart = gH[gt_id]["chromStart"]
+            gt_chromEnd = gH[gt_id]["chromEnd"]
 
-        ##
-        ## check for PROMOTER - negative strand
-        ##
-
-        # PROMOTER: +/- 2500bp from TSS
-    
-        #           |<<<<<<| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                  | TSS (strand=“-”)
-        #                  | +offset (0Kb)
-        #              | region start (-2500)
-        #                      | cpg
-        #                             | region end (+2500)
-        #              |--------------| target region
-        # downstream                                   upstream
-
-        if gH[gt_id]["strand"] == "-":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            regionRef_pos = geneStart_pos + PROMOTER_OFFSET
-            regionDnStreamRange = regionRef_pos - PROMOTER_DOWNSTREAM_DISTANCE
-            regionUpStreamRange = regionRef_pos + PROMOTER_UPSTREAM_DISTANCE
-            if (regionDnStreamRange < cpg_pos) & (cpg_pos < regionUpStreamRange):
-                cpgA = []
-                cpgA.append(mt_id)
-                cpgA.append(mH[mt_id]["chrom"])
-                cpgA.append(mH[mt_id]["chromStart"])
-                cpgA.append(mH[mt_id]["strand"])
-                cpgA.append(gt_id)
-                cpgA.append(gH[gt_id]["chrom"])
-                cpgA.append(gH[gt_id]["chromStart"])
-                cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("PROMOTER")
+            region = None
+            if mt_chromStart > gt_chromEnd + 50000:
+                region = 'DISTAL5'
+                my_typeCountH["distal5"] += 1
+            elif gt_chromEnd + 2500 < mt_chromStart <= gt_chromEnd + 50000:
+                region = 'CIS5'
+                my_typeCountH["cis5"] += 1
+            elif gt_chromEnd - 2500 <= mt_chromStart <= gt_chromEnd + 2500:
+                region = 'PROMOTER'
                 my_typeCountH["promoter"] += 1
-                if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
-                my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
+            elif gt_chromStart < mt_chromStart < gt_chromEnd - 2500:
+                region = 'GENEBODY'
+                my_typeCountH["genebody"] += 1
+            elif gt_chromStart - 50000 <= mt_chromStart <= gt_chromStart:
+                region = 'CIS3'
+                my_typeCountH["cis3"] += 1
+            elif mt_chromStart < gt_chromStart - 50000:
+                region = 'DISTAL3'
+                my_typeCountH["distal3"] += 1
 
-        ##
-        ## check for GENE BODY - negative strand
-        ##
-
-        # GENE BODY: TSS to TES
-
-        #                         |<<<<<<<| gene
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        #                         | TSS (strand=“-”)
-        #                         | -offset (0Kb)
-        #                         | region start (-2500)
-        #                             | cpg
-        #                                 | TES
-        #                                 | region end (+2500)
-        #                         |-------| target region
-        # downstream                                   upstream
-
-        if gH[gt_id]["strand"] == "-":
-            cpg_pos = mH[mt_id]["chromStart"] 
-            geneStart_pos = gH[gt_id]["chromStart"]
-            geneEnd_pos = gH[gt_id]["chromEnd"]
-            if (geneEnd_pos < cpg_pos) & (cpg_pos < geneStart_pos):
+            if region:
                 cpgA = []
                 cpgA.append(mt_id)
                 cpgA.append(mH[mt_id]["chrom"])
@@ -530,11 +317,9 @@ def assignRegion(my_ecpgDataFile, gH, mH):
                 cpgA.append(gH[gt_id]["chrom"])
                 cpgA.append(gH[gt_id]["chromStart"])
                 cpgA.append(gH[gt_id]["strand"])
-                cpgA.append("GENEBODY")
-                my_typeCountH["genebody"] += 1
+                cpgA.append(region)
                 if DEBUG: print("[assignRegion][DEBUG]",nlp,cpgA)
                 my_eqtmA.append(cpgA)
-                #continue   ## allow eCpG to be annotated for multiple regions on the same chromosome
 
         #if nlp >= 100:
         #    print("[assignRegion][WARN] Ending loop early:", nlp, " Are you debugging?")

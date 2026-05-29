@@ -119,7 +119,7 @@ def main():
     # Get regional counts
     region_counts = df.group_by("region").agg(pl.len().alias("total_hits")).sort("region")
 
-    regions = ["PROMOTER", "GENEBODY", "CIS", "DISTAL", "TRANS", "UNKNOWN"]
+    regions = ["PROMOTER", "GENEBODY", "CIS5", "CIS3", "DISTAL5", "DISTAL3", "TRANS", "UNKNOWN"]
 
     # Find all regions present
     present_regions = df["region"].unique().to_list()

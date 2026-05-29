@@ -172,10 +172,12 @@ def reportPvalues(my_ecpgDataFile, pval_col, chunk_size):
 def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
     my_typeCountH = {
         "trans": 0,
-        "distal": 0,
-        "cis": 0,
+        "distal5": 0,
+        "cis5": 0,
         "promoter": 0,
-        "genebody": 0
+        "genebody": 0,
+        "cis3": 0,
+        "distal3": 0
     }
 
     nlp = 0 ## number loci processed
@@ -302,120 +304,66 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
             # Keep track of regions assigned for this pair
             assigned_regions = 0
 
-            ## check for DISTAL - positive strand
+            ## Region assignment - positive strand
             if gt_strand == "+":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                regionRef_pos = geneStart_pos - DISTAL_OFFSET
-                if cpg_pos < regionRef_pos:
-                    cpgA = dict(base_row)
-                    cpgA.update(annot_base)
-                    cpgA['region'] = "DISTAL"
-                    my_typeCountH["distal"] += 1
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
-                    my_eqtmA.append(cpgA)
-                    assigned_regions += 1
-
-            ## check for CIS - positive strand
-            if gt_strand == "+":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                regionRef_pos = geneStart_pos - CIS_OFFSET
-                regionUpStreamRange = geneStart_pos - CIS_UPSTREAM_DISTANCE
-                if (regionUpStreamRange < cpg_pos) and (cpg_pos < geneStart_pos):
-                    cpgA = dict(base_row)
-                    cpgA.update(annot_base)
-                    cpgA['region'] = "CIS"
-                    my_typeCountH["cis"] += 1
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
-                    my_eqtmA.append(cpgA)
-                    assigned_regions += 1
-
-            ## check for PROMOTER - positive strand
-            if gt_strand == "+":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                regionRef_pos = geneStart_pos - PROMOTER_OFFSET
-                regionUpStreamRange = regionRef_pos - PROMOTER_UPSTREAM_DISTANCE
-                regionDnStreamRange = regionRef_pos + PROMOTER_DOWNSTREAM_DISTANCE
-                if (regionUpStreamRange < cpg_pos) and (cpg_pos < regionDnStreamRange):
-                    cpgA = dict(base_row)
-                    cpgA.update(annot_base)
-                    cpgA['region'] = "PROMOTER"
+                gt_chromEnd = gH[gt_id]["chromEnd"]
+                if mt_chromStart < gt_chromStart - 50000:
+                    region = 'DISTAL5'
+                    my_typeCountH["distal5"] += 1
+                elif gt_chromStart - 50000 <= mt_chromStart < gt_chromStart - 2500:
+                    region = 'CIS5'
+                    my_typeCountH["cis5"] += 1
+                elif gt_chromStart - 2500 <= mt_chromStart <= gt_chromStart + 2500:
+                    region = 'PROMOTER'
                     my_typeCountH["promoter"] += 1
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
-                    my_eqtmA.append(cpgA)
-                    assigned_regions += 1
-
-            ## check for GENE BODY - positive strand
-            if gt_strand == "+":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                geneEnd_pos = gH[gt_id]["chromEnd"]
-                if (geneStart_pos < cpg_pos) and (cpg_pos < geneEnd_pos):
-                    cpgA = dict(base_row)
-                    cpgA.update(annot_base)
-                    cpgA['region'] = "GENEBODY"
+                elif gt_chromStart + 2500 < mt_chromStart < gt_chromEnd:
+                    region = 'GENEBODY'
                     my_typeCountH["genebody"] += 1
+                elif gt_chromEnd <= mt_chromStart <= gt_chromEnd + 50000:
+                    region = 'CIS3'
+                    my_typeCountH["cis3"] += 1
+                elif mt_chromStart > gt_chromEnd + 50000:
+                    region = 'DISTAL3'
+                    my_typeCountH["distal3"] += 1
+                else:
+                    region = None
+
+                if region:
+                    cpgA = dict(base_row)
+                    cpgA.update(annot_base)
+                    cpgA['region'] = region
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
                     assigned_regions += 1
 
-            ## check for DISTAL - negative strand
+            ## Region assignment - negative strand
             if gt_strand == "-":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                regionRef_pos = geneStart_pos + DISTAL_OFFSET
-                if regionRef_pos < cpg_pos:
-                    cpgA = dict(base_row)
-                    cpgA.update(annot_base)
-                    cpgA['region'] = "DISTAL"
-                    my_typeCountH["distal"] += 1
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
-                    my_eqtmA.append(cpgA)
-                    assigned_regions += 1
-
-            ## check for CIS - negative strand
-            if gt_strand == "-":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                regionRef_pos = geneStart_pos
-                regionUpStreamRange = regionRef_pos + CIS_OFFSET
-                if (geneStart_pos < cpg_pos ) and (cpg_pos < regionUpStreamRange):
-                    cpgA = dict(base_row)
-                    cpgA.update(annot_base)
-                    cpgA['region'] = "CIS"
-                    my_typeCountH["cis"] += 1
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
-                    my_eqtmA.append(cpgA)
-                    assigned_regions += 1
-
-            ## check for PROMOTER - negative strand
-            if gt_strand == "-":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                regionRef_pos = geneStart_pos + PROMOTER_OFFSET
-                regionDnStreamRange = regionRef_pos - PROMOTER_DOWNSTREAM_DISTANCE
-                regionUpStreamRange = regionRef_pos + PROMOTER_UPSTREAM_DISTANCE
-                if (regionDnStreamRange < cpg_pos) and (cpg_pos < regionUpStreamRange):
-                    cpgA = dict(base_row)
-                    cpgA.update(annot_base)
-                    cpgA['region'] = "PROMOTER"
+                gt_chromEnd = gH[gt_id]["chromEnd"]
+                if mt_chromStart > gt_chromEnd + 50000:
+                    region = 'DISTAL5'
+                    my_typeCountH["distal5"] += 1
+                elif gt_chromEnd + 2500 < mt_chromStart <= gt_chromEnd + 50000:
+                    region = 'CIS5'
+                    my_typeCountH["cis5"] += 1
+                elif gt_chromEnd - 2500 <= mt_chromStart <= gt_chromEnd + 2500:
+                    region = 'PROMOTER'
                     my_typeCountH["promoter"] += 1
-                    if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
-                    my_eqtmA.append(cpgA)
-                    assigned_regions += 1
+                elif gt_chromStart < mt_chromStart < gt_chromEnd - 2500:
+                    region = 'GENEBODY'
+                    my_typeCountH["genebody"] += 1
+                elif gt_chromStart - 50000 <= mt_chromStart <= gt_chromStart:
+                    region = 'CIS3'
+                    my_typeCountH["cis3"] += 1
+                elif mt_chromStart < gt_chromStart - 50000:
+                    region = 'DISTAL3'
+                    my_typeCountH["distal3"] += 1
+                else:
+                    region = None
 
-            ## check for GENE BODY - negative strand
-            if gt_strand == "-":
-                cpg_pos = mt_chromStart
-                geneStart_pos = gt_chromStart
-                geneEnd_pos = gH[gt_id]["chromEnd"]
-                if (geneEnd_pos < cpg_pos) and (cpg_pos < geneStart_pos):
+                if region:
                     cpgA = dict(base_row)
                     cpgA.update(annot_base)
-                    cpgA['region'] = "GENEBODY"
-                    my_typeCountH["genebody"] += 1
+                    cpgA['region'] = region
                     if logger.isEnabledFor(logging.DEBUG): logger.debug(f"[assignRegion] {nlp} {list(cpgA.values())}")
                     my_eqtmA.append(cpgA)
                     assigned_regions += 1
