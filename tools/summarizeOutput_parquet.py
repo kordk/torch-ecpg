@@ -28,12 +28,14 @@ def download_gencode_gtf(target_dir):
     url = "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_49/GRCh37_mapping/gencode.v49lift37.annotation.gtf.gz"
     filename = url.split('/')[-1]
     filepath = os.path.join(target_dir, filename)
-
     if not os.path.exists(filepath):
         print(f"Downloading GENCODE GTF track from {url} ...")
         try:
-            urllib.request.urlretrieve(url, filepath)
+            if not url.lower().startswith(('http://', 'https://')):
+                raise ValueError(f"Refusing to download non-http(s) URL: {url}")
+            urllib.request.urlretrieve(url, filepath)  # nosec B310 - scheme validated above
         except Exception as e:
+
             print(f"Error downloading {url}: {e}")
             return None
 
