@@ -21,7 +21,7 @@ NETWORK_DIR="${OUT_DIR}/network"
 PARQUET_FILE="${OUT_DIR}/bootstrap_merged.parquet"
 
 # Network export filtering defaults
-NETWORK_TOP_K=1000
+NETWORK_TOP_K=5000
 NETWORK_MAX_BOOT_P=0.05
 
 log "======================================"
