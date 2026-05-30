@@ -15,6 +15,18 @@ TOTAL_TESTS=1000000
 NUM_PCS=5
 START_STAGE="all"
 
+
+# Per-stage Integrated Gradients (IG) Covariate Configuration
+# 'none' / '': Compute only scalar methylation attribution (mt_ig)
+# 'all': Compute per-feature attribution for all covariates (<covariate>_ig)
+# Why two variables? Per-feature IG adds ~12 float columns per row.
+# Stage 3 (genome-wide) generates 153M rows. Adding per-feature IG here would bloat
+# intermediate files by >5GB each, so it defaults to 'none'.
+# Stage 9 (bootstrap) runs on the top 20k candidates. Adding per-feature IG here
+# costs only ~1MB, but enables full saliency fraction analysis, so it defaults to 'all'.
+MLR_IG_COVARIATES="none"
+BOOTSTRAP_IG_COVARIATES="all"
+
 # Chunk sizes for `tecpg run mlr` are intentionally NOT set here. As of
 # tecpg 1.21.0-dev the CLI's anchored auto-sizer (`_auto_chunk_sizes` in
 # tecpg/cli.py) picks `--gene-loci-per-chunk` and `--meth-loci-per-chunk`
@@ -295,7 +307,13 @@ fi
 
 # Ensure pipefail is set so pipeline errors (like in mlr) are not masked by tee
 set -o pipefail
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig 2>&1 | tee "mlr_run_${DATASET}.log"
+MLR_IG_ARGS=()
+if [ "$MLR_IG_COVARIATES" = "all" ]; then
+    MLR_IG_ARGS+=(--ig-covariates)
+elif [ -n "$MLR_IG_COVARIATES" ] && [ "$MLR_IG_COVARIATES" != "none" ]; then
+    MLR_IG_ARGS+=(--ig-covariates-list "$MLR_IG_COVARIATES")
+fi
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig "${MLR_IG_ARGS[@]}" 2>&1 | tee "mlr_run_${DATASET}.log"
 set +o pipefail
 fi
 
@@ -384,7 +402,13 @@ if [ $EXECUTE -eq 1 ]; then
 log "[9/9] Bootstrapping top hits..."
 log "Running bootstrap analysis on the top candidates to validate association robustness."
 log "Pairs File: $BOOTSTRAP_LIST, Master Parquet: $SUMMARIZED_PARQUET"
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 1000 --bootstrap-batch-size 10 --compute-ig
+BOOTSTRAP_IG_ARGS=()
+if [ "$BOOTSTRAP_IG_COVARIATES" = "all" ]; then
+    BOOTSTRAP_IG_ARGS+=(--ig-covariates)
+elif [ -n "$BOOTSTRAP_IG_COVARIATES" ] && [ "$BOOTSTRAP_IG_COVARIATES" != "none" ]; then
+    BOOTSTRAP_IG_ARGS+=(--ig-covariates-list "$BOOTSTRAP_IG_COVARIATES")
+fi
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 1000 --bootstrap-batch-size 10 --compute-ig "${BOOTSTRAP_IG_ARGS[@]}"
 fi
 
 log "======================================"
