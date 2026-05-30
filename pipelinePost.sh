@@ -38,7 +38,7 @@ fi
 mkdir -p "$PLOTS_DIR" "$NETWORK_DIR"
 
 # Stage 1: Obtain cytoBand.txt if missing
-log "[1/5] Checking for cytoBand.txt..."
+log "[1/6] Checking for cytoBand.txt..."
 if [ ! -f "cytoBand.txt" ]; then
     log "cytoBand.txt not found. Downloading from UCSC..."
     curl -O http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz
@@ -49,15 +49,15 @@ else
 fi
 
 # Stage 2: Run plotCircos.py
-log "[2/5] Running plotCircos.py..."
+log "[2/6] Running plotCircos.py..."
 python3 -u tools/plotCircos.py -i "$PARQUET_FILE" --cytoband cytoBand.txt --out-dir "$PLOTS_DIR"
 
 # Stage 3: Run visualizeFindings.py
-log "[3/5] Running visualizeFindings.py..."
+log "[3/6] Running visualizeFindings.py..."
 python3 -u tools/visualizeFindings.py --all -m "$DATA_DIR/M.csv" -g "$DATA_DIR/G.csv" -c "$DATA_DIR/C.csv" "$PARQUET_FILE" --out-dir "$PLOTS_DIR"
 
 # Stage 4: Run exportBipartiteNetwork.py to generate cytoscape nodes/edges
-log "[4/5] Generating Cytoscape network files..."
+log "[4/6] Generating Cytoscape network files..."
 python3 -u tools/exportBipartiteNetwork.py \
     -i "$PARQUET_FILE" \
     -o cytoscape \
@@ -66,8 +66,11 @@ python3 -u tools/exportBipartiteNetwork.py \
     --max-boot-p "$NETWORK_MAX_BOOT_P"
 
 # Stage 5: Run visualizeBipartiteNetwork.py
-log "[5/5] Running visualizeBipartiteNetwork.py..."
+log "[5/6] Running visualizeBipartiteNetwork.py..."
 python3 -u tools/visualizeBipartiteNetwork.py --edges "$NETWORK_DIR/cytoscape_edges.csv" --nodes "$NETWORK_DIR/cytoscape_nodes.csv" --out-dir "$NETWORK_DIR"
+# Stage 6: Run evaluateSaliency.py
+log "[6/6] Running evaluateSaliency.py..."
+python3 -u tools/evaluateSaliency.py -i "$PARQUET_FILE" -o "$PLOTS_DIR"
 
 log "======================================"
 log "Post-processing pipeline completed successfully!"
