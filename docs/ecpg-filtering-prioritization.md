@@ -233,6 +233,7 @@ resamples samples with replacement and emits (`tecpg/bootstrap.py:200-235`):
 | `mt_est_boot_std`  | std of β (robustness) |
 | `ci_low`, `ci_high`| 2.5% / 97.5% percentile CI |
 | `p_boot` | empirical two-sided p = `2 · min(P(β≤0), P(β≥0))` |
+| `<covariate>_ig` | per-feature integrated gradients for covariates (enabled by `BOOTSTRAP_IG_COVARIATES="all"` in Stage 9) |
 
 Results are left-joined onto the master parquet → `bootstrap_merged.parquet`.
 

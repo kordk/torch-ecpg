@@ -283,6 +283,14 @@ high-precision p-value (`precise_mt_p`), the assigned region
 (`region`/`Region`), the global BH-FDR q-value, and (after the bootstrap
 stage) the empirical bootstrap p-value `p_boot`.
 
+
+### Integrated Gradients (IG) Covariates
+
+The pipeline computes per-feature saliency (Integrated Gradients) to measure the relative contribution of methylation vs. covariates. Because computing this for every genome-wide eQTM pair significantly bloats the intermediate output files (~12 float columns per row across 150M rows adds >5GB per file), the feature is scoped by stage using two variables near the top of `pipeline.sh`:
+
+*   `MLR_IG_COVARIATES`: Defaults to `"none"` for Stage 3 (genome-wide mapping). Only scalar `mt_ig` is produced.
+*   `BOOTSTRAP_IG_COVARIATES`: Defaults to `"all"` for Stage 9 (bootstrap). Because the bootstrap runs on a small, prioritized candidate list (e.g. 20,000 rows), enabling full per-feature IG costs very little space (~1MB) while enabling full fraction-based saliency analysis downstream.
+
 ## Chunking
 
 If the input is too large, the computational device may run out of memory. Chunking can help prevent this by partitioning the data into chunks that are computed and saved separately. Chunking sacrifices parallelization, and thus speed, for lower memory. Avoid chunking wherever possible for speed.
