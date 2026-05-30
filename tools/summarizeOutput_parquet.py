@@ -1111,10 +1111,22 @@ Outputs and Metrics Calculated:
                     # If any didn't map (shouldn't happen), fill with 1.0
                     df_chunk['fdr_est'] = df_chunk['fdr_est'].fillna(1.0)
 
+                # Ensure coordinate columns are consistently typed as nullable Int64
+                # This prevents pyarrow from deducing int64 for chunks without nulls and float64 for chunks with nulls.
+                if 'mt_chromStart' in df_chunk.columns:
+                    df_chunk['mt_chromStart'] = pd.to_numeric(df_chunk['mt_chromStart'], errors='coerce').astype('Int64')
+                if 'gt_chromStart' in df_chunk.columns:
+                    df_chunk['gt_chromStart'] = pd.to_numeric(df_chunk['gt_chromStart'], errors='coerce').astype('Int64')
+
                 table = pa.Table.from_pandas(df_chunk, preserve_index=False)
 
                 if writer is None:
-                    writer = pq.ParquetWriter(args.output_fdr_file, table.schema)
+                    # Define explicit schema once on the first chunk
+                    explicit_schema = table.schema
+                    writer = pq.ParquetWriter(args.output_fdr_file, explicit_schema)
+                else:
+                    # Cast subsequent chunks to the explicit schema established by the first chunk
+                    table = table.cast(explicit_schema)
 
                 writer.write_table(table)
 
