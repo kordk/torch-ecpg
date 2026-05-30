@@ -123,7 +123,7 @@ def _patch_pycircos():
 _patch_pycircos()
 
 
-def load_and_validate_data(filepath, valid_chroms):
+def load_and_validate_data(filepath, valid_chroms, out_dir):
     cprint(f"Loading data from {filepath}...")
 
     # We use pq.ParquetFile to inspect schema without loading full file
@@ -268,23 +268,27 @@ def load_and_validate_data(filepath, valid_chroms):
         cprint("========================")
         # -----------------------------------------
 
-        for _, row in missing_df.iterrows():
-            mt_name = row['mt_id'] if has_mt_id else "UNKNOWN_CPG"
-            gt_name = row['gt_id'] if has_gt_id else "UNKNOWN_GENE"
+        sidecar_path = os.path.join(out_dir, "circos_missing_ids.txt")
+        with open(sidecar_path, "w") as f:
+            f.write("mt_id\tgt_id\treason\n")
+            for _, row in missing_df.iterrows():
+                mt_name = row['mt_id'] if has_mt_id else "UNKNOWN_CPG"
+                gt_name = row['gt_id'] if has_gt_id else "UNKNOWN_GENE"
 
-            reasons = []
-            if pd.isna(row['mt_chromStart']) or row['mt_chrom'] == 'chrnan' or row['mt_chrom'] == 'chrNone':
-                reasons.append("Missing/Invalid Methylation Coordinates")
-            elif row['mt_chrom'] not in valid_chroms:
-                reasons.append(f"Methylation Chromosome '{row['mt_chrom']}' not in Cytoband")
+                reasons = []
+                if pd.isna(row['mt_chromStart']) or row['mt_chrom'] == 'chrnan' or row['mt_chrom'] == 'chrNone':
+                    reasons.append("Missing/Invalid Methylation Coordinates")
+                elif row['mt_chrom'] not in valid_chroms:
+                    reasons.append(f"Methylation Chromosome '{row['mt_chrom']}' not in Cytoband")
 
-            if pd.isna(row['gt_chromStart']) or row['gt_chrom'] == 'chrnan' or row['gt_chrom'] == 'chrNone':
-                reasons.append("Missing/Invalid Gene Coordinates")
-            elif row['gt_chrom'] not in valid_chroms:
-                reasons.append(f"Gene Chromosome '{row['gt_chrom']}' not in Cytoband")
+                if pd.isna(row['gt_chromStart']) or row['gt_chrom'] == 'chrnan' or row['gt_chrom'] == 'chrNone':
+                    reasons.append("Missing/Invalid Gene Coordinates")
+                elif row['gt_chrom'] not in valid_chroms:
+                    reasons.append(f"Gene Chromosome '{row['gt_chrom']}' not in Cytoband")
 
-            reason_str = ", ".join(reasons)
-            cprint(f"Excluding pair: CpG={mt_name}, Gene={gt_name} (Reason: {reason_str})")
+                reason_str = ", ".join(reasons)
+                f.write(f"{mt_name}\t{gt_name}\t{reason_str}\n")
+                # Removed per-pair stdout logging to reduce spam
 
         unique_cpgs = missing_df['mt_id'].nunique() if has_mt_id else 0
         unique_genes = missing_df['gt_id'].nunique() if has_gt_id else 0
@@ -295,9 +299,8 @@ def load_and_validate_data(filepath, valid_chroms):
         reason_gt_chrom_not_in_cyto = missing_chrom_mask_gt.sum()
 
         cprint(f"Summary of excluded missing data:")
+        cprint(f"  Annotation missing: {unique_genes} unique genes, {unique_cpgs} unique CpGs (full list -> {os.path.abspath(sidecar_path)})")
         cprint(f"  Total pairs excluded: {len(missing_df)} (Retained: {len(df) - len(missing_df)})")
-        cprint(f"  Unique CpGs excluded: {unique_cpgs}")
-        cprint(f"  Unique genes excluded: {unique_genes}")
         cprint(f"Breakdown of exclusion reasons (a pair may match multiple):")
         cprint(f"  Missing/Invalid Methylation Coordinates: {reason_missing_mt_coords}")
         cprint(f"  Missing/Invalid Gene Coordinates: {reason_missing_gt_coords}")
@@ -635,7 +638,7 @@ def main():
 
     filtered_cytoband_df.to_csv(temp_cytoband_path, sep='\t', header=False, index=False)
 
-    df = load_and_validate_data(args.input, valid_chroms)
+    df = load_and_validate_data(args.input, valid_chroms, args.out_dir)
     cprint(f"Loaded {len(df)} records.")
 
     df_top_saliency, df_trans_only = filter_data(df, args.top_n, args.top_n_trans)
