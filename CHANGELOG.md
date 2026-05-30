@@ -2,8 +2,13 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **1.27.6-dev**.
+The current development version on the `dev` branch is **2.0.0b2.dev8**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
+
+As of `2.0.0b2.dev0` the project version scheme migrated to the
+[PEP 440](https://peps.python.org/pep-0440/) standard, replacing the
+older `X.Y.Z-dev` suffix with pre-release / development tags such as
+`2.0.0b1` (beta) and `2.0.0b2.devN`.
 
 Entries below describe the work accumulated on `dev` since the last
 release on `main`, grouped by the version bump that landed each set of
@@ -11,6 +16,158 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 2.0.0b2.dev8
+
+### Features
+- Add `tools/evaluateSaliency.py` for integrated-gradients (IG)
+  distribution analysis (PR #254, PR #255). Parses the
+  bootstrap-merged Parquet to produce console reports and decay
+  curves of the `mt_ig` saliency distribution, chunking the read with
+  `iter_batches` to avoid memory saturation on massive (153M-row)
+  datasets such as MESA. Detects the saliency inflection point using
+  `kneed` when available and falls back to normalized chord-distance
+  geometry otherwise, degrading gracefully when per-feature IG scores
+  lack covariate columns. The step is wired into `pipelinePost.sh`,
+  and a synthetic `tests/test_evaluateSaliency.py` fixture is added.
+
+### Bug Fixes
+- Correctly apply `--ig-covariates` to the bootstrap MLR stage so that
+  per-feature IG attribution is emitted (PR #256). `pipeline.sh`
+  previously passed only `--compute-ig`, leaving `mt_ig` (scalar
+  methylation attribution) as the sole output and producing
+  broken/degenerate `evaluateSaliency.py` results. Two stage-scoped
+  configuration variables now control per-feature IG generation:
+  `MLR_IG_COVARIATES="none"` (Stage 3, to avoid intermediate-file
+  bloat) and `BOOTSTRAP_IG_COVARIATES="all"` (Stage 9, to compute
+  full per-feature saliency on top candidates at ~1MB cost).
+  Downstream scripts read Parquet schemas dynamically and propagate
+  the `<covariate>_ig` columns to `bootstrap_merged.parquet`
+  automatically. Documentation is updated to reflect the
+  stage-scoped configuration, and a synthetic `test_per_feature_ig.py`
+  verifies the per-feature IG does not collapse to uniform fractions.
+
+## 2.0.0b2.dev7
+
+### Bug Fixes
+- Harden functional enrichment against transient and configuration
+  failures in `tools/summarizeOutput_parquet.py` (PR #254). Adds retry
+  logic with exponential backoff for `gseapy.enrichr` calls to absorb
+  transient network errors (e.g. HTTP 504), validates library names
+  against `gseapy.get_library_name()` and updates the deprecated
+  `WikiPathways_2021_Human` to `WikiPathways_2024_Human`, adds
+  `--enrichment-max-genes` to rank and cap submitted genes by lowest
+  p-value (avoiding Enrichr payload-size limits), and adds a
+  `--dry-run-enrichment` flag to simulate API calls and failure
+  recovery.
+
+## 2.0.0b2.dev6
+
+### Bug Fixes
+- Fix a Parquet schema-mismatch error in FDR summarization in
+  `tools/summarizeOutput_parquet.py` (PR #253). When writing result
+  chunks, Pandas converted nullable integer coordinates to `float64`
+  if `NaN`s were present but kept `int64` otherwise, causing PyArrow
+  to reject later chunks. The schema retrieved from the first chunk is
+  now applied explicitly to all subsequent chunks, and the
+  `mt_chromStart` / `gt_chromStart` coordinate columns are coerced to
+  pandas' nullable `Int64` type to prevent float conversion. A unit
+  test verifies chunk-writing stability under schema variability.
+
+## 2.0.0b2.dev5
+
+### Improvements / Performance
+- Sideload `plotCircos.py` missing-coordinate exclusions to a sidecar
+  file instead of flooding the main log (PR #252).
+
+## 2.0.0b2.dev4
+
+### Features
+- Add a `--min-per-region` floor limit to the bootstrap pair-selection
+  script `tools/createBootstrapList.py` (PR #118, default 200). A
+  "sandwich" calculation guarantees a minimum number of pairs per
+  region when available, and the output summary table now displays
+  `(FLOOR)` and `(CAPPED)` labels alongside the configured floor.
+
+### Improvements / Performance
+- Update `pipeline.sh` bootstrap configuration: per-region floor
+  (`> 4500/region`), `< 10,000` max cap, and 1000 bootstrap
+  iterations.
+- Increase the default `NETWORK_TOP_K` to 5000.
+
+## 2.0.0b2.dev3
+
+### Improvements / Performance
+- Increase the default `NETWORK_TOP_K` to 1000.
+
+## 2.0.0b2.dev2
+
+### Improvements / Performance
+- Update `.github/dependabot.yml` configuration for Dependabot.
+
+## 2.0.0b2.dev1
+
+### Features
+- Add the eCpG filtering & prioritization living document
+  (`docs/ecpg-filtering-prioritization.md`) and link it from the
+  README (PR #241).
+
+### Bug Fixes
+- Fix Illumina probe ID translation in
+  `tools/summarizeOutput_parquet.py` (PR #242). Renames
+  `clean_and_translate_ensembl_ids` to `clean_and_translate_gene_ids`
+  and adds mapping for Illumina `ILMN_*` array probe IDs (e.g. the GTP
+  cohort): primary resolution via Re-Annotator
+  (`demo/reannotator_humanHt12v4.txt`), then a secondary fallback
+  using `demo/ucsc_illuminaProbes.hg19.txt` or
+  `demo/annoHT12.hg19.bed6` with GENCODE v49lift37 `pyranges`
+  intersection, while preserving the generic `mygene` strategy for
+  `ensembl.gene` arrays (e.g. MESA). Also adds URL-scheme validation
+  to `download_gencode_gtf` (only `http://`/`https://`), resolving a
+  Bandit B310 finding.
+
+## 2.0.0b2.dev0
+
+### Improvements / Performance
+- Migrate the project version scheme to the PEP 440 standard.
+
+### Bug Fixes
+- Refactor eCpG region classification to contiguous, symmetric 5'/3'
+  labels (PR #240). Replaces the previous CIS / DISTAL classifications
+  with bidirectional `CIS5`, `CIS3`, `DISTAL5`, `DISTAL3` variants
+  derived from the 5' and 3' coordinates, closing the unassigned gaps
+  for same-chromosome pairs in both `assignRegionToEcpg_parquet.py`
+  and the legacy `assignRegionToEcpg.py` (both strands), preventing
+  `UNKNOWN` dead-zones. Dictionary keys (`my_typeCountH`) and
+  downstream reporting tools (`createBootstrapList.py`,
+  `test_exportBipartiteNetwork.py`) are updated to the new annotation
+  strings; existing plot scripts accept the new categories without
+  hardcoded color conflicts.
+
+## 2.0.0b1
+
+### Improvements / Performance
+- Bump version to `2.0.0b1` for the Beta release.
+
+## 1.27.8-dev
+
+### Features
+- Add the UCSC hg19 `illuminaProbes.txt` annotation
+  (`demo/ucsc_illuminaProbes.hg19.txt`), sourced from the UCSC
+  golden-path database, as a probe-mapping recovery source.
+
+### Improvements / Performance
+- Refresh README legacy sections, highlight the `pipeline.sh` stages,
+  and add a Demo datasets section (PR #239).
+
+## 1.27.7-dev
+
+### Improvements / Performance
+- Update the README to reflect the `dev` branch pipeline and changelog,
+  and add a migration example for the removed `-g`/`-m` short flags
+  (PR #238).
+- Regenerate the comprehensive BED6 annotation files for EPIC and
+  HT-12 (hg19/hg38).
 
 ## 1.27.6-dev
 
