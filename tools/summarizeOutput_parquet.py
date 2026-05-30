@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import gseapy
 import mygene
 import pyranges as pr
+import time
 import seaborn as sns
 from statsmodels.stats.multitest import multipletests
 import urllib.request
@@ -415,6 +416,10 @@ Outputs and Metrics Calculated:
     parser.add_argument("--encode-bed-dir", default="encode_beds", help="Directory containing ENCODE BED files (will auto-download if missing).")
     parser.add_argument("--background-bed", help="Path to the background universe BED file (e.g. annoEPIC.hg19.bed6). Required if --encode-enrichment is set.")
 
+    # Functional Enrichment Options
+    parser.add_argument("--enrichment-max-genes", type=int, default=3000, help="Maximum number of unique genes to submit to Enrichr per region. Genes are ranked by best p-value. Default: 3000.")
+    parser.add_argument("--dry-run-enrichment", action="store_true", help="Simulate functional enrichment API calls, including retries and failures, without network access.")
+
     args = parser.parse_args()
 
     if args.encode_enrichment and not args.background_bed:
@@ -735,7 +740,7 @@ Outputs and Metrics Calculated:
     # Variables for ENCODE Enrichment Analysis
     significant_cpgs = set()
     significant_cpgs_by_region = {}
-    significant_genes_by_region = {}
+    significant_genes_by_region = {} # Maps region -> {gene: best_p_value}
 
     # Collect Significant Genes and CpGs for Enrichment (if requested and possible)
     if p_max_fdr >= 0:
@@ -761,15 +766,21 @@ Outputs and Metrics Calculated:
                 # Filter for significant
                 sig_mask = chunk_p_vals <= p_max_fdr
                 if sig_mask.any():
-                    sig_df = df_chunk[sig_mask]
+                    sig_df = df_chunk[sig_mask].copy()
+                    sig_df['__chunk_p_val'] = chunk_p_vals[sig_mask]
 
                     if has_region and 'region' in sig_df.columns:
                         for region, group in sig_df.groupby('region'):
                             if 'gt_id' in sig_df.columns:
-                                genes = set(group['gt_id'].dropna().unique())
                                 if region not in significant_genes_by_region:
-                                    significant_genes_by_region[region] = set()
-                                significant_genes_by_region[region].update(genes)
+                                    significant_genes_by_region[region] = {}
+
+                                # Update tracking of the best (minimum) p-value for each gene in this region
+                                for _, row in group.dropna(subset=['gt_id']).iterrows():
+                                    gene = row['gt_id']
+                                    pval = row['__chunk_p_val']
+                                    if gene not in significant_genes_by_region[region] or pval < significant_genes_by_region[region][gene]:
+                                        significant_genes_by_region[region][gene] = pval
 
                             if args.encode_enrichment:
                                 if 'mt_chrom' in group.columns and 'mt_chromStart' in group.columns:
@@ -1005,13 +1016,37 @@ Outputs and Metrics Calculated:
             os.makedirs(enrichment_dir)
 
         print(f"\nRunning functional enrichment analysis in '{enrichment_dir}/'...")
-        libraries = ['GO_Biological_Process_2021', 'KEGG_2021_Human', 'WikiPathways_2021_Human']
+        libraries = ['GO_Biological_Process_2021', 'KEGG_2021_Human', 'WikiPathways_2024_Human']
 
-        for region, genes in significant_genes_by_region.items():
-            print(f"\nProcessing region: {region} with {len(genes)} significant Ensembl IDs")
+        # Validate libraries
+        valid_libraries = set(gseapy.get_library_name())
+        validated_libraries = []
+        for lib in libraries:
+            if lib in valid_libraries:
+                validated_libraries.append(lib)
+            else:
+                print(f"Warning: Enrichment library '{lib}' is not available in gseapy. Skipping.")
+
+        if not validated_libraries:
+            print("Error: No valid enrichment libraries available. Skipping enrichment.")
+            validated_libraries = []
+
+        for region, gene_pvals in significant_genes_by_region.items():
+            if not validated_libraries:
+                break
+            # Rank genes by best p-value
+            sorted_genes = sorted(gene_pvals.keys(), key=lambda g: gene_pvals[g])
+
+            # Cap genes if necessary
+            if len(sorted_genes) > args.enrichment_max_genes:
+                print(f"\nProcessing region: {region} with {len(sorted_genes)} significant Ensembl IDs (capping to top {args.enrichment_max_genes} by best p-value)")
+                genes_to_submit = sorted_genes[:args.enrichment_max_genes]
+            else:
+                print(f"\nProcessing region: {region} with {len(sorted_genes)} significant Ensembl IDs")
+                genes_to_submit = sorted_genes
 
             # Clean and translate
-            mapped_symbols, unmapped_count = clean_and_translate_gene_ids(list(genes))
+            mapped_symbols, unmapped_count = clean_and_translate_gene_ids(genes_to_submit)
 
             if not mapped_symbols:
                 print(f"Skipping enrichment for {region} due to no mapped gene symbols.")
@@ -1020,64 +1055,87 @@ Outputs and Metrics Calculated:
             print(f"  Successfully mapped {len(mapped_symbols)} gene symbols.")
 
             # Run enrichr
-            for library in libraries:
+            for library in validated_libraries:
                 print(f"  Running enrichment against {library}...")
-                try:
-                    # gseapy.enrichr
-                    enr = gseapy.enrichr(
-                        gene_list=mapped_symbols,
-                        gene_sets=library,
-                        organism='human',
-                        outdir=None,  # Do not auto-save to output directory immediately to allow filtering
-                        no_plot=True,
-                    )
+                max_retries = 3
+                base_delay = 5
 
-                    if enr.results is not None and not enr.results.empty:
-                        # Filter by Adjusted P-value < 0.05
-                        sig_res = enr.results[enr.results['Adjusted P-value'] < 0.05]
+                enr = None
+                for attempt in range(max_retries + 1):
+                    try:
+                        if args.dry_run_enrichment:
+                            if attempt == 0:
+                                raise Exception("Simulated HTTP 504 error during dry run.")
+                            else:
+                                print("    [Dry Run] Simulated success after retry.")
+                                # Mock an empty result for dry run
+                                class MockEnr:
+                                    results = pd.DataFrame(columns=['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Genes'])
+                                enr = MockEnr()
+                                break
 
-                        if not sig_res.empty:
-                            # Save to CSV
-                            csv_filename = f"{region}_{library}_enrichment.csv".replace(" ", "_").replace("/", "_")
-                            csv_path = os.path.join(enrichment_dir, csv_filename)
-                            # Keep relevant columns
-                            columns_to_save = ['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Genes']
-                            # Filter missing columns just in case
-                            columns_to_save = [col for col in columns_to_save if col in sig_res.columns]
-                            sig_res[columns_to_save].to_csv(csv_path, index=False)
-                            print(f"    Saved {len(sig_res)} significant terms to {csv_filename}")
-
-                            # Visual Summary
-                            top_10 = sig_res.head(10).copy()
-                            if len(top_10) > 0:
-                                try:
-                                    # Create Dot Plot for Top 10
-                                    plt.figure(figsize=(10, 8))
-                                    # gseapy dotplot expects data with index as terms, 'Adjusted P-value', 'Overlap', etc.
-                                    # Alternatively, we can use simple matplotlib bar plot since gseapy.plot.dotplot requires specific formats
-
-                                    # Use a simple horizontal bar plot for Adjusted P-value
-                                    top_10 = top_10.sort_values('Adjusted P-value', ascending=False)
-                                    terms = top_10['Term'].apply(lambda x: (x[:47] + '...') if len(x) > 50 else x)
-                                    log_p = -np.log10(top_10['Adjusted P-value'].astype(float))
-
-                                    plt.barh(terms, log_p, color='skyblue', edgecolor='black')
-                                    plt.xlabel('-log10(Adjusted P-value)')
-                                    plt.title(f"Top Enriched Terms\n{region} - {library}")
-                                    plt.tight_layout()
-
-                                    plot_filename = f"{region}_{library}_top10.png".replace(" ", "_").replace("/", "_")
-                                    plot_path = os.path.join(enrichment_dir, plot_filename)
-                                    plt.savefig(plot_path)
-                                    plt.close()
-                                except Exception as plot_e:
-                                    print(f"    Error plotting {region} {library}: {plot_e}")
+                        # gseapy.enrichr
+                        enr = gseapy.enrichr(
+                            gene_list=mapped_symbols,
+                            gene_sets=library,
+                            organism='human',
+                            outdir=None,  # Do not auto-save to output directory immediately to allow filtering
+                            no_plot=True,
+                        )
+                        break # Success, break retry loop
+                    except Exception as e:
+                        if attempt < max_retries:
+                            delay = base_delay * (2 ** attempt)
+                            print(f"    Warning: Error running gseapy for {library}: {e}. Retrying in {delay} seconds (Attempt {attempt + 1}/{max_retries})...")
+                            time.sleep(delay)
                         else:
-                            print(f"    No significant terms found (Adjusted P-value < 0.05).")
+                            print(f"    Error: Failed to run gseapy for {library} after {max_retries} retries: {e}")
+                            enr = None # Ensure enr is None on failure
+
+                if enr is not None and enr.results is not None and not enr.results.empty:
+                    # Filter by Adjusted P-value < 0.05
+                    sig_res = enr.results[enr.results['Adjusted P-value'] < 0.05]
+
+                    if not sig_res.empty:
+                        # Save to CSV
+                        csv_filename = f"{region}_{library}_enrichment.csv".replace(" ", "_").replace("/", "_")
+                        csv_path = os.path.join(enrichment_dir, csv_filename)
+                        # Keep relevant columns
+                        columns_to_save = ['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Genes']
+                        # Filter missing columns just in case
+                        columns_to_save = [col for col in columns_to_save if col in sig_res.columns]
+                        sig_res[columns_to_save].to_csv(csv_path, index=False)
+                        print(f"    Saved {len(sig_res)} significant terms to {csv_filename}")
+
+                        # Visual Summary
+                        top_10 = sig_res.head(10).copy()
+                        if len(top_10) > 0:
+                            try:
+                                # Create Dot Plot for Top 10
+                                plt.figure(figsize=(10, 8))
+                                # gseapy dotplot expects data with index as terms, 'Adjusted P-value', 'Overlap', etc.
+                                # Alternatively, we can use simple matplotlib bar plot since gseapy.plot.dotplot requires specific formats
+
+                                # Use a simple horizontal bar plot for Adjusted P-value
+                                top_10 = top_10.sort_values('Adjusted P-value', ascending=False)
+                                terms = top_10['Term'].apply(lambda x: (x[:47] + '...') if len(x) > 50 else x)
+                                log_p = -np.log10(top_10['Adjusted P-value'].astype(float))
+
+                                plt.barh(terms, log_p, color='skyblue', edgecolor='black')
+                                plt.xlabel('-log10(Adjusted P-value)')
+                                plt.title(f"Top Enriched Terms\n{region} - {library}")
+                                plt.tight_layout()
+
+                                plot_filename = f"{region}_{library}_top10.png".replace(" ", "_").replace("/", "_")
+                                plot_path = os.path.join(enrichment_dir, plot_filename)
+                                plt.savefig(plot_path)
+                                plt.close()
+                            except Exception as plot_e:
+                                print(f"    Error plotting {region} {library}: {plot_e}")
                     else:
-                        print(f"    No enrichment results returned.")
-                except Exception as e:
-                    print(f"    Error running gseapy for {library}: {e}")
+                        print(f"    No significant terms found (Adjusted P-value < 0.05).")
+                elif enr is not None:
+                    print(f"    No enrichment results returned.")
 
     # Write FDR Output
     if args.output_fdr_file:
