@@ -374,7 +374,7 @@ if [ $EXECUTE -eq 1 ]; then
 log "[8/9] Creating Bootstrap List..."
 log "Identifying top hits (ranked by p-value) to be evaluated via bootstrapping."
 log "Input Parquet: $SUMMARIZED_PARQUET, Output List: $BOOTSTRAP_LIST"
-python3 tools/createBootstrapList.py --input "$SUMMARIZED_PARQUET" --output "$BOOTSTRAP_LIST" --rank-by p-value
+python3 tools/createBootstrapList.py --input "$SUMMARIZED_PARQUET" --output "$BOOTSTRAP_LIST" --rank-by p-value --min-per-region 4500 --max-per-region 10000
 fi
 
 if [ "$START_STAGE" == "bootstrap" ]; then EXECUTE=1; fi
@@ -384,7 +384,7 @@ if [ $EXECUTE -eq 1 ]; then
 log "[9/9] Bootstrapping top hits..."
 log "Running bootstrap analysis on the top candidates to validate association robustness."
 log "Pairs File: $BOOTSTRAP_LIST, Master Parquet: $SUMMARIZED_PARQUET"
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 100 --bootstrap-batch-size 10 --compute-ig
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 1000 --bootstrap-batch-size 10 --compute-ig
 fi
 
 log "======================================"
