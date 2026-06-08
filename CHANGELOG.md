@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev8**.
+The current development version on the `dev` branch is **2.0.0b2.dev9**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -17,19 +17,7 @@ changes. Each version section is organized into **Features**,
 
 ---
 
-## 2.0.0b2.dev8
-
-### Features
-- Add `tools/evaluateSaliency.py` for integrated-gradients (IG)
-  distribution analysis (PR #254, PR #255). Parses the
-  bootstrap-merged Parquet to produce console reports and decay
-  curves of the `mt_ig` saliency distribution, chunking the read with
-  `iter_batches` to avoid memory saturation on massive (153M-row)
-  datasets such as MESA. Detects the saliency inflection point using
-  `kneed` when available and falls back to normalized chord-distance
-  geometry otherwise, degrading gracefully when per-feature IG scores
-  lack covariate columns. The step is wired into `pipelinePost.sh`,
-  and a synthetic `tests/test_evaluateSaliency.py` fixture is added.
+## 2.0.0b2.dev9
 
 ### Bug Fixes
 - Correctly apply `--ig-covariates` to the bootstrap MLR stage so that
@@ -46,6 +34,20 @@ changes. Each version section is organized into **Features**,
   automatically. Documentation is updated to reflect the
   stage-scoped configuration, and a synthetic `test_per_feature_ig.py`
   verifies the per-feature IG does not collapse to uniform fractions.
+
+## 2.0.0b2.dev8
+
+### Features
+- Add `tools/evaluateSaliency.py` for integrated-gradients (IG)
+  distribution analysis (PR #254, PR #255). Parses the
+  bootstrap-merged Parquet to produce console reports and decay
+  curves of the `mt_ig` saliency distribution, chunking the read with
+  `iter_batches` to avoid memory saturation on massive (153M-row)
+  datasets such as MESA. Detects the saliency inflection point using
+  `kneed` when available and falls back to normalized chord-distance
+  geometry otherwise, degrading gracefully when per-feature IG scores
+  lack covariate columns. The step is wired into `pipelinePost.sh`,
+  and a synthetic `tests/test_evaluateSaliency.py` fixture is added.
 
 ## 2.0.0b2.dev7
 
