@@ -246,6 +246,8 @@ log "[7/9] Calculating FDR and summarizing..."
 log "Estimating global Benjamini-Hochberg FDR based on TOTAL_TESTS=$TOTAL_TESTS."
 log "Generating diagnostic plots (QQ, Histogram, Saliency)."
 log "Input Parquet: $RECALC_PARQUET, Output Parquet: $SUMMARIZED_PARQUET"
+# Note: functional/ENCODE enrichment was moved out of summarizeOutput_parquet.py into
+# tools/runEnrichment.py and is now run as a separate step in pipelinePost.sh.
 python3 tools/summarizeOutput_parquet.py --main-file "$RECALC_PARQUET" --reservoir-file "$OUT_DIR/sample_reservoir.csv" --total-tests "$TOTAL_TESTS" --df "$DF" --calculate-fdr --output-fdr-file "$SUMMARIZED_PARQUET"
 # Ensure plots are created in the right folder, but for now they go to CWD based on tool
 log "Moving generated plots to $OUT_DIR..."
