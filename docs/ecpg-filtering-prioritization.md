@@ -68,7 +68,7 @@ intercept), computed dynamically in `pipeline.sh:275-284`.
  │ [5]   annotate ★          tools/assignRegionToEcpg_…     annotated.parquet │
  │ [6]   precise_p ★         tools/recalculate_pvalues_…    annotated_pcalc   │
  │ [7]   summarize ★         tools/summarizeOutput_parquet  summarized.parquet│
- │             + FDR + plots   (BH-FDR, QQ, hist, saliency, enrichment)       │
+ │             + FDR + plots   (BH-FDR, QQ, hist, saliency)                   │
  │ [8]   boot_list ★         tools/createBootstrapList.py   bootstrap_list.csv│
  │ [9]   bootstrap ★         tecpg run mlr --lstsq_bootstrap bootstrap_merged │
  └────────────────────────────────────────────────────────────────────────────┘
@@ -79,9 +79,10 @@ Stages are restartable via `--start-stage` (`pipeline.sh:40`,
 order: `prep → cell_prop → pca → map → merge → annotate → precise_p →
 summarize → boot_list → bootstrap`).
 
-### 3b. `pipelinePost.sh` — visualization & network (5 stages)
+### 3b. `pipelinePost.sh` — visualization, network & enrichment (7 stages)
 
-Input: `output_gtp/bootstrap_merged.parquet` (the master table after Stage 9).
+Input: `output_gtp/bootstrap_merged.parquet` (the master table after Stage 9)
+and `output_gtp/summarized.parquet` (the FDR summary from Stage 7).
 
 ```
  [1] cytoBand.txt           (download hg19 cytobands from UCSC)
@@ -89,6 +90,8 @@ Input: `output_gtp/bootstrap_merged.parquet` (the master table after Stage 9).
  [3] visualizeFindings.py   → output_gtp/plots/{volcano,manhattan,region,scatter}*
  [4] exportBipartiteNetwork → output_gtp/network/cytoscape_{nodes,edges}.csv
  [5] visualizeBipartiteNetwork → output_gtp/network/*.png
+ [6] evaluateSaliency.py    → output_gtp/plots/saliency_*
+ [7] runEnrichment.py       → output_gtp/enrichment/ (functional + optional ENCODE)
 ```
 
 Network export filter defaults (`pipelinePost.sh:24-25`):
@@ -241,10 +244,16 @@ Results are left-joined onto the master parquet → `bootstrap_merged.parquet`.
 
 ## 6. Enrichment tests
 
+Functional and ENCODE enrichment were moved out of `summarizeOutput_parquet.py`
+into the standalone `tools/runEnrichment.py`, which runs as the final stage of
+`pipelinePost.sh` (Stage 7). It draws significant genes from the FDR summary
+(`summarized.parquet`, via `--rank-by fdr`) and/or the bootstrap IG ranking
+(`bootstrap_merged.parquet`, via `--rank-by ig`).
+
 | Test | Where | Method | Output |
 |------|-------|--------|--------|
-| ENCODE ChromHMM enrichment | `summarizeOutput_parquet.py:106-132, 650-850` | **Fisher's exact** of significant-eCpG overlap with ENCODE chromatin-state track vs. background BED (`--encode-enrichment`, `--background-bed`). Fold-enrichment + BH-adjusted p. | `encode_enrichment_results.csv`, `encode_enrichment_heatmap.png` (log2 fold enrichment by region × state) |
-| Functional / pathway enrichment | `summarizeOutput_parquet.py:856-933` | **Enrichr** (`gseapy`) on significant genes per region against `GO_Biological_Process_2021`, `KEGG_2021_Human`, `WikiPathways_2021_Human`; keep Adj-P < 0.05. | `enrichment_results/{region}_{library}_enrichment.csv` + plots |
+| ENCODE ChromHMM enrichment | `runEnrichment.py:235-329` | **Fisher's exact** of significant-eCpG overlap with ENCODE chromatin-state track vs. background BED (`--encode-enrichment`, `--background-bed`). Fold-enrichment + BH-adjusted p. | `encode_enrichment_results.csv`, `encode_enrichment_heatmap.png` (log2 fold enrichment by region × state) |
+| Functional / pathway enrichment | `runEnrichment.py:331-405` | **Enrichr** (`gseapy`) on significant genes per region against `GO_Biological_Process_2021`, `KEGG_2021_Human`, `WikiPathway_2023_Human` (override with `--enrichment-libraries`); keep Adj-P < 0.05. | `enrichment_results/{region}_{method}_{library}_enrichment.csv` + plots |
 | Gene–gene co-regulation | `visualizeBipartiteNetwork.py:404-431` | **Hypergeometric** test on shared CpG targets when building the unipartite gene projection; edge weight = −log10(p) (capped 100). | edges of `UnipartiteProjection.png` |
 
 ---
@@ -355,7 +364,7 @@ edges resolved by max weight (→ `dropped_duplicate_edges.csv`).
 | Bootstrap iterations / batch | 100 / 10 | `pipeline.sh:387` |
 | Network top-k / max boot p | 500 / 0.05 | `pipelinePost.sh:24-25` |
 | Circos top-n / top-n-trans | 5000 / 2000 | `plotCircos.py:50,56` |
-| Enrichr libraries | GO BP 2021, KEGG 2021, WikiPathways 2021 | `summarizeOutput_parquet.py:863` |
+| Enrichr libraries | GO BP 2021, KEGG 2021, WikiPathway 2023 | `runEnrichment.py:419` |
 
 ---
 

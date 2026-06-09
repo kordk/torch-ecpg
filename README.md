@@ -209,6 +209,14 @@ in order:
 4. `tools/visualizeBipartiteNetwork.py` — energy-minimized bipartite
    network, UMAP of regulatory β-diversity, regulatory degree distribution,
    clustered bipartite adjacency heatmap, and arc diagrams.
+5. `tools/evaluateSaliency.py` — integrated-gradients saliency diagnostics
+   for the bootstrap candidates (`output_<dataset>/plots/`).
+6. `tools/runEnrichment.py` — functional (Enrichr/`gseapy`) and optional
+   ENCODE ChromHMM enrichment of significant genes, written to
+   `output_<dataset>/enrichment/`. Draws significant genes from the FDR
+   summary (`summarized.parquet`) and the bootstrap IG ranking
+   (`bootstrap_merged.parquet`). This analysis was previously part of
+   `tools/summarizeOutput_parquet.py`.
 
 ## Input data
 
@@ -671,8 +679,14 @@ Mapping post-processing:
   recompute p-values from t-statistics with high precision, replacing the
   normal-CDF approximation with Student's-t.
 * `tools/summarizeOutput_parquet.py` / `summarizeOutput.py` — global
-  BH-FDR, top-hits table, QQ / histogram / saliency plots, regional FDR
-  summaries, and optional ENCODE/`gseapy`/`mygene` enrichment.
+  BH-FDR, top-hits table, QQ / histogram / saliency plots, and regional FDR
+  summaries. (Functional/ENCODE enrichment was moved to
+  `tools/runEnrichment.py`.)
+* `tools/runEnrichment.py` — standalone functional (Enrichr/`gseapy`/`mygene`)
+  and optional ENCODE ChromHMM enrichment of significant genes. Reads the FDR
+  summary (`--fdr-input summarized.parquet`) and/or the bootstrap IG ranking
+  (`--ig-input bootstrap_merged.parquet`) selected via `--rank-by fdr ig`, and
+  is run as the final stage of `pipelinePost.sh`.
 * `tools/summaryParquetToCsv.py` — Parquet→CSV converter for summary
   files.
 
