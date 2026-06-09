@@ -240,7 +240,7 @@ def run_fisher_exact(hits_pr, background_pr, encode_pr):
     D = max(0, (len(background_pr) - len(hits_pr)) - C)
 
     table = [[A, B], [C, D]]
-    _, p_val = stats.fisher_exact(table, alternative='greater')
+    _, p_val = stats.fisher_exact(table)
 
     fe = (A / (A + B)) / (C / (C + D)) if (C > 0 and (A + B) > 0 and (C + D) > 0) else 0.0
     return A, fe, p_val
