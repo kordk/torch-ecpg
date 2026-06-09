@@ -5,8 +5,9 @@ Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) map
 If you use Torch-eCpG in your research, please cite the following paper: Kober, K.M., Berger, L., Roy, R. et al. Torch-eCpG: a fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. BMC Bioinformatics 25, 71 (2024). https://doi.org/10.1186/s12859-024-05670-4
 
 The current development version on the `dev` branch is **1.27.6-dev**. Since the
-`1.0.0` release on `main`, the project has grown an end-to-end analysis
-pipeline (`pipeline.sh`), a downstream visualization/network pipeline
+`1.0.0` release on `main`, the project has grown a preprocessing pipeline
+(`pipelinePre.sh`), an end-to-end analysis pipeline (`pipeline.sh`), a
+downstream visualization/network pipeline
 (`pipelinePost.sh`), Parquet output, anchored auto chunk-sizing, Integrated
 Gradients (IG), an empirical bootstrap MLR backend, support for the MESA
 dataset, comprehensive HT-12/EPIC BED6 annotations, and a host-profile aware
@@ -57,19 +58,19 @@ prefetch depth, and chunk auto-sizing. Explicit per-flag overrides
 (`--save-threads`, `--output-format`, `--prefetch-chunks`,
 `--gene-loci-per-chunk`, `--meth-loci-per-chunk`, `--blas-threads`) always win.
 
-## Full analysis pipeline (`pipeline.sh`)
+## Preprocessing pipeline (`pipelinePre.sh`)
 
-`pipeline.sh` is the recommended way to run the demo analysis end to end. It
-wraps `tecpg` and the helper scripts in `tools/` into a nine-stage workflow,
-with structured logging, dataset-aware defaults, and the ability to resume
-from any stage.
+`pipelinePre.sh` prepares a dataset for analysis. It downloads or generates the
+raw data, estimates immune cell proportions, and builds the residualized PCA
+covariates, producing the `M.csv`, `G.csv`, and `C.csv` matrices (plus the BED6
+annotations) that `pipeline.sh` consumes. Run it once per dataset before
+`pipeline.sh`.
 
 ```bash
-./pipeline.sh --help
-./pipeline.sh --dataset dummy --mapping all
-./pipeline.sh --dataset gtp   --mapping cis
-./pipeline.sh --dataset mesa  --mapping all
-./pipeline.sh --dataset gtp   --mapping all --start-stage map
+./pipelinePre.sh --help
+./pipelinePre.sh --dataset dummy
+./pipelinePre.sh --dataset gtp
+./pipelinePre.sh --dataset mesa
 ```
 
 Options:
@@ -78,17 +79,13 @@ Options:
   small synthetic dataset for testing; `gtp` downloads and prepares the Grady
   Trauma Project data via `tecpg data gtp`; `mesa` does the same for MESA via
   `tecpg data mesa`.
-* `-m, --mapping {all,cis}` — region filter passed through to
-  `tecpg run mlr` (`--all` or `--cis`).
 * `-s, --start-stage STAGE` — resume from one of `all` (default), `prep`,
-  `cell_prop`, `pca`, `map`, `merge`, `annotate`, `precise_p`, `summarize`,
-  `boot_list`, `bootstrap`. Context variables (`DF`, `TOTAL_TESTS`) are
-  recomputed from the on-disk artifacts so any stage can run on its own.
+  `cell_prop`, `pca`. Each stage is skipped automatically when its on-disk
+  artifacts already exist, so any stage can run on its own.
 
-The script creates per-dataset working directories `data_<dataset>/`,
-`annot_<dataset>/`, and `output_<dataset>/`, and runs the following
-stages. Each stage name (in `code`) matches the value accepted by
-`--start-stage`, so any individual step can be re-run in isolation.
+The script creates per-dataset working directories `data_<dataset>/` and
+`annot_<dataset>/`, and runs the following stages. Each stage name (in `code`)
+matches the value accepted by `--start-stage`.
 
 1. **`prep` — Data preparation** *(stage `[1/9]`)*. Downloads or
    generates the dataset (`tecpg data {dummy,gtp,mesa}`), copies the
@@ -107,48 +104,84 @@ stages. Each stage name (in `code`) matches the value accepted by
 3. **`pca` — Residualization & PCA** *(stage `[2/9]`)*.
    `tools/residualize_pca.sh` generates expression and methylation
    principal components, which are merged with the cell-proportion
-   covariates to produce the final `C.csv`. Degrees of freedom
-   (`DF = SAMPLES − COVARS − 2`) are recomputed from `C.csv` for use
-   by the precise-p-value stage.
-4. **`map` — eQTM mapping** *(stage `[3/9]`)*. Runs `tecpg ... run
+   covariates to produce the final `C.csv`.
+
+When `pipelinePre.sh` finishes, `data_<dataset>/` contains `M.csv`, `G.csv`,
+and `C.csv`, and the dataset is ready for `pipeline.sh`.
+
+The annotation files used in the `prep` stage default to the comprehensive BED6
+annotations under `demo/` (`annoEPIC_comprehensive.hg19.bed6` and
+`annoHT12_comprehensive.hg19.bed6`, regenerated in `1.27.4-dev` with a
+validated multi-source HT-12 pipeline), with a graceful fallback to the
+original `annoEPIC.hg19.bed6` / `annoHT12.hg19.bed6` files.
+
+## Full analysis pipeline (`pipeline.sh`)
+
+`pipeline.sh` runs the eQTM mapping and downstream analysis end to end. It
+picks up the `M.csv`, `G.csv`, and `C.csv` matrices (and the BED6 annotations)
+produced by `pipelinePre.sh`, so run `./pipelinePre.sh --dataset <dataset>`
+first; the script exits with an error if those inputs are missing or empty. It
+wraps `tecpg` and the helper scripts in `tools/` into a seven-stage workflow,
+with structured logging, dataset-aware defaults, and the ability to resume
+from any stage.
+
+```bash
+./pipeline.sh --help
+./pipeline.sh --dataset dummy --mapping all
+./pipeline.sh --dataset gtp   --mapping cis
+./pipeline.sh --dataset mesa  --mapping all
+./pipeline.sh --dataset gtp   --mapping all --start-stage merge
+```
+
+Options:
+
+* `-d, --dataset {dummy,gtp,mesa}` — which dataset to use. Must match the
+  dataset already prepared by `pipelinePre.sh`.
+* `-m, --mapping {all,cis}` — region filter passed through to
+  `tecpg run mlr` (`--all` or `--cis`).
+* `-s, --start-stage STAGE` — resume from one of `all` (default), `map`,
+  `merge`, `annotate`, `precise_p`, `summarize`, `boot_list`, `bootstrap`.
+  Context variables (`DF`, `TOTAL_TESTS`) are recomputed from the on-disk
+  artifacts so any stage can run on its own.
+
+The script reuses the per-dataset working directories `data_<dataset>/`,
+`annot_<dataset>/`, and `output_<dataset>/`, and runs the following
+stages. Each stage name (in `code`) matches the value accepted by
+`--start-stage`, so any individual step can be re-run in isolation.
+
+1. **`map` — eQTM mapping** *(stage `[3/9]`)*. Runs `tecpg ... run
    mlr --mlr-method lstsq --<mapping> --compute-ig`, with chunk sizes
    auto-selected by the CLI's `_auto_chunk_sizes` (overridable by
    exporting `TECPG_M_CHUNK` / `TECPG_G_CHUNK`). Logs are tee'd to
    `mlr_run_<dataset>.log` and `TOTAL_TESTS` is extracted from that
    log for downstream FDR.
-5. **`merge` — Merge chunked output** *(stage `[4/9]`)*.
+2. **`merge` — Merge chunked output** *(stage `[4/9]`)*.
    `tools/mergeOutputs.py` combines per-chunk files into a single
    `output_<dataset>/merged.parquet`; intermediate chunk files are
    deleted.
-6. **`annotate` — Region annotation** *(stage `[5/9]`)*.
+3. **`annotate` — Region annotation** *(stage `[5/9]`)*.
    `tools/assignRegionToEcpg_parquet.py` annotates each pair with
    `CIS`/`DISTAL`/`TRANS`/`PROMOTER`/`GENEBODY` and writes
    `annotated.parquet`. Missing-annotation probe IDs are collected
    into a sidecar `annotation_missing_ids.txt` (since `1.27.6-dev`).
-7. **`precise_p` — High-precision p-values** *(stage `[6/9]`)*.
+4. **`precise_p` — High-precision p-values** *(stage `[6/9]`)*.
    `tools/recalculate_pvalues_parquet.py` replaces the normal-CDF
    approximation with Student's-t p-values using the degrees of
    freedom derived from `C.csv`, writing `annotated_pcalc.parquet`.
-8. **`summarize` — FDR and summary** *(stage `[7/9]`)*.
+5. **`summarize` — FDR and summary** *(stage `[7/9]`)*.
    `tools/summarizeOutput_parquet.py` computes a global
    Benjamini–Hochberg FDR (using `TOTAL_TESTS` dynamically extracted
    from the `mlr` log), writes `summarized.parquet`, and emits QQ,
    histogram, and saliency diagnostic plots into `output_<dataset>/`.
-9. **`boot_list` — Bootstrap candidate list** *(stage `[8/9]`)*.
+6. **`boot_list` — Bootstrap candidate list** *(stage `[8/9]`)*.
    `tools/createBootstrapList.py` selects the top hits (ranked by
    p-value) for bootstrapping into `bootstrap_list.csv`.
-10. **`bootstrap` — Bootstrap evaluation** *(stage `[9/9]`)*. Runs
-    `tecpg ... run mlr --mlr-method lstsq_bootstrap --pairs-file ...
-    --master-parquet ... --bootstrap-iterations 100
-    --bootstrap-batch-size 10 --compute-ig` to attach empirical
-    bootstrap p-values to the top candidates and write
-    `bootstrap_merged.parquet`.
-
-The annotation files used in stage 1 default to the comprehensive BED6
-annotations under `demo/` (`annoEPIC_comprehensive.hg19.bed6` and
-`annoHT12_comprehensive.hg19.bed6`, regenerated in `1.27.4-dev` with a
-validated multi-source HT-12 pipeline), with a graceful fallback to the
-original `annoEPIC.hg19.bed6` / `annoHT12.hg19.bed6` files.
+7. **`bootstrap` — Bootstrap evaluation** *(stage `[9/9]`)*. Runs
+   `tecpg ... run mlr --mlr-method lstsq_bootstrap --pairs-file ...
+   --master-parquet ... --bootstrap-iterations 1000
+   --bootstrap-batch-size 10 --compute-ig` to attach empirical
+   bootstrap p-values to the top candidates and write
+   `bootstrap_merged.parquet`.
 
 ## Post-processing pipeline (`pipelinePost.sh`)
 
@@ -405,37 +438,40 @@ a benchmark reference list.
 Both datasets share the same downstream array combination
 (HumanMethylation450 + HumanHT-12 v4), so the comprehensive BED6
 annotation files shipped under `demo/` apply unchanged to either, and
-`pipeline.sh` wires up identical processing for `--dataset gtp` and
-`--dataset mesa` (data prep → EpiDISH cell proportions → residualized
-PCA → MLR + IG → merge → region annotation → precise p-values →
+`pipelinePre.sh` plus `pipeline.sh` wire up identical processing for
+`--dataset gtp` and `--dataset mesa` (data prep → EpiDISH cell proportions →
+residualized PCA → MLR + IG → merge → region annotation → precise p-values →
 BH-FDR / diagnostics → bootstrap candidate list → bootstrap
 evaluation).
 
 ## Demonstration
 
-The recommended way to reproduce an end-to-end demo run is via
-`pipeline.sh`, which is the authoritative entry point and uses the
-same `mlr --mlr-method lstsq --compute-ig` invocation, dataset
-defaults, and downstream tools described in
-*Full analysis pipeline* above.
+The recommended way to reproduce an end-to-end demo run is to first prepare the
+dataset with `pipelinePre.sh` and then run `pipeline.sh`, which is the
+authoritative mapping entry point and uses the same
+`mlr --mlr-method lstsq --compute-ig` invocation, dataset defaults, and
+downstream tools described in *Full analysis pipeline* above.
 
 ```bash
 # CIS-only run on the GTP demo dataset
+./pipelinePre.sh --dataset gtp
 ./pipeline.sh --dataset gtp --mapping cis
 
 # Genome-wide run on the MESA demo dataset
+./pipelinePre.sh --dataset mesa
 ./pipeline.sh --dataset mesa --mapping all
 
 # Smoke-test the full pipeline on synthetic data
+./pipelinePre.sh --dataset dummy
 ./pipeline.sh --dataset dummy --mapping all
 ```
 
-The first invocation will download the dataset (GTP/MESA only),
-populate `data_<dataset>/`, copy the comprehensive BED6 annotations
-from `demo/` into `annot_<dataset>/`, and walk through all nine
-pipeline stages, writing artifacts and diagnostic plots into
-`output_<dataset>/`. Any individual stage can be resumed with
-`--start-stage <name>` (see the stage list above).
+`pipelinePre.sh` downloads the dataset (GTP/MESA only), populates
+`data_<dataset>/`, copies the comprehensive BED6 annotations from `demo/` into
+`annot_<dataset>/`, and produces the `M.csv`, `G.csv`, and `C.csv` matrices.
+`pipeline.sh` then walks through the mapping and downstream stages, writing
+artifacts and diagnostic plots into `output_<dataset>/`. Any individual stage
+can be resumed with `--start-stage <name>` (see the stage lists above).
 
 After `pipeline.sh` finishes, run `./pipelinePost.sh <dataset>` to
 produce Circos / volcano / Manhattan / bipartite network
@@ -595,7 +631,8 @@ bottlenecks.
 ## Tools and helper scripts
 
 The `tools/` directory contains the supporting scripts driven by
-`pipeline.sh` and `pipelinePost.sh`. They can also be invoked standalone.
+`pipelinePre.sh`, `pipeline.sh`, and `pipelinePost.sh`. They can also be
+invoked standalone.
 
 Data preparation and QC:
 
@@ -611,7 +648,7 @@ Data preparation and QC:
 * `tools/residualize_pca.py` / `residualize_pca.sh` — residualize against
   covariates and emit principal-component covariates.
 * `tools/preprocessPcaCovariates.py` — PCA preprocessing for covariates
-  used by `pipeline.sh`.
+  used by `pipelinePre.sh`.
 * `tools/install_dependencies.R` — install all R packages required by
   the tools (`pheatmap`, `EpiDISH`, `sva`, `IlluminaHumanMethylationEPIC*`,
   `ExperimentHub`) via `BiocManager`.
