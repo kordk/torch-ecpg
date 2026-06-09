@@ -176,3 +176,5 @@ cython_debug/
 patch*.py
 test_data/
 test_out/
+# Generated diagnostic plot from summarizeOutput_parquet.py
+p_value_histogram.png
