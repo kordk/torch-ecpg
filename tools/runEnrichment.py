@@ -28,7 +28,7 @@ def download_gencode_gtf(target_dir):
         try:
             if not url.lower().startswith(('http://', 'https://')):
                 raise ValueError(f"Refusing to download non-http(s) URL: {url}")
-            urllib.request.urlretrieve(url, filepath)
+            urllib.request.urlretrieve(url, filepath)  # nosec B310 - scheme validated to http(s) above
         except Exception as e:
             logger.error(f"Error downloading {url}: {e}")
             return None
@@ -223,7 +223,9 @@ def download_encode_files(target_dir):
         filepath = os.path.join(target_dir, filename)
         if not os.path.exists(filepath):
             try:
-                urllib.request.urlretrieve(url, filepath)
+                if not url.lower().startswith(('http://', 'https://')):
+                    raise ValueError(f"Refusing to download non-http(s) URL: {url}")
+                urllib.request.urlretrieve(url, filepath)  # nosec B310 - scheme validated to http(s) above
             except Exception as e:
                 logger.error(f"Error downloading {url}: {e}")
                 return None
