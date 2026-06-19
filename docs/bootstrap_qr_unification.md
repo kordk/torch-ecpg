@@ -11,7 +11,7 @@ In real-cohort setups (like MESA with N~610 subjects), a purely random resamplin
 ## CUDA `gels` Caveat
 A major hidden motivation for this unification involves the production GPU environment. On CUDA devices, `torch.linalg.lstsq` uses the `gels` driver, which is mathematically *undefined* on rank-deficient inputs. Even though the CPU tests silently returned min-norm solutions through the `gelsd` driver without raising exceptions, on CUDA those identical degenerate resamples caused undefined behavior that compromised the downstream bounds.
 
-Adding the QR solver alongside the degenerate guard effectively hard-fails these rank-deficient draws via finite filtering (which correctly propagates on CUDA), preventing silent corruption of bootstrap estimates.
+Adding the QR solver alongside the degenerate guard effectively hard-fails these rank-deficient draws via finite filtering (which correctly propagates on CUDA), preventing silent corruption of bootstrap estimates. Note that the CPU tests cannot exercise the production CUDA path, and the end-to-end test validates the production function's logic but not GPU solver behavior. The green test suite does not validate `gels` behavior on rank-deficient input.
 
 ## Unification Recommendation
 Because the degenerate-resample rate should be incredibly rare on large `N` (such as N=610), and the exact behavior of `lstsq` on CUDA in these cases is undefined, unifying around the QR method (`qr_bootstrap`) is the strongly recommended approach. The QR method forces strict correctness and exposes issues that were previously hidden by CPU min-norm fallbacks or CUDA undefined behaviors.

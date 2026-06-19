@@ -266,7 +266,7 @@ def tecpg_mlr_lstsq_bootstrap(
     # Perform Left Join on [mt_id, gt_id]
     # Rows not in res_df will automatically get NaN
     # But before join, check if those columns already exist to avoid suffixing
-    cols_to_drop = [c for c in ['mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot'] if c in master_df.columns]
+    cols_to_drop = [c for c in ['mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples'] if c in master_df.columns]
     if cols_to_drop:
         master_df = master_df.drop(columns=cols_to_drop)
 
