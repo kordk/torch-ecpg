@@ -90,6 +90,7 @@ def tecpg_mlr_lstsq_bootstrap(
     ci_lows = []
     ci_highs = []
     p_boots = []
+    degenerate_counts = []
 
     logger.info("Running bootstrap loops...")
     start_time = time.time()
@@ -171,58 +172,76 @@ def tecpg_mlr_lstsq_bootstrap(
             logger.info(f"GPU memory before lstsq - Allocated: {alloc_mem:.2f} GB, Max Allocated: {max_alloc_mem:.2f} GB")
 
         # Solve
-        lstsq_res = torch.linalg.lstsq(X_flat, Y_flat)
-        beta_flat = lstsq_res.solution # (B * I, 2 + K_c, 1)
+        Q, R = torch.linalg.qr(X_flat, mode='reduced')
+        QtY = Q.mT @ Y_flat
+        beta_flat = torch.linalg.solve_triangular(R, QtY, upper=True) # (B * I, 2 + K_c, 1)
 
         # We want the methylation coefficient, which is at index 1
         mt_est_flat = beta_flat[:, 1, 0] # (B * I,)
 
         mt_est = mt_est_flat.view(B, I) # (B, I)
 
-        # Calculate statistics
-        mt_est_mean = mt_est.mean(dim=1)
-        mt_est_std = mt_est.std(dim=1, unbiased=True) # match pandas/numpy default delta DOF
+        # Degenerate-resample guard
+        # QR emits nan/inf on rank-deficient resamples where lstsq did not;
+        # on the production CUDA path lstsq/gels was undefined anyway.
+        # We filter to only finite values to ensure degenerate draws are excluded.
+        valid = torch.isfinite(mt_est)
 
-        # Percentiles
-        # torch.quantile is good
-        ci_low = torch.quantile(mt_est, 0.025, dim=1)
-        ci_high = torch.quantile(mt_est, 0.975, dim=1)
+        batch_mt_est_mean = []
+        batch_mt_est_std = []
+        batch_ci_low = []
+        batch_ci_high = []
+        batch_p_boot = []
+        batch_degen = []
 
-        # p_boot calculation: proportion of iterations where effect size equals zero or reverses sign
-        # Reverses sign relative to the mean? Or just <= 0 if mean > 0, >= 0 if mean < 0?
-        # Standard: empirical p-value for two-tailed test is usually
-        # min( P(x <= 0), P(x >= 0) ) * 2
-        # Or proportion of iterations where it crosses zero.
-        # Requirement: "proportion of iterations where the effect size equals zero or reverses sign"
-        # We'll do:
-        # if mean > 0: p = mean(est <= 0) * 2? No, just "proportion".
-        # Let's use:
-        prop_less_eq_zero = (mt_est <= 0).float().mean(dim=1)
-        prop_greater_eq_zero = (mt_est >= 0).float().mean(dim=1)
+        for row in range(B):
+            valid_mask = valid[row]
+            filtered_est = mt_est[row][valid_mask]
 
-        # A simple two-tailed equivalent is 2 * min(p(<=0), p(>=0))
-        # Wait, if "proportion of iterations where the effect size equals zero or reverses sign"
-        # implies: if actual effect is positive, it's (est <= 0). If actual effect is negative, it's (est >= 0).
-        # We can just use the min.
-        p_boot = torch.min(prop_less_eq_zero, prop_greater_eq_zero) * 2.0
-        # cap at 1.0
-        p_boot = torch.clamp(p_boot, max=1.0)
+            degen_count = I - valid_mask.sum().item()
+            batch_degen.append(degen_count)
 
-        mt_est_means.extend(mt_est_mean.cpu().numpy())
-        mt_est_stds.extend(mt_est_std.cpu().numpy())
-        ci_lows.extend(ci_low.cpu().numpy())
-        ci_highs.extend(ci_high.cpu().numpy())
-        p_boots.extend(p_boot.cpu().numpy())
+            if filtered_est.numel() == 0:
+                batch_mt_est_mean.append(float('nan'))
+                batch_mt_est_std.append(float('nan'))
+                batch_ci_low.append(float('nan'))
+                batch_ci_high.append(float('nan'))
+                batch_p_boot.append(float('nan'))
+            else:
+                batch_mt_est_mean.append(filtered_est.mean().item())
+                if filtered_est.numel() > 1:
+                    batch_mt_est_std.append(filtered_est.std(unbiased=True).item())
+                else:
+                    batch_mt_est_std.append(float('nan'))
+
+                batch_ci_low.append(torch.quantile(filtered_est, 0.025).item())
+                batch_ci_high.append(torch.quantile(filtered_est, 0.975).item())
+
+                prop_less_eq_zero = (filtered_est <= 0).float().mean()
+                prop_greater_eq_zero = (filtered_est >= 0).float().mean()
+                p_boot = torch.min(prop_less_eq_zero, prop_greater_eq_zero) * 2.0
+                p_boot = torch.clamp(p_boot, max=1.0)
+                batch_p_boot.append(p_boot.item())
+
+        mt_est_means.extend(batch_mt_est_mean)
+        mt_est_stds.extend(batch_mt_est_std)
+        ci_lows.extend(batch_ci_low)
+        ci_highs.extend(batch_ci_high)
+        p_boots.extend(batch_p_boot)
+        degenerate_counts.extend(batch_degen)
 
         if (i // batch_size + 1) % 10 == 0:
             logger.info(f"Processed {i + batch_size} / {len(pairs_df)} pairs...")
 
+    total_degen = sum(degenerate_counts)
+    total_resamples = len(valid_pairs) * iterations
     logger.info(f"Finished bootstrap in {time.time() - start_time:.2f} seconds. Valid pairs: {len(valid_pairs)}")
+    logger.info(f"Total degenerate resamples: {total_degen} / {total_resamples}")
 
     # Create a DataFrame with the results
     if not valid_pairs:
         logger.warning("No valid pairs found to bootstrap.")
-        res_df = pd.DataFrame(columns=["mt_id", "gt_id", "mt_est_boot_mean", "mt_est_boot_std", "ci_low", "ci_high", "p_boot"])
+        res_df = pd.DataFrame(columns=["mt_id", "gt_id", "mt_est_boot_mean", "mt_est_boot_std", "ci_low", "ci_high", "p_boot", "degenerate_resamples"])
     else:
         res_df = pd.DataFrame(valid_pairs)
     res_df['mt_est_boot_mean'] = mt_est_means
@@ -230,9 +249,10 @@ def tecpg_mlr_lstsq_bootstrap(
     res_df['ci_low'] = ci_lows
     res_df['ci_high'] = ci_highs
     res_df['p_boot'] = p_boots
+    res_df['degenerate_resamples'] = degenerate_counts
 
     # We only need to join these new columns, plus mt_id and gt_id
-    res_df = res_df[['mt_id', 'gt_id', 'mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot']]
+    res_df = res_df[['mt_id', 'gt_id', 'mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples']]
 
     logger.info(f"Merging results with master Parquet file: {master_parquet} ...")
 
