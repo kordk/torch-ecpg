@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev9**.
+The current development version on the `dev` branch is **2.0.0b2.dev11**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -16,6 +16,56 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 2.0.0b2.dev11
+
+### Features
+- Replace the bootstrap `lstsq` solver with batched QR decomposition and a
+  degenerate resample guard (PR #265). On CUDA, `gels` behaves unreliably on
+  rank-deficient arrays while CPUs silently fall back to min-norm solutions;
+  the update standardizes batched least-squares with explicit QR. A guard
+  catches any `nan`/`inf` produced by rank-deficient combinations, counts and
+  logs them, and restricts summary statistics (`mean`, `std`,
+  `torch.quantile`) to the valid subset only. Robust production-level tests
+  are added to verify the guard under degenerate inputs.
+
+### Improvements / Performance
+- Update `tests/README.md` with thematic organization and script descriptions
+  (PR #264).
+
+## 2.0.0b2.dev10
+
+### Features
+- Split `pipeline.sh` into `pipelinePre.sh` (preprocessing stages 1–2) and a
+  leaner core `pipeline.sh` (stages 3–9) (PR #260). `pipelinePre.sh` covers
+  data preparation, EpiDISH cell-proportion estimation, and PCA; `pipeline.sh`
+  enforces precondition guards that error if preprocessed outputs (`M.csv`,
+  `G.csv`, `C.csv`, BED6 annotations) are absent, directing users to run
+  `pipelinePre.sh` first.
+- Extract functional enrichment into a standalone `tools/runEnrichment.py`
+  (PR #262). Removes ~690 lines of enrichment logic from
+  `tools/summarizeOutput_parquet.py`; the new tool reads FDR and IG Parquet
+  inputs directly, adds retry-with-backoff for `gseapy.enrichr` calls,
+  validates Enrichr library names against the live API, and caps per-region
+  gene lists. Restores the two-sided Fisher's exact test for ENCODE enrichment
+  p-values (previously switched silently to `alternative='greater'`). Adds
+  URL-scheme validation in `download_encode_files` (Bandit B310) and excludes
+  the generated `p_value_histogram.png` via `.gitignore`.
+
+### Improvements / Performance
+- Wire `tools/runEnrichment.py` into `pipelinePost.sh` as a new final stage
+  `[7/7]` (PR #263). Adds `ENRICHMENT_DIR`/`SUMMARIZED_PARQUET` variables,
+  renumbers existing stages, and adds a comment in `pipeline.sh` pointing to
+  the extracted tool.
+- Update `README.md` to reflect the two-step `pipelinePre.sh` →
+  `pipeline.sh` workflow (PR #261, PR #263). Adds a dedicated "Preprocessing
+  pipeline" section, rewrites the "Full analysis pipeline" section to cover
+  stages 3–9, and corrects the `--bootstrap-iterations` default from 100 to
+  1000. The tools reference is updated to add `runEnrichment.py` and clarify
+  that enrichment is no longer bundled inside `summarizeOutput_parquet.py`.
+- Update `docs/ecpg-filtering-prioritization.md` with the revised stage maps,
+  enrichment table (tool name, line citations, default libraries, output
+  paths), and Enrichr-library parameter citation (PR #263).
 
 ## 2.0.0b2.dev9
 
