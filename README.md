@@ -204,7 +204,7 @@ in order:
    column (bootstrap `p_boot`, `precise_mt_p`, `mt_p`) with prefixed
    filenames.
 3. `tools/exportBipartiteNetwork.py` — Cytoscape-formatted node and edge
-   tables under `output_<dataset>/network/`, filtered by `--top-k 500`
+   tables under `output_<dataset>/network/`, filtered by `--top-k 5000`
    and `--max-boot-p 0.05` by default.
 4. `tools/visualizeBipartiteNetwork.py` — energy-minimized bipartite
    network, UMAP of regulatory β-diversity, regulatory degree distribution,
