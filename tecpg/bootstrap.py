@@ -9,6 +9,8 @@ import torch
 from .config import get_device, DTYPE
 from .logger import Logger
 
+from typing import Optional
+
 def tecpg_mlr_lstsq_bootstrap(
     M: pd.DataFrame,
     G: pd.DataFrame,
@@ -20,6 +22,10 @@ def tecpg_mlr_lstsq_bootstrap(
     batch_size: int = 10,
     thermal_threshold: int = 80,
     thermal_wait: int = 30,
+    compute_ig: bool = False,
+    compute_ig_deep: bool = False,
+    ig_baseline: str = 'mean',
+    ig_covariates_filter: Optional[list] | str = None,
     *,
     logger: Logger = Logger(),
 ) -> None:
@@ -81,6 +87,24 @@ def tecpg_mlr_lstsq_bootstrap(
     m_matrix = torch.tensor(M.to_numpy(), device=device, dtype=dtype)
     g_matrix = torch.tensor(G.to_numpy(), device=device, dtype=dtype)
 
+    # Add _ig columns if IG is computed
+    ig_col_indices = []
+    ig_columns = []
+    if compute_ig or compute_ig_deep:
+        # Intercept gets excluded from IG outputs (index 0). Meth is index 1. Covariates start at index 2.
+        ig_categories = ['mt']
+        ig_col_indices = [0] # Relative index in the K-1 slice (without intercept)
+
+        if ig_covariates_filter == 'all':
+            ig_categories.extend(C.columns.to_list())
+            ig_col_indices.extend(range(1, len(C.columns) + 1))
+        elif isinstance(ig_covariates_filter, list):
+            for covar in ig_covariates_filter:
+                ig_categories.append(covar)
+                ig_col_indices.append(C.columns.get_loc(covar) + 1)
+
+        ig_columns = [str(col) + '_ig' for col in ig_categories]
+
     # Keep track of pairs that couldn't be matched
     valid_pairs = []
 
@@ -91,6 +115,7 @@ def tecpg_mlr_lstsq_bootstrap(
     ci_highs = []
     p_boots = []
     degenerate_counts = []
+    ig_scores = []
 
     logger.info("Running bootstrap loops...")
     start_time = time.time()
@@ -156,6 +181,77 @@ def tecpg_mlr_lstsq_bootstrap(
         # lstsq takes (..., N, K) and (..., N, 1)
         X_flat = X_boot.view(B * I, N, 2 + K_c)
         Y_flat = Y_boot.view(B * I, N, 1)
+
+        # --- Compute Integrated Gradients on Original Data (not bootstrap resamples) ---
+        if compute_ig or compute_ig_deep:
+            # We want to fit original (non-resampled) data for this batch
+            M_batch_expanded = M_batch.unsqueeze(-1) # (B, N, 1)
+            C_base = torch.tensor(C_np, device=device, dtype=dtype) # (N, K_c)
+            C_batch_expanded = C_base.unsqueeze(0).expand(B, -1, -1) # (B, N, K_c)
+            ones_base = torch.ones((N, 1), device=device, dtype=dtype)
+            ones_batch_expanded = ones_base.unsqueeze(0).expand(B, -1, -1) # (B, N, 1)
+
+            X_orig = torch.cat((ones_batch_expanded, M_batch_expanded, C_batch_expanded), dim=-1) # (B, N, K)
+            Y_orig = G_batch.unsqueeze(-1) # (B, N, 1)
+
+            # Exact solve on original data
+            Q_orig, R_orig = torch.linalg.qr(X_orig, mode='reduced')
+            QtY_orig = Q_orig.mT @ Y_orig
+            beta_orig = torch.linalg.solve_triangular(R_orig, QtY_orig, upper=True).squeeze(-1) # (B, K)
+
+            if compute_ig_deep:
+                from captum.attr import IntegratedGradients
+
+                class LstsqWrapper(torch.nn.Module):
+                    def __init__(self, w):
+                        super().__init__()
+                        self.w = w
+
+                    def forward(self, x):
+                        # x shape: (S, K), w shape: (K,)
+                        # outputs: (S, 1)
+                        return x.matmul(self.w).unsqueeze(1)
+
+                if ig_baseline == 'mean':
+                    X_baseline_orig = X_orig.mean(dim=1, keepdim=True) # (B, 1, K)
+                else:
+                    X_baseline_orig = torch.zeros_like(X_orig[:, 0:1, :]) # (B, 1, K)
+
+                for b_idx in range(B):
+                    x_hit = X_orig[b_idx] # (N, K)
+                    x_baseline_hit = X_baseline_orig[b_idx] # (1, K)
+                    w_hit = beta_orig[b_idx] # (K,)
+
+                    wrapper = LstsqWrapper(w_hit)
+                    ig = IntegratedGradients(wrapper)
+
+                    attributions = ig.attribute(inputs=x_hit, baselines=x_baseline_hit, target=0, n_steps=50)
+
+                    # hit_saliency vector: (K,)
+                    hit_saliency = attributions.abs().mean(dim=0)
+                    # Remove the intercept (index 0)
+                    hit_saliency = hit_saliency[1:]
+                    # Keep only the requested covariates
+                    hit_saliency = hit_saliency[ig_col_indices]
+                    ig_scores.append(hit_saliency.cpu().numpy())
+
+            else: # analytical compute_ig
+                if ig_baseline == 'mean':
+                    X_baseline_orig = X_orig.mean(dim=1, keepdim=True) # (B, 1, K)
+                else:
+                    X_baseline_orig = torch.zeros_like(X_orig[:, 0:1, :]) # (B, 1, K)
+
+                # Analytical IG = X_diff_mean * |W|
+                X_diff_mean = (X_orig - X_baseline_orig).abs().mean(dim=1) # (B, K)
+
+                # We skip the intercept index 0
+                ig_analytical = X_diff_mean[:, 1:] * beta_orig[:, 1:].abs() # (B, K-1)
+
+                # Keep only requested columns
+                ig_analytical = ig_analytical[:, ig_col_indices] # (B, num_ig_cols)
+
+                for b_idx in range(B):
+                    ig_scores.append(ig_analytical[b_idx].cpu().numpy())
 
         logger.info(
             f"Batch tensor shapes - M_boot: {M_boot.shape}, G_boot: {G_boot.shape}, "
@@ -241,9 +337,13 @@ def tecpg_mlr_lstsq_bootstrap(
     # Create a DataFrame with the results
     if not valid_pairs:
         logger.warning("No valid pairs found to bootstrap.")
-        res_df = pd.DataFrame(columns=["mt_id", "gt_id", "mt_est_boot_mean", "mt_est_boot_std", "ci_low", "ci_high", "p_boot", "degenerate_resamples"])
+        res_df = pd.DataFrame(columns=["mt_id", "gt_id", "mt_est_boot_mean", "mt_est_boot_std", "ci_low", "ci_high", "p_boot", "degenerate_resamples"] + ig_columns)
     else:
         res_df = pd.DataFrame(valid_pairs)
+        if ig_columns and ig_scores:
+            ig_df = pd.DataFrame(ig_scores, columns=ig_columns)
+            res_df = pd.concat([res_df.reset_index(drop=True), ig_df.reset_index(drop=True)], axis=1)
+
     res_df['mt_est_boot_mean'] = mt_est_means
     res_df['mt_est_boot_std'] = mt_est_stds
     res_df['ci_low'] = ci_lows
@@ -252,7 +352,7 @@ def tecpg_mlr_lstsq_bootstrap(
     res_df['degenerate_resamples'] = degenerate_counts
 
     # We only need to join these new columns, plus mt_id and gt_id
-    res_df = res_df[['mt_id', 'gt_id', 'mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples']]
+    res_df = res_df[['mt_id', 'gt_id', 'mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples'] + ig_columns]
 
     logger.info(f"Merging results with master Parquet file: {master_parquet} ...")
 
@@ -266,7 +366,7 @@ def tecpg_mlr_lstsq_bootstrap(
     # Perform Left Join on [mt_id, gt_id]
     # Rows not in res_df will automatically get NaN
     # But before join, check if those columns already exist to avoid suffixing
-    cols_to_drop = [c for c in ['mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples'] if c in master_df.columns]
+    cols_to_drop = [c for c in ['mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples'] + ig_columns if c in master_df.columns]
     if cols_to_drop:
         master_df = master_df.drop(columns=cols_to_drop)
 

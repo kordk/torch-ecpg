@@ -165,7 +165,9 @@ def test_bootstrap_end_to_end(tmp_path):
             master_parquet=str(master_parquet),
             output_file=str(output_file),
             iterations=iterations,
-            batch_size=3
+            batch_size=3,
+            compute_ig=True,
+            ig_covariates_filter='all'
         )
 
     assert os.path.exists(output_file)
@@ -179,6 +181,11 @@ def test_bootstrap_end_to_end(tmp_path):
     assert 'ci_low' in result_df.columns
     assert 'ci_high' in result_df.columns
     assert 'p_boot' in result_df.columns
+
+    # Check IG columns
+    assert 'mt_ig' in result_df.columns
+    assert '0_ig' in result_df.columns
+    assert '1_ig' in result_df.columns
 
     import math
 
