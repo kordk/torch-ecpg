@@ -15,3 +15,6 @@ Adding the QR solver alongside the degenerate guard effectively hard-fails these
 
 ## Unification Recommendation
 Because the degenerate-resample rate should be incredibly rare on large `N` (such as N=610), and the exact behavior of `lstsq` on CUDA in these cases is undefined, unifying around the QR method (`qr_bootstrap`) is the strongly recommended approach. The QR method forces strict correctness and exposes issues that were previously hidden by CPU min-norm fallbacks or CUDA undefined behaviors.
+
+## v2.0 Breaking Change Notice
+The methods and CLI arguments `lstsq`, `lstsq_bootstrap`, and `manual` have been permanently renamed to `qr`, `qr_bootstrap`, and `legacy_normal_eq` respectively, reflecting the shift to the QR solver and to provide accuracy about the underlying algorithms. There are no backward-compatible aliases for the removed `lstsq` strings.

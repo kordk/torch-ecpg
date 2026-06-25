@@ -10,7 +10,7 @@
 # What this script does:
 #
 #   1. Generates a tiny synthetic dataset (M, G, C, M.bed6, G.bed6).
-#   2. Runs `tecpg run mlr --mlr-method lstsq --all` with chunking
+#   2. Runs `tecpg run mlr --mlr-method qr --all` with chunking
 #      forced on, --host-profile minimum, --cpu-threads 1 (CPU-only
 #      execution path).
 #   3. Asserts the regression output files were written and contain
@@ -84,7 +84,7 @@ run_mlr() {
         --host-profile minimum \
         --cpu-threads 1 \
         run mlr \
-            --mlr-method lstsq \
+            --mlr-method qr \
             --all \
             --gene-loci-per-chunk 20 \
             --meth-loci-per-chunk 40 \

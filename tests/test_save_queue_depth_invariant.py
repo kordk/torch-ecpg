@@ -1,6 +1,6 @@
 """
 Regression test for the `save_queue_depth` shadowing bug in
-`tecpg/processing.py:_tecpg_mlr_lstsq_inner`.
+`tecpg/processing.py:_tecpg_mlr_qr_inner`.
 
 History: a profile-log helper inside the gene-chunk loop was assigned to a
 variable named `save_queue_depth`, which shadowed the configured back-pressure
@@ -14,7 +14,7 @@ popped from an empty deque and crashed with
 This test uses a static AST check rather than a full pipeline run because the
 crash only reproduces under TECPG_PROFILE=1 with real GPU work, which is not
 available in CI. The invariant we assert is structural: inside
-`_tecpg_mlr_lstsq_inner`, the name `save_queue_depth` is bound exactly once
+`_tecpg_mlr_qr_inner`, the name `save_queue_depth` is bound exactly once
 (at the top of the function, from carry_data), and is never reassigned later.
 The per-iteration profile fill metric uses a different name
 (`save_queue_fill`).
@@ -49,7 +49,7 @@ def test_save_queue_depth_cap_not_shadowed_in_loop():
     overwritten inside the gene-chunk loop."""
     source = inspect.getsource(processing)
     tree = ast.parse(source)
-    func = _find_function(tree, '_tecpg_mlr_lstsq_inner')
+    func = _find_function(tree, '_tecpg_mlr_qr_inner')
 
     cap_assignments = [
         lineno for lineno, name in _assignment_targets(func)
@@ -57,7 +57,7 @@ def test_save_queue_depth_cap_not_shadowed_in_loop():
     ]
     assert len(cap_assignments) == 1, (
         f"`save_queue_depth` (back-pressure cap) must be assigned exactly "
-        f"once in _tecpg_mlr_lstsq_inner, found {len(cap_assignments)} "
+        f"once in _tecpg_mlr_qr_inner, found {len(cap_assignments)} "
         f"assignment(s) at line(s) {cap_assignments}. A second assignment "
         f"shadows the cap and reintroduces the empty-deque bug."
     )
@@ -79,7 +79,7 @@ def test_save_queue_fill_is_used_for_profile_metric():
     """The per-iteration profile log uses `save_queue_fill`, not the cap."""
     source = inspect.getsource(processing)
     assert 'save_queue_fill = len(futures)' in source, (
-        "Expected `save_queue_fill = len(futures)` in _tecpg_mlr_lstsq_inner "
+        "Expected `save_queue_fill = len(futures)` in _tecpg_mlr_qr_inner "
         "to expose the queue fill level for PROFILE logging without "
         "shadowing the back-pressure cap."
     )
