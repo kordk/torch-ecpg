@@ -1177,3 +1177,8 @@ changes. Each version section is organized into **Features**,
   `tests/README.md`.
 - Increase estimate tolerance for `float32` precision in the accuracy
   test.
+
+## v2.0.0
+
+### Breaking Changes
+* **Hard Rename: `lstsq` to `qr`**: The MLR computation methods previously named `lstsq`, `lstsq_bootstrap`, and `manual` have been renamed to `qr`, `qr_bootstrap`, and `legacy_normal_eq` respectively to accurately reflect the underlying mathematical implementation (QR decomposition + triangular solve). All associated Python symbols, CLI arguments, and documentation have been updated. There are no backward-compatible aliases.

@@ -162,7 +162,7 @@ def _auto_chunk_sizes(
         target_label = 'system RAM available'
 
     def _estimate_for(mt: int) -> float:
-        # The lstsq path used by the server profile produces
+        # The qr path used by the server profile produces
         # "p-only-like" output regardless of whether p_only/full_output
         # flags are set, because the inner kernel only realizes the
         # active K columns; we use the more conservative of the E-peak
@@ -424,7 +424,7 @@ from .pearson_full import (
     pearson_chunk_tensor,
     pearson_full_tensor,
 )
-from .processing import tecpg_mlr_lstsq
+from .processing import tecpg_mlr_qr
 from .regression_full import regression_full
 from .regression_single import regression_single
 from .test_data import generate_data
@@ -788,31 +788,31 @@ def corr(
 )
 @click.option(
     '--mlr-method',
-    type=click.Choice(['manual', 'lstsq', 'lstsq_bootstrap']),
-    default='manual',
+    type=click.Choice(['legacy_normal_eq', 'qr', 'qr_bootstrap']),
+    default='legacy_normal_eq',
     show_default=True,
     help=(
-        "The MLR computation method to use. 'manual' uses the original"
-        " optimized inversion; 'lstsq' uses torch.linalg.lstsq;"
-        " 'lstsq_bootstrap' runs empirical bootstrap on specific pairs."
+        "The MLR computation method to use. 'legacy_normal_eq' uses the original"
+        " optimized inversion; 'qr' uses QR decomposition (torch.linalg.qr) + torch.linalg.solve_triangular;"
+        " 'qr_bootstrap' runs empirical bootstrap on specific pairs."
     ),
 )
 @click.option(
     '--pairs-file',
     type=click.Path(exists=True, dir_okay=False),
-    help='Path to a CSV file containing mt_id and gt_id columns. Required for lstsq_bootstrap.',
+    help='Path to a CSV file containing mt_id and gt_id columns. Required for qr_bootstrap.',
 )
 @click.option(
     '--master-parquet',
     type=click.Path(exists=True, dir_okay=False),
-    help='Path to the master annotated Parquet file to merge bootstrap results onto. Required for lstsq_bootstrap.',
+    help='Path to the master annotated Parquet file to merge bootstrap results onto. Required for qr_bootstrap.',
 )
 @click.option(
     '--bootstrap-iterations',
     show_default=True,
     default=1000,
     type=int,
-    help='Number of resamples for lstsq_bootstrap.',
+    help='Number of resamples for qr_bootstrap.',
 )
 @click.option(
     '--bootstrap-batch-size',
@@ -847,7 +847,7 @@ def corr(
     '--reservoir-count',
     show_default=True,
     type=int,
-    help='Number of tests to retain in the reservoir buffer (only for lstsq method)',
+    help='Number of tests to retain in the reservoir buffer (only for qr method)',
 )
 @click.option(
     '--subsample-mt-count',
@@ -874,7 +874,7 @@ def corr(
     show_default=True,
     default=False,
     type=bool,
-    help='Whether to perform a permutation (Negative Control) test by shuffling subject IDs in G (only for lstsq method)',
+    help='Whether to perform a permutation (Negative Control) test by shuffling subject IDs in G (only for qr method)',
 )
 @click.option(
     '--compute-ig',
@@ -1196,13 +1196,13 @@ def mlr(
     if p_thresh is not None:
         logger.info('Using p-value threshold: {0}', p_thresh)
 
-    if mlr_method == 'lstsq_bootstrap':
+    if mlr_method == 'qr_bootstrap':
         if not pairs_file or not master_parquet:
-            error = '--pairs-file and --master-parquet are required for lstsq_bootstrap.'
+            error = '--pairs-file and --master-parquet are required for qr_bootstrap.'
             logger.error(error)
             raise click.UsageError(error)
 
-        from .bootstrap import tecpg_mlr_lstsq_bootstrap
+        from .bootstrap import tecpg_mlr_qr_bootstrap
 
         output_file_path = data['output']
         if chunking:
@@ -1210,7 +1210,7 @@ def mlr(
         elif output_path and not output_file_path.startswith('/'):
             output_file_path = os.path.join(output_path, output_file_path)
 
-        tecpg_mlr_lstsq_bootstrap(
+        tecpg_mlr_qr_bootstrap(
             M=M,
             G=G,
             C=C,
@@ -1225,22 +1225,22 @@ def mlr(
         )
         return
 
-    if mlr_method == 'lstsq':
+    if mlr_method == 'qr':
         if reservoir_count is None:
             total_comparisons = len(M) * len(G)
             reservoir_count = min(1_000_000, max(1, int(0.01 * total_comparisons)))
         kwargs['reservoir_count'] = reservoir_count
         # Inject output_dir into logger carry_data for reservoir saver
         logger.carry_data['output_dir'] = output_path
-        output = tecpg_mlr_lstsq(**kwargs, **logger)
+        output = tecpg_mlr_qr(**kwargs, **logger)
     else:
         if reservoir_count is not None:
-            logger.warning('--reservoir-count is only supported for mlr-method lstsq')
+            logger.warning('--reservoir-count is only supported for mlr-method qr')
         if permute_label_test:
-            logger.warning('--permute-label-test is only supported for mlr-method lstsq')
+            logger.warning('--permute-label-test is only supported for mlr-method qr')
         kwargs.pop('permute_label_test', None)
         if compute_ig or compute_ig_deep:
-            logger.warning('Integrated Gradients (--compute-ig/--compute-ig-deep) are only supported for mlr-method lstsq. They will be ignored.')
+            logger.warning('Integrated Gradients (--compute-ig/--compute-ig-deep) are only supported for mlr-method qr. They will be ignored.')
         kwargs.pop('compute_ig', None)
         kwargs.pop('compute_ig_deep', None)
         kwargs.pop('ig_baseline', None)
@@ -1395,7 +1395,7 @@ def mlr_single(
             window = DEFAULT_DISTAL_UPSTREAM
 
     if compute_ig or compute_ig_deep:
-        logger.warning('Integrated Gradients (--compute-ig/--compute-ig-deep) are only supported for mlr-method lstsq via mlr command. They will be ignored in mlr_single.')
+        logger.warning('Integrated Gradients (--compute-ig/--compute-ig-deep) are only supported for mlr-method qr via mlr command. They will be ignored in mlr_single.')
 
     kwargs = {
         'M': M,

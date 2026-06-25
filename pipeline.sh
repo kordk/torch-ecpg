@@ -162,9 +162,9 @@ else
     DF=96
 fi
 
-# Stage 3: Mapping (lstsq + ig)
+# Stage 3: Mapping (qr + ig)
 if [ $EXECUTE -eq 1 ]; then
-log "[3/9] Performing eQTM Mapping (lstsq + IG)..."
+log "[3/9] Performing eQTM Mapping (qr + IG)..."
 log "This stage runs the multiple linear regression (mlr) model and computes Integrated Gradients (IG)."
 if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
     log "Chunk overrides: ${MLR_CHUNK_ARGS[*]}. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
@@ -180,7 +180,7 @@ if [ "$MLR_IG_COVARIATES" = "all" ]; then
 elif [ -n "$MLR_IG_COVARIATES" ] && [ "$MLR_IG_COVARIATES" != "none" ]; then
     MLR_IG_ARGS+=(--ig-covariates-list "$MLR_IG_COVARIATES")
 fi
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig "${MLR_IG_ARGS[@]}" 2>&1 | tee "mlr_run_${DATASET}.log"
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig "${MLR_IG_ARGS[@]}" 2>&1 | tee "mlr_run_${DATASET}.log"
 set +o pipefail
 fi
 
@@ -277,7 +277,7 @@ if [ "$BOOTSTRAP_IG_COVARIATES" = "all" ]; then
 elif [ -n "$BOOTSTRAP_IG_COVARIATES" ] && [ "$BOOTSTRAP_IG_COVARIATES" != "none" ]; then
     BOOTSTRAP_IG_ARGS+=(--ig-covariates-list "$BOOTSTRAP_IG_COVARIATES")
 fi
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method lstsq_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 1000 --bootstrap-batch-size 10 --compute-ig "${BOOTSTRAP_IG_ARGS[@]}"
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 1000 --bootstrap-batch-size 10 --compute-ig "${BOOTSTRAP_IG_ARGS[@]}"
 fi
 
 log "======================================"

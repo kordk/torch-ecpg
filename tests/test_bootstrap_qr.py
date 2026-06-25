@@ -103,7 +103,7 @@ def test_bootstrap_degenerate():
 import os
 import pandas as pd
 from unittest.mock import patch
-from tecpg.bootstrap import tecpg_mlr_lstsq_bootstrap
+from tecpg.bootstrap import tecpg_mlr_qr_bootstrap
 
 def test_bootstrap_end_to_end(tmp_path):
     torch.manual_seed(42)
@@ -157,7 +157,7 @@ def test_bootstrap_end_to_end(tmp_path):
     # Run end-to-end (patch get_device to return cpu, and np.random.choice to return our fixed indices)
     with patch('tecpg.bootstrap.get_device', return_value=torch.device('cpu')), \
          patch('tecpg.bootstrap.np.random.choice', return_value=fixed_indices):
-        tecpg_mlr_lstsq_bootstrap(
+        tecpg_mlr_qr_bootstrap(
             M=M,
             G=G,
             C=C,

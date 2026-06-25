@@ -150,7 +150,7 @@ stages. Each stage name (in `code`) matches the value accepted by
 `--start-stage`, so any individual step can be re-run in isolation.
 
 1. **`map` — eQTM mapping** *(stage `[3/9]`)*. Runs `tecpg ... run
-   mlr --mlr-method lstsq --<mapping> --compute-ig`, with chunk sizes
+   mlr --mlr-method qr --<mapping> --compute-ig`, with chunk sizes
    auto-selected by the CLI's `_auto_chunk_sizes` (overridable by
    exporting `TECPG_M_CHUNK` / `TECPG_G_CHUNK`). Logs are tee'd to
    `mlr_run_<dataset>.log` and `TOTAL_TESTS` is extracted from that
@@ -177,7 +177,7 @@ stages. Each stage name (in `code`) matches the value accepted by
    `tools/createBootstrapList.py` selects the top hits (ranked by
    p-value) for bootstrapping into `bootstrap_list.csv`.
 7. **`bootstrap` — Bootstrap evaluation** *(stage `[9/9]`)*. Runs
-   `tecpg ... run mlr --mlr-method lstsq_bootstrap --pairs-file ...
+   `tecpg ... run mlr --mlr-method qr_bootstrap --pairs-file ...
    --master-parquet ... --bootstrap-iterations 1000
    --bootstrap-batch-size 10 --compute-ig` to attach empirical
    bootstrap p-values to the top candidates and write
@@ -407,7 +407,7 @@ Currently, the README and the `tecpg ... --help` commands serve as documentation
 
 For an end-to-end walkthrough of how eCpGs are filtered, prioritized, tested
 for enrichment, and visualized across the `pipeline.sh`/`pipelinePost.sh`
-workflow (regions, p-values, lstsq stats, precise p-values, FDR, bootstrap
+workflow (regions, p-values, qr stats, precise p-values, FDR, bootstrap
 scores, network nodes/edges), see the living document
 [`docs/ecpg-filtering-prioritization.md`](docs/ecpg-filtering-prioritization.md).
 
@@ -457,7 +457,7 @@ evaluation).
 The recommended way to reproduce an end-to-end demo run is to first prepare the
 dataset with `pipelinePre.sh` and then run `pipeline.sh`, which is the
 authoritative mapping entry point and uses the same
-`mlr --mlr-method lstsq --compute-ig` invocation, dataset defaults, and
+`mlr --mlr-method qr --compute-ig` invocation, dataset defaults, and
 downstream tools described in *Full analysis pipeline* above.
 
 ```bash
@@ -493,7 +493,7 @@ pipeline — the equivalent of the `pipeline.sh` mapping stage is:
 
 ```bash
 tecpg -i data -a annot -o output run mlr \
-    --mlr-method lstsq --cis --compute-ig
+    --mlr-method qr --cis --compute-ig
 ```
 
 Chunk sizes are auto-selected by the CLI on server-class hosts. See
@@ -693,7 +693,7 @@ Mapping post-processing:
 Bootstrapping:
 
 * `tools/createBootstrapList.py` — pick the top hits (by p-value) to feed
-  the `lstsq_bootstrap` MLR backend.
+  the `qr_bootstrap` MLR backend.
 
 Visualization and network analysis:
 
