@@ -507,7 +507,7 @@ run_workload() {
     local tecpg_global_args="--debug -i data_${DATASET} -a annot_${DATASET} -o $cell_dir/tecpg_out"
     if [ -n "$BLAS_THREADS" ]; then tecpg_global_args+=" --blas-threads $BLAS_THREADS"; fi
 
-    local tecpg_args="run mlr --mlr-method lstsq --$MAPPING --compute-ig"
+    local tecpg_args="run mlr --mlr-method qr --$MAPPING --compute-ig"
     if [ -n "$S_CHUNK" ]; then tecpg_args+=" --meth-loci-per-chunk $S_CHUNK"; fi
     if [ -n "$G_CHUNK" ]; then tecpg_args+=" --gene-loci-per-chunk $G_CHUNK"; fi
     if [ -n "$PREFETCH_CHUNKS" ] && [ "$PREFETCH_CHUNKS" -ne 0 ]; then tecpg_args+=" --prefetch-chunks $PREFETCH_CHUNKS"; fi

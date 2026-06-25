@@ -23,7 +23,7 @@ bipartite CpG↔Gene network.
 
 ```
    Methylation (M) ─┐
-   Expression  (G) ─┼──►  MLR (lstsq) ──►  eCpG table  ──►  filter / prioritize  ──►  figures + network
+   Expression  (G) ─┼──►  MLR (qr) ──►  eCpG table  ──►  filter / prioritize  ──►  figures + network
    Covariates  (C) ─┘        + IG          (per pair)        (regions, p, FDR,
                                                               precise p, bootstrap)
 ```
@@ -62,7 +62,7 @@ intercept), computed dynamically in `pipeline.sh:275-284`.
  │       + QC                tools/exploreOmics.py          data_gtp/qc/      │
  │ [1.5] cell_prop           tools/estimateCellProportions  C_post_cellTypes  │
  │ [2]   pca                 tools/residualize_pca.sh (G,M) C.csv (+PCs)      │
- │ [3]   map  ★              tecpg run mlr --lstsq --all     output chunks    │
+ │ [3]   map  ★              tecpg run mlr --mlr-method qr --all     output chunks    │
  │             --compute-ig    (per-pair betas, t, p, IG)                     │
  │ [4]   merge               tools/mergeOutputs.py          merged.parquet    │
  │ [5]   annotate ★          tools/assignRegionToEcpg_…     annotated.parquet │
@@ -70,7 +70,7 @@ intercept), computed dynamically in `pipeline.sh:275-284`.
  │ [7]   summarize ★         tools/summarizeOutput_parquet  summarized.parquet│
  │             + FDR + plots   (BH-FDR, QQ, hist, saliency)                   │
  │ [8]   boot_list ★         tools/createBootstrapList.py   bootstrap_list.csv│
- │ [9]   bootstrap ★         tecpg run mlr --lstsq_bootstrap bootstrap_merged │
+ │ [9]   bootstrap ★         tecpg run mlr --mlr-method qr_bootstrap bootstrap_merged │
  └────────────────────────────────────────────────────────────────────────────┘
    ★ = a filtering / prioritization / statistics step (detailed below)
 ```
@@ -99,9 +99,9 @@ Network export filter defaults (`pipelinePost.sh:24-25`):
 
 ---
 
-## 4. Per-pair statistics (MLR `lstsq`)
+## 4. Per-pair statistics (MLR `qr`)
 
-`tecpg run mlr --mlr-method lstsq --all --compute-ig` fits, for each (CpG j,
+`tecpg run mlr --mlr-method qr --all --compute-ig` fits, for each (CpG j,
 gene i) pair:
 
 ```
@@ -220,14 +220,14 @@ Genomic inflation **λ_GC** is estimated from ~1.2M reservoir-sampled p-values
    λ_GC = median(χ²_obs, df=1) / 0.4549
 ```
 
-### 5d. Bootstrap prioritization — `createBootstrapList.py` + `lstsq_bootstrap`
+### 5d. Bootstrap prioritization — `createBootstrapList.py` + `qr_bootstrap`
 
 `createBootstrapList.py` selects the top **`--percent` (default 10%)** of hits
 **per region**, hard-capped at **`--max-per-region` (default 2000)**, ranked by
 one of: `p-value` (asc), `ig_score` (`mt_ig` desc), or `magnitude` (`|mt_est|`
 desc). Pairs are globally de-duplicated. `pipeline.sh:377` ranks by `p-value`.
 
-`tecpg run mlr --mlr-method lstsq_bootstrap` (100 iterations, batch 10) then
+`tecpg run mlr --mlr-method qr_bootstrap` (100 iterations, batch 10) then
 resamples samples with replacement and emits (`tecpg/bootstrap.py:200-235`):
 
 | Column | Meaning |
