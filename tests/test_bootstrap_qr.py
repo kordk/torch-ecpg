@@ -212,3 +212,118 @@ def test_bootstrap_end_to_end(tmp_path):
     assert row2['degenerate_resamples'] == 0
     assert math.isfinite(row2['mt_est_boot_mean'])
     assert math.isfinite(row2['mt_est_boot_std'])
+
+
+# ---------------------------------------------------------------------------
+# CLI-level regression test for IG kwarg forwarding.
+#
+# The bug: the `qr_bootstrap` branch of `tecpg run mlr` (tecpg/cli.py) called
+# `tecpg_mlr_qr_bootstrap(...)` with an explicit argument list that omitted
+# `compute_ig`, `compute_ig_deep`, `ig_baseline`, and `ig_covariates_filter`.
+# Because those parameters default to "off" in the bootstrap function, the
+# per-covariate (and scalar `mt_ig`) Integrated Gradients columns silently
+# vanished from the merged bootstrap parquet even when `--compute-ig
+# --ig-covariates` were passed on the command line.
+#
+# `test_bootstrap_end_to_end` above calls `tecpg_mlr_qr_bootstrap` directly,
+# so it cannot catch a CLI-layer forwarding regression. This test drives the
+# actual `tecpg run mlr ... --mlr-method qr_bootstrap` entry point and asserts
+# on the OUTPUT SCHEMA, since this is a silent failure (no error, just missing
+# columns).
+# ---------------------------------------------------------------------------
+def test_bootstrap_cli_forwards_ig_kwargs(tmp_path):
+    import numpy as np
+    from click.testing import CliRunner
+    from tecpg.cli import cli
+
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    n_samples = 20
+    samples = [f'sample_{i}' for i in range(n_samples)]
+    mt_ids = ['cg001', 'cg002', 'cg003']
+    gt_ids = ['ENSG001', 'ENSG002', 'ENSG003']
+
+    input_dir = tmp_path / 'data'
+    output_dir = tmp_path / 'output'
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    # M / G: loci x samples. C: samples x covariates (named so per-covariate
+    # IG columns are recognizable: age_ig, sex_ig).
+    M = pd.DataFrame(np.random.randn(3, n_samples), index=mt_ids, columns=samples)
+    G = pd.DataFrame(np.random.randn(3, n_samples), index=gt_ids, columns=samples)
+    C = pd.DataFrame(
+        np.random.randn(n_samples, 2), index=samples, columns=['age', 'sex']
+    )
+
+    M.to_csv(input_dir / 'M.csv')
+    G.to_csv(input_dir / 'G.csv')
+    C.to_csv(input_dir / 'C.csv')
+
+    pairs_file = tmp_path / 'pairs.csv'
+    pd.DataFrame({'mt_id': mt_ids, 'gt_id': gt_ids}).to_csv(pairs_file, index=False)
+
+    master_parquet = tmp_path / 'master.parquet'
+    pd.DataFrame(
+        {'mt_id': mt_ids, 'gt_id': gt_ids, 'other_col': [1, 2, 3]}
+    ).to_parquet(master_parquet)
+
+    output_file = 'bootstrap_merged.parquet'
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            '--root-path', str(tmp_path),
+            '--input-dir', 'data',
+            '--output-dir', 'output',
+            '--output-file', output_file,
+            '--cpu-threads', '1',
+            '--host-profile', 'minimum',
+            '--no-log-file',
+            'run', 'mlr',
+            '--mlr-method', 'qr_bootstrap',
+            '--pairs-file', str(pairs_file),
+            '--master-parquet', str(master_parquet),
+            '--bootstrap-iterations', '5',
+            '--bootstrap-batch-size', '3',
+            '--compute-ig',
+            '--ig-covariates',
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+
+    out_path = output_dir / output_file
+    assert out_path.exists(), f'Expected bootstrap output at {out_path}'
+
+    result_df = pd.read_parquet(out_path)
+
+    # Core bootstrap columns must be present.
+    for col in [
+        'mt_est_boot_mean', 'mt_est_boot_std',
+        'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples',
+    ]:
+        assert col in result_df.columns, f'missing core column {col}'
+
+    # Regression assertion: the scalar mt_ig column AND the per-covariate IG
+    # columns must survive the CLI -> bootstrap call. Before the fix these
+    # were silently dropped because the CLI did not forward the IG kwargs.
+    assert 'mt_ig' in result_df.columns, (
+        'scalar mt_ig column missing -- CLI did not forward IG kwargs to '
+        'tecpg_mlr_qr_bootstrap'
+    )
+    for covar in C.columns:
+        col = f'{covar}_ig'
+        assert col in result_df.columns, (
+            f'per-covariate IG column {col!r} missing -- CLI did not forward '
+            'ig_covariates_filter to tecpg_mlr_qr_bootstrap'
+        )
+
+    # The merged-in IG values should be populated for the matched pairs.
+    matched = result_df[result_df['mt_id'].isin(mt_ids)]
+    assert matched['mt_ig'].notna().all()
+    for covar in C.columns:
+        assert matched[f'{covar}_ig'].notna().all()
