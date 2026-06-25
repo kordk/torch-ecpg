@@ -41,7 +41,7 @@ def create_normal_p(device: torch.device, dtype: torch.dtype):
     return prob
 
 
-def tecpg_mlr_lstsq(
+def tecpg_mlr_qr(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
     C: pandas.DataFrame,
@@ -78,7 +78,7 @@ def tecpg_mlr_lstsq(
 ) -> Optional[pandas.DataFrame]:
     '''
     Calculates the multiple linear regression of the input dataframes M,
-    G, and C using torch.linalg.lstsq.
+    G, and C using torch.linalg.qr.
     '''
     chunking = (
         gene_loci_per_chunk is not None or meth_loci_per_chunk is not None
@@ -99,7 +99,7 @@ def tecpg_mlr_lstsq(
             # Warm up worker processes so per-chunk pool.submit doesn't
             # pay spawn latency on the first save.
             _ = list(pool.map(int, range(max_workers)))
-        return _tecpg_mlr_lstsq_inner(
+        return _tecpg_mlr_qr_inner(
             M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
             gene_loci_per_chunk, meth_loci_per_chunk, p_thresh, output_dir,
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
@@ -109,7 +109,7 @@ def tecpg_mlr_lstsq(
             output_format=output_format, logger=logger, chunking=chunking
         )
 
-def _tecpg_mlr_lstsq_inner(
+def _tecpg_mlr_qr_inner(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
     C: pandas.DataFrame,
@@ -260,7 +260,7 @@ def _tecpg_mlr_lstsq_inner(
 
     # Initializes some constants
     logger.info(
-        'Running tecpg_mlr_lstsq with options: {0}',
+        'Running tecpg_mlr_qr with options: {0}',
         {
             k: v
             for k, v in locals().items()
@@ -268,7 +268,7 @@ def _tecpg_mlr_lstsq_inner(
         },
     )
     logger.info('Final count prior to analysis: {0} genes and {1} methylation loci.', len(G), len(M))
-    logger.info('Initializing regression variables (lstsq)')
+    logger.info('Initializing regression variables (qr)')
     device = get_device(**logger)
     dtype = DTYPE
     if meth_loci_per_chunk is not None:
@@ -418,7 +418,7 @@ def _tecpg_mlr_lstsq_inner(
             throttle_if_needed(gpu_monitor, thermal_threshold, thermal_wait, logger)
             report_thermal_status(gpu_monitor, thermal_threshold, logger)
 
-            logger.memory_check('tecpg_mlr_lstsq')
+            logger.memory_check('tecpg_mlr_qr')
             # Log methylation chunk index
             logger.info(
                 'STARTING METHYLATION CHUNK {0}/{1}',
@@ -451,7 +451,7 @@ def _tecpg_mlr_lstsq_inner(
                 # If no filtration, output size is constant per gene chunk
                 pass # Calculated later
 
-            mc_logger.start_timer('info', 'Running tecpg_mlr_lstsq...')
+            mc_logger.start_timer('info', 'Running tecpg_mlr_qr...')
 
             # Create methylation loci chromosome and position tensors
             # for the current chunk
@@ -487,7 +487,7 @@ def _tecpg_mlr_lstsq_inner(
             X: torch.Tensor = torch.cat((ones, Mt, Ct), 2) # (M, S, K)
             del Mt, ones
 
-            mc_logger.memory_check('tecpg_mlr_lstsq - peak')
+            mc_logger.memory_check('tecpg_mlr_qr - peak')
 
             if compute_ig or compute_ig_deep:
                 if ig_baseline == 'mean':
@@ -558,7 +558,7 @@ def _tecpg_mlr_lstsq_inner(
                 )
 
             # Loop over gene chunks
-            inner_logger.start_timer('info', 'Calculating regression (lstsq)...')
+            inner_logger.start_timer('info', 'Calculating regression (qr)...')
 
             gene_end_index = 0
 
@@ -644,11 +644,11 @@ def _tecpg_mlr_lstsq_inner(
                 # Q is (M_chunk, S, K). Y is (S, G_chunk).
                 # To avoid materializing Y_expanded, do QtY = torch.einsum('msk,sg->mkg', Q, Y)
                 QtY = torch.einsum('msk,sg->mkg', Q, Y)
-                inner_logger.memory_check('tecpg_mlr_lstsq - QtY computed')
+                inner_logger.memory_check('tecpg_mlr_qr - QtY computed')
 
                 # Coefficients B
                 B = R_inv.matmul(QtY) # (M_chunk, K, G_chunk)
-                inner_logger.memory_check('tecpg_mlr_lstsq - solve (QR reuse)')
+                inner_logger.memory_check('tecpg_mlr_qr - solve (QR reuse)')
 
                 # Calculate Residuals (RSS) algebraically without materializing E
                 # ||Y - XB||^2 = ||Y||^2 - ||Q^T Y||^2
@@ -657,7 +657,7 @@ def _tecpg_mlr_lstsq_inner(
 
                 # clamp_min(0) guards against float32 cancellation producing small negatives
                 RSS = (Y_norm_sq.unsqueeze(0) - QtY_norm_sq).clamp_min(0) # (M_chunk, G_chunk)
-                inner_logger.memory_check('tecpg_mlr_lstsq - RSS (no E)')
+                inner_logger.memory_check('tecpg_mlr_qr - RSS (no E)')
 
                 # Sigma = sqrt(RSS / df)
                 # Standard Errors S = XtXi_diag_sqrt * Sigma
@@ -708,7 +708,7 @@ def _tecpg_mlr_lstsq_inner(
 
                 T = B / S
                 P = normal_p(T)
-                inner_logger.memory_check('tecpg_mlr_lstsq - pvals')
+                inner_logger.memory_check('tecpg_mlr_qr - pvals')
 
                 # Now we have tensors of shape (M, G, K).
 
@@ -1169,7 +1169,7 @@ def _tecpg_mlr_lstsq_inner(
             del Q, R_inv, XtXi_diag_sqrt
 
             mc_logger.time('Looped over methylation loci in {l} seconds')
-            mc_logger.time('Calculated tecpg_mlr_lstsq in {t} seconds')
+            mc_logger.time('Calculated tecpg_mlr_qr in {t} seconds')
 
             # If no gene chunking (gene_loci_per_chunk is None), save/return results
             if gene_loci_per_chunk is None:
@@ -1323,7 +1323,7 @@ def _tecpg_mlr_lstsq_inner(
             logger.time('Finished saving reservoir sample to {0}', res_file_path)
 
         logger.time(
-            'Finished calculating the multiple linear regression (lstsq) in {t} total'
+            'Finished calculating the multiple linear regression (qr) in {t} total'
             ' seconds'
         )
 

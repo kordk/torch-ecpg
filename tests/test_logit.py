@@ -13,7 +13,7 @@ if root_dir not in sys.path:
 from tecpg.test_data import generate_data
 from tecpg.regression_full import regression_full
 from tecpg.regression_single import regression_single
-from tecpg.processing import tecpg_mlr_lstsq
+from tecpg.processing import tecpg_mlr_qr
 from tecpg.helper import logit_transform_pandas
 from tecpg.logger import Logger
 
@@ -38,7 +38,7 @@ class TestLogitTransform(unittest.TestCase):
         # regression_full converts M to float32 tensor BEFORE transform when using flag.
         # So we must cast to float32 first to match precision.
         M_f32 = self.M.astype('float32')
-        M_trans = logit_transform_pandas(M_f32)
+        M_trans = logit_transform_pandas(M_f32, logger=self.logger)
 
         # Run regression_full with manual transform
         res_manual = regression_full(
@@ -74,13 +74,13 @@ class TestLogitTransform(unittest.TestCase):
         # Check estimates are different
         self.assertFalse(np.allclose(res_raw['mt_est'], res_flag['mt_est'], rtol=1e-3))
 
-    def test_logit_transform_lstsq(self):
+    def test_logit_transform_qr(self):
         # Manual transform mimicking internal float32 precision
         M_f32 = self.M.astype('float32')
-        M_trans = logit_transform_pandas(M_f32)
+        M_trans = logit_transform_pandas(M_f32, logger=self.logger)
 
-        # Run lstsq with manual transform
-        res_manual = tecpg_mlr_lstsq(
+        # Run qr with manual transform
+        res_manual = tecpg_mlr_qr(
             M_trans, self.G, self.C,
             self.M_annot, self.G_annot,
             region='all', p_thresh=None,
@@ -88,8 +88,8 @@ class TestLogitTransform(unittest.TestCase):
             logit_transform=False
         )
 
-        # Run lstsq with flag
-        res_flag = tecpg_mlr_lstsq(
+        # Run qr with flag
+        res_flag = tecpg_mlr_qr(
             self.M, self.G, self.C,
             self.M_annot, self.G_annot,
             region='all', p_thresh=None,
@@ -101,7 +101,7 @@ class TestLogitTransform(unittest.TestCase):
         pd.testing.assert_frame_equal(res_manual, res_flag, check_exact=False, rtol=1e-3)
 
         # Ensure difference from raw
-        res_raw = tecpg_mlr_lstsq(
+        res_raw = tecpg_mlr_qr(
             self.M, self.G, self.C,
             self.M_annot, self.G_annot,
             region='all', p_thresh=None,
@@ -113,7 +113,7 @@ class TestLogitTransform(unittest.TestCase):
     def test_logit_transform_single(self):
         # Manual transform
         # regression_single uses pandas for transform internally (float64), so manual transform on float64 M matches perfectly.
-        M_trans = logit_transform_pandas(self.M)
+        M_trans = logit_transform_pandas(self.M, logger=self.logger)
 
         # Run single with manual transform
         # regression_single returns concatenated DF.

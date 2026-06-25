@@ -11,7 +11,7 @@ These tests validate the mathematical correctness of `tecpg`'s regression implem
   - **Output:** Prints a comparison table showing metrics like Max Abs Diff and Mean Abs Diff, and creates scatter plots showing the correlation of values if the `validation_utils` module supports it.
   - **How to run:** `python test_accuracy.py`
 - **`test_mlr_comparison.py`**
-  - **Purpose:** Compares the two implementation backends of `tecpg` (`regression_full` and `tecpg_mlr_lstsq`) to ensure both methods produce consistent results across different chunking and region filtration scenarios.
+  - **Purpose:** Compares the two implementation backends of `tecpg` (`regression_full` and `tecpg_mlr_qr`) to ensure both methods produce consistent results across different chunking and region filtration scenarios.
   - **Output:** Prints a detailed comparison summary of max/mean absolute and relative differences, and correlation.
   - **How to run:** `python test_mlr_comparison.py`
 - **`test_recalculate_pvalues.py`**

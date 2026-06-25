@@ -39,7 +39,7 @@ def apply_cuda_alloc_conf():
     expandable_segments reduces GPU memory fragmentation by letting the
     caching allocator grow individual segments on demand instead of
     rounding every block up to a fixed segment size. On the chunked
-    lstsq path used by tecpg this measurably lowers peak VRAM held by
+    qr path used by tecpg this measurably lowers peak VRAM held by
     the allocator after a few gene-chunk iterations.
 
     The flag is harmless on CPU-only hosts: the env var is only

@@ -11,7 +11,7 @@ from .logger import Logger
 
 from typing import Optional
 
-def tecpg_mlr_lstsq_bootstrap(
+def tecpg_mlr_qr_bootstrap(
     M: pd.DataFrame,
     G: pd.DataFrame,
     C: pd.DataFrame,
@@ -57,7 +57,7 @@ def tecpg_mlr_lstsq_bootstrap(
     # Shape: (iterations, N_total)
     boot_indices = np.random.choice(N_total, size=(iterations, N_total), replace=True)
 
-    # To maximize speed, we want to run the lstsq on chunks of pairs
+    # To maximize speed, we want to run the qr on chunks of pairs
     # Prepare covariate data
     C_np = C.to_numpy()
     # (iterations, N_total, K)
@@ -177,8 +177,8 @@ def tecpg_mlr_lstsq_bootstrap(
 
         # We need to solve for B: X_boot * B = Y_boot
         # X_boot is (B, I, N, K), Y_boot is (B, I, N, 1)
-        # Flatten B and I to use lstsq natively
-        # lstsq takes (..., N, K) and (..., N, 1)
+        # Flatten B and I to use qr natively
+        # qr takes (..., N, K) and (..., N, 1)
         X_flat = X_boot.view(B * I, N, 2 + K_c)
         Y_flat = Y_boot.view(B * I, N, 1)
 
@@ -265,7 +265,7 @@ def tecpg_mlr_lstsq_bootstrap(
         if torch.cuda.is_available():
             alloc_mem = torch.cuda.memory_allocated() / (1024 ** 3)
             max_alloc_mem = torch.cuda.max_memory_allocated() / (1024 ** 3)
-            logger.info(f"GPU memory before lstsq - Allocated: {alloc_mem:.2f} GB, Max Allocated: {max_alloc_mem:.2f} GB")
+            logger.info(f"GPU memory before qr - Allocated: {alloc_mem:.2f} GB, Max Allocated: {max_alloc_mem:.2f} GB")
 
         # Solve
         Q, R = torch.linalg.qr(X_flat, mode='reduced')
