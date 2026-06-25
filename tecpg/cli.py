@@ -1221,6 +1221,10 @@ def mlr(
             batch_size=bootstrap_batch_size,
             thermal_threshold=thermal_threshold,
             thermal_wait=thermal_wait,
+            compute_ig=compute_ig,
+            compute_ig_deep=compute_ig_deep,
+            ig_baseline=ig_baseline,
+            ig_covariates_filter=ig_covariates_filter,
             logger=logger
         )
         return
