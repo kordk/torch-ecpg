@@ -1251,7 +1251,7 @@ def mlr(
         kwargs.pop('ig_covariates_filter', None)
         output = regression_full(**kwargs, **logger)
     if not chunking:
-        save_dataframes([output], output_path, [data['output']], **logger)
+        save_dataframes([output], output_path, [data['output']], clear_dir=False, **logger)
 
 
 @run.command()

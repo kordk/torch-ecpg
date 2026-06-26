@@ -1264,20 +1264,19 @@ def _tecpg_mlr_qr_inner(
             prefetch_executor.shutdown(wait=True)
 
         # Print end-of-run summary
-        if len(run_metrics['prep_ms']) > 0:
-            import numpy as np
-            summary_str = ["--- END OF RUN SUMMARY ---"]
-            summary_str.append(f"Genes evaluated: {len(G)}")
-            summary_str.append(f"Methylation loci evaluated: {len(M)}")
-            summary_str.append(f"Total tests evaluated: {total_tests_evaluated} (TOTAL_TESTS={total_tests_evaluated})")
-            summary_str.append(f"Tests passed p-value filter and saved: {total_tests_passed_filter}")
-            summary_str.append(f"Chunks saved: {total_chunks_saved}")
-            summary_str.append(f"Total bytes written: {total_bytes_written} ({total_bytes_written/1024/1024:.2f} MB)")
-            for metric, vals in run_metrics.items():
-                if len(vals) > 0:
-                    summary_str.append(f"{metric}: sum={sum(vals):.1f}ms, mean={np.mean(vals):.1f}ms, p95={np.percentile(vals, 95):.1f}ms")
-            for line in summary_str:
-                logger.info(line)
+        import numpy as np
+        summary_str = ["--- END OF RUN SUMMARY ---"]
+        summary_str.append(f"Genes evaluated: {len(G)}")
+        summary_str.append(f"Methylation loci evaluated: {len(M)}")
+        summary_str.append(f"Total tests evaluated: {total_tests_evaluated} (TOTAL_TESTS={total_tests_evaluated})")
+        summary_str.append(f"Tests passed p-value filter and saved: {total_tests_passed_filter}")
+        summary_str.append(f"Chunks saved: {total_chunks_saved}")
+        summary_str.append(f"Total bytes written: {total_bytes_written} ({total_bytes_written/1024/1024:.2f} MB)")
+        for metric, vals in run_metrics.items():
+            if len(vals) > 0:
+                summary_str.append(f"{metric}: sum={sum(vals):.1f}ms, mean={np.mean(vals):.1f}ms, p95={np.percentile(vals, 95):.1f}ms")
+        for line in summary_str:
+            logger.info(line)
 
         if do_reservoir and reservoir_processed > 0:
             logger.info('Saving reservoir sample ({0} rows)', min(reservoir_processed, reservoir_count))

@@ -21,16 +21,20 @@ def save_dataframes(
     save_func: Callable = pandas.DataFrame.to_csv,
     *args,
     logger: Logger = Logger(),
+    clear_dir: bool = True,
     **kwargs,
 ) -> None:
     """
     Saves any number of dataframes to an output_dir, with file_names for
     each file. Default file names count up from one for as many files
-    that are given. The save_func function is called with the panads
+    that are given. The save_func function is called with the pandas
     dataframe and the output path, which defaults to saving as a csv.
     Extra args and kwargs passed to save_func.
     """
-    initialize_dir(output_dir, **logger)
+    if clear_dir:
+        initialize_dir(output_dir, **logger)
+    else:
+        os.makedirs(output_dir, exist_ok=True)
 
     logger.start_timer('info', 'Saving {0} dataframes...', len(dataframes))
     for df, file_name in zip(dataframes, file_names):
