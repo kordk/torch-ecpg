@@ -317,7 +317,15 @@ def tecpg_mlr_qr_bootstrap(
                 prop_greater_eq_zero = (filtered_est >= 0).float().mean()
                 p_boot = torch.min(prop_less_eq_zero, prop_greater_eq_zero) * 2.0
                 p_boot = torch.clamp(p_boot, max=1.0)
-                batch_p_boot.append(p_boot.item())
+                # Floor p_boot at its true empirical resolution, 1/finite_count,
+                # so a strictly one-sided resample distribution reports the
+                # smallest representable empirical p-value instead of 0. The
+                # denominator is this pair's finite resample count
+                # (I - degenerate_count), not the global iteration total. The
+                # floor is applied in Python float (float64) so it is exact at
+                # the parquet's precision rather than the tensor's float32.
+                finite_count = filtered_est.numel()
+                batch_p_boot.append(max(p_boot.item(), 1.0 / finite_count))
 
         mt_est_means.extend(batch_mt_est_mean)
         mt_est_stds.extend(batch_mt_est_std)

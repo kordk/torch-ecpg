@@ -11,7 +11,11 @@ log() {
 # Default settings
 DATASET="dummy"
 MAPPING="all"
-TOTAL_TESTS=1000000
+# TOTAL_TESTS has no safe default: it is the BH-FDR denominator, so a wrong
+# value silently corrupts every fdr_est. It is extracted from the mlr log
+# (TOTAL_TESTS=... emitted by tecpg) and the pipeline aborts if extraction
+# fails -- see the extraction block below. No placeholder fallback exists.
+TOTAL_TESTS=""
 NUM_PCS=5
 START_STAGE="all"
 
@@ -93,17 +97,19 @@ if [ $IS_VALID_STAGE -eq 0 ]; then
     exit 1
 fi
 
-if [ "$DATASET" == "gtp" ]; then
-    TOTAL_TESTS=13744315260 # Placeholder for full GTP size, will be dynamically updated
-elif [ "$DATASET" == "mesa" ]; then
-    TOTAL_TESTS=10000000000 # Placeholder for MESA, will be dynamically updated
-elif [ "$DATASET" == "dummy" ]; then
-    TOTAL_TESTS=1000000 # Placeholder for 1000 M * 1000 G, will be dynamically updated
-else
-    log "Error: Unknown dataset: $DATASET"
-    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis]"
-    exit 1
-fi
+case "$DATASET" in
+    gtp|mesa|dummy)
+        # No placeholder TOTAL_TESTS is set here on purpose: the FDR
+        # denominator must be the real number of tests evaluated, which is
+        # extracted from the mlr log below. A hardcoded size would silently
+        # produce wrong fdr_est values.
+        ;;
+    *)
+        log "Error: Unknown dataset: $DATASET"
+        log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis]"
+        exit 1
+        ;;
+esac
 
 # Optional pinning of chunk sizes via env vars; otherwise the tecpg CLI
 # auto-sizer picks both from the host budget.
@@ -123,9 +129,9 @@ fi
 log "======================================"
 log "Starting eQTM Pipeline for: $DATASET (Mapping: $MAPPING)"
 if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
-    log "Dataset configurations: TOTAL_TESTS=$TOTAL_TESTS, chunk overrides=${MLR_CHUNK_ARGS[*]}"
+    log "Dataset configurations: TOTAL_TESTS=pending (extracted from mlr log), chunk overrides=${MLR_CHUNK_ARGS[*]}"
 else
-    log "Dataset configurations: TOTAL_TESTS=$TOTAL_TESTS, chunk sizes=auto (tecpg CLI)"
+    log "Dataset configurations: TOTAL_TESTS=pending (extracted from mlr log), chunk sizes=auto (tecpg CLI)"
 fi
 log "Starting from stage: $START_STAGE"
 log "======================================"
@@ -155,8 +161,46 @@ if [ -s "$DATA_DIR/C.csv" ]; then
     SAMPLES=$(wc -l < "$DATA_DIR/C.csv")
     SAMPLES=$((SAMPLES - 1)) # Header
     COVARS=$(head -n 1 "$DATA_DIR/C.csv" | awk -F, '{print NF-1}')
+
+    # M7-DF: stage-boundary check. pipelinePre.sh records the exact (samples,
+    # covars) shape the PCA merge produced in C.shape.meta. Validate that the
+    # counts C.csv now carries still match before deriving DF, so a stray
+    # trailing blank line (shifts SAMPLES) or an extra index column (shifts
+    # COVARS) fails loudly instead of silently shifting DF and corrupting every
+    # precise_mt_p / FDR downstream.
+    SHAPE_META="$DATA_DIR/C.shape.meta"
+    if [ -f "$SHAPE_META" ]; then
+        EXP_SAMPLES=$(grep -o 'samples=[0-9]*' "$SHAPE_META" | cut -d= -f2)
+        EXP_COVARS=$(grep -o 'covars=[0-9]*' "$SHAPE_META" | cut -d= -f2)
+        if [ -z "$EXP_SAMPLES" ] || [ -z "$EXP_COVARS" ]; then
+            log "Error: malformed $SHAPE_META (could not read expected samples/covars from the PCA merge)."
+            log "Re-run pipelinePre.sh to regenerate C.csv and its shape metadata."
+            exit 1
+        fi
+        if [ "$SAMPLES" != "$EXP_SAMPLES" ]; then
+            log "Error: sample count mismatch in $DATA_DIR/C.csv. Expected $EXP_SAMPLES (from PCA merge) but observed $SAMPLES."
+            log "C.csv may have a stray trailing blank line or have been regenerated inconsistently. Refusing to derive DF."
+            exit 1
+        fi
+        if [ "$COVARS" != "$EXP_COVARS" ]; then
+            log "Error: covariate count mismatch in $DATA_DIR/C.csv. Expected $EXP_COVARS (from PCA merge) but observed $COVARS."
+            log "C.csv may carry an extra index column or have been regenerated inconsistently. Refusing to derive DF."
+            exit 1
+        fi
+    else
+        log "Warning: $SHAPE_META not found; cannot cross-check C.csv against the PCA merge. Proceeding with parsed counts."
+    fi
+
     DF=$((SAMPLES - COVARS - 2))
     log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
+
+    # Assert DF > 0 BEFORE recalculation, not only inside
+    # recalculate_pvalues_parquet.py, so a non-positive DF aborts the pipeline.
+    if [ "$DF" -le 0 ]; then
+        log "Error: Non-positive degrees of freedom (DF=$DF) from SAMPLES=$SAMPLES, COVARS=$COVARS."
+        log "Too few samples relative to covariates; p-value recalculation would be invalid."
+        exit 1
+    fi
 else
     # Default placeholder
     DF=96
@@ -186,17 +230,26 @@ fi
 
 if [ "$START_STAGE" == "merge" ]; then EXECUTE=1; fi
 
-# Extract dynamically evaluated TOTAL_TESTS (needed if we run mapping or summarize, independent of whether Stage 3 ran just now)
+# Extract dynamically evaluated TOTAL_TESTS (the BH-FDR denominator) from the
+# mlr log. There is no placeholder fallback: a wrong denominator silently
+# corrupts every fdr_est, so a missing log or a failed extraction is a hard,
+# fail-closed error.
 if [ -f "mlr_run_${DATASET}.log" ]; then
     EXTRACTED_TOTALS=$(grep -o 'TOTAL_TESTS=[0-9]*' "mlr_run_${DATASET}.log" | tail -n 1 | cut -d= -f2 || true)
     if [ -n "$EXTRACTED_TOTALS" ]; then
         TOTAL_TESTS=$EXTRACTED_TOTALS
         log "Dynamically extracted TOTAL_TESTS=$TOTAL_TESTS from mlr output."
     else
-        log "Warning: Could not extract TOTAL_TESTS from mlr output. Falling back to placeholder value ($TOTAL_TESTS)."
+        log "Error: Could not extract TOTAL_TESTS from mlr_run_${DATASET}.log."
+        log "TOTAL_TESTS is the FDR denominator and has no safe placeholder."
+        log "Re-run the mapping stage so the mlr log emits 'TOTAL_TESTS=<n>'."
+        exit 1
     fi
 else
-    log "Warning: mlr_run_${DATASET}.log not found. Falling back to placeholder value ($TOTAL_TESTS)."
+    log "Error: mlr_run_${DATASET}.log not found; cannot determine TOTAL_TESTS."
+    log "TOTAL_TESTS is the FDR denominator and has no safe placeholder."
+    log "Run the mapping stage first so the mlr log is produced."
+    exit 1
 fi
 
 # Stage 4: Merge chunked outputs

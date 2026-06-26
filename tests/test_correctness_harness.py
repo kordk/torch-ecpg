@@ -254,13 +254,13 @@ def test_oracle_bh_fdr_vs_statsmodels():
 
 # --- p_boot oracle (one-sided / two-sided split + degenerate resamples) ---
 def _p_boot_production(estimates: np.ndarray):
-    """Mirror of bootstrap.py p_boot math (NO floor), on finite resamples.
+    """Mirror of bootstrap.py p_boot math, on finite resamples.
 
     Mirrors ``tecpg/bootstrap.py`` lines 284-320: drop non-finite
     resamples, then ``p_boot = 2 * min(mean(est<=0), mean(est>=0))`` clamped
-    to 1.0. Returns ``(p_boot, finite_count)``. This deliberately omits the
-    intended ``1/finite_count`` floor so the oracle test below stays xfail
-    until C1 lands.
+    to ``[1/finite_count, 1]``. The ``1/finite_count`` floor landed with
+    audit item C1, so this mirror now matches the floored production value.
+    Returns ``(p_boot, finite_count)``.
     """
     finite = estimates[np.isfinite(estimates)]
     finite_count = int(finite.size)
@@ -269,7 +269,8 @@ def _p_boot_production(estimates: np.ndarray):
     prop_le = float(np.mean(finite <= 0))
     prop_ge = float(np.mean(finite >= 0))
     p_boot = min(prop_le, prop_ge) * 2.0
-    return min(p_boot, 1.0), finite_count
+    p_boot = min(p_boot, 1.0)
+    return max(p_boot, 1.0 / finite_count), finite_count
 
 
 def _p_boot_oracle(estimates: np.ndarray):
@@ -294,11 +295,6 @@ def test_p_boot_two_sided_matches_without_floor():
     np.testing.assert_allclose(prod, oracle, rtol=0, atol=0)
 
 
-@pytest.mark.xfail(
-    reason='C1 -- p_boot has no 1/finite_count floor yet; one-sided and '
-    'degenerate resamples return 0 instead of the intended 1/finite_count.',
-    strict=True,
-)
 def test_p_boot_floor_oracle_local_resample():
     """p_boot vs. hand-rolled empirical math, INCLUDING the floor.
 
@@ -371,11 +367,6 @@ def _one_sided_bootstrap_fixture():
     return M, G, C, [('cg001', 'ILMN_001')]
 
 
-@pytest.mark.xfail(
-    reason='C1 -- p_boot has no 1/B floor; a strictly one-sided pair returns '
-    'p_boot == 0, violating p_boot >= 1/B.',
-    strict=True,
-)
 def test_p_boot_floor_real_pipeline():
     """Invariant ``p_boot in [1/B, 1]`` on the REAL bootstrap output.
 
@@ -549,10 +540,6 @@ def test_invariant_row_count_conservation_every_drop_stage():
         )
 
 
-@pytest.mark.xfail(
-    reason='C1 -- p_boot has no 1/B floor; one-sided pairs fall below 1/B.',
-    strict=True,
-)
 def test_invariant_p_boot_within_bounds_real_pipeline():
     """p_boot in [1/B, 1] for all rows of the REAL bootstrap output.
 

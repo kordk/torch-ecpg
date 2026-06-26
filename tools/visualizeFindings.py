@@ -70,7 +70,10 @@ class Plotter:
         self.df = pd.concat(chunks, ignore_index=True)
 
         # Calculate -log10(p)
-        self.df['neg_log10_p'] = -np.log10(self.df[self.p_col].clip(lower=1e-300))
+        # p_boot is already floored at source (1/finite_count) in
+        # tecpg/bootstrap.py, so we do not re-floor here with a second,
+        # incompatible constant (avoids a double-floor with two definitions).
+        self.df['neg_log10_p'] = -np.log10(self.df[self.p_col])
 
         logger.info(f"Loaded and subsampled {len(self.df)} rows for plotting.")
 
