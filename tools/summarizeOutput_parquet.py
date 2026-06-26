@@ -25,6 +25,8 @@ def process_chunk(chunk, sample_prob, df):
         - region string mapping or None
         - top hits dataframe for regions or None
         - top 50 hits dataframe for ig analysis or None
+        - number of rows in the chunk before the FDR-universe NaN drop
+        - number of rows dropped (missing precise_mt_p / t) before the FDR pool
     """
     # Unique counts
     unique_gt = set(chunk['gt_id'].dropna().unique()) if 'gt_id' in chunk.columns else set()
@@ -40,6 +42,9 @@ def process_chunk(chunk, sample_prob, df):
 
     # Drop NaNs based on the primary column being used to compute p-values
     # This prevents length mismatch errors and mapping desyncs when building region arrays
+    # Track before/after counts so the dropped rows (which never enter the
+    # global BH-FDR pool) are observable in the run log (M5).
+    n_before_drop = len(chunk)
     if 'precise_mt_p' in chunk.columns:
         chunk = chunk.dropna(subset=['precise_mt_p'])
         p_values = chunk['precise_mt_p'].astype(np.float64).values
@@ -49,6 +54,8 @@ def process_chunk(chunk, sample_prob, df):
         chunk = chunk.dropna(subset=[t_col])
         t_stats = chunk[t_col].astype(np.float64).values
         p_values = stats.t.sf(np.abs(t_stats), np.float64(df)) * 2.0
+    n_after_drop = len(chunk)
+    n_dropped = n_before_drop - n_after_drop
 
     # Ensure values are within [0, 1] for histogram logic
     hist_counts, _ = np.histogram(p_values, bins=100, range=(0, 1))
@@ -93,7 +100,7 @@ def process_chunk(chunk, sample_prob, df):
         df_ig = pd.DataFrame(ig_top_cols)
         top_ig_df = df_ig.sort_values('p-value').head(50)
 
-    return unique_gt, unique_mt, row_count, hist_counts, p_values, region_codes, region_uniques, top_hits_df, top_ig_df
+    return unique_gt, unique_mt, row_count, hist_counts, p_values, region_codes, region_uniques, top_hits_df, top_ig_df, n_before_drop, n_dropped
 
 
 def main():
@@ -151,11 +158,35 @@ Outputs and Metrics Calculated:
         print("Error: --output-fdr-file specified but no FDR approach chosen. Please specify --calculate-fdr or --assign-fdr-passfail.")
         sys.exit(1)
 
+    # Fail closed on a missing/sentinel total_tests. This value is the BH-FDR
+    # denominator (fdr_est = p * total_tests / rank); a non-positive or absent
+    # value silently corrupts every estimate, so we reject it rather than
+    # computing against a default.
+    if args.total_tests is None or args.total_tests <= 0:
+        print(
+            f"Error: --total-tests must be a positive integer (got {args.total_tests}). "
+            "It is the FDR denominator and has no safe default."
+        )
+        sys.exit(1)
+
     print(f"Analyzing main file {main_file} and reservoir file {reservoir_file}...")
 
     # For Parquet, we can quickly get row count if metadata is intact, but we'll just process batches.
     parquet_file = pq.ParquetFile(main_file)
     total_rows = parquet_file.metadata.num_rows
+
+    # Enforce the top-N contract the FDR math depends on: the supplied parquet
+    # must be the top-N most-significant of total_tests, so total_tests cannot
+    # be smaller than the number of supplied rows. Otherwise fdr_est = p *
+    # total_tests / rank is computed against a denominator that is internally
+    # inconsistent with the input.
+    if args.total_tests < total_rows:
+        print(
+            f"Error: --total-tests ({args.total_tests}) is smaller than the number of "
+            f"rows in {main_file} ({total_rows}). The input parquet must be the top-N "
+            "most-significant subset of total_tests, so total_tests >= len(input) must hold."
+        )
+        sys.exit(1)
 
     # Check schema for fallback logging
     schema_cols = parquet_file.schema.names
@@ -216,15 +247,36 @@ Outputs and Metrics Calculated:
     global_uniques = []
     global_uniques_map = {} # map string -> global int code
 
-    for res in results:
+    # Track rows dropped (missing precise_mt_p / t) before the global BH-FDR
+    # pool, per chunk and in total (M5).
+    fdr_universe_before = 0
+    fdr_universe_after = 0
+    total_dropped_from_fdr = 0
+
+    for chunk_idx, res in enumerate(results):
         try:
-            gt_set, mt_set, count, hist, p_vals, codes, uniques, top_hits_df, top_ig_df = res.get()
+            gt_set, mt_set, count, hist, p_vals, codes, uniques, top_hits_df, top_ig_df, n_before_drop, n_dropped = res.get()
             final_gt.update(gt_set)
             final_mt.update(mt_set)
             total_pairs += count
             final_hist += hist
             if len(p_vals) > 0:
                 all_p_values.append(p_vals)
+
+            # Log rows dropped from the FDR universe for this chunk (M5).
+            n_after_drop = n_before_drop - n_dropped
+            fdr_universe_before += n_before_drop
+            fdr_universe_after += n_after_drop
+            total_dropped_from_fdr += n_dropped
+            if n_dropped == 0:
+                print(f"Chunk {chunk_idx}: no rows dropped from FDR universe ({n_before_drop} rows).")
+            else:
+                pct_remaining = round(n_after_drop / n_before_drop * 100, 4) if n_before_drop else 0.0
+                print(
+                    f"Chunk {chunk_idx}: dropped {n_dropped} rows missing precise_mt_p/t from "
+                    f"FDR universe (before: {n_before_drop}, after: {n_after_drop}, "
+                    f"{pct_remaining}% remaining)."
+                )
 
             if codes is not None and uniques is not None:
                 all_top_hits.append(top_hits_df)
@@ -247,6 +299,17 @@ Outputs and Metrics Calculated:
 
         except Exception as e:
             print(f"Error retrieving result from worker: {e}")
+
+    # Final total of rows dropped from the FDR universe across all chunks (M5).
+    if total_dropped_from_fdr == 0:
+        print(f"FDR universe: no rows dropped; all {fdr_universe_before} rows entered the BH pool.")
+    else:
+        pct_remaining = round(fdr_universe_after / fdr_universe_before * 100, 4) if fdr_universe_before else 0.0
+        print(
+            f"FDR universe: dropped {total_dropped_from_fdr} rows missing precise_mt_p/t in total "
+            f"(before: {fdr_universe_before}, after: {fdr_universe_after}, "
+            f"{pct_remaining}% entered the BH pool)."
+        )
 
     combined_region_codes = None
     if has_region and region_code_arrays:
@@ -331,6 +394,18 @@ Outputs and Metrics Calculated:
         sorted_p_values = combined_p_values[sorted_indices]
 
         total_tests = args.total_tests
+        # Top-N contract (the BH math at fdr_est = p * total_tests / rank
+        # assumes the supplied parquet is the top-N most-significant of
+        # total_tests): the number of p-values entering the pool cannot exceed
+        # total_tests. total_tests >= total_rows was already enforced above;
+        # re-assert against the realized pool so a desync fails loudly here.
+        if total_p_count > total_tests:
+            print(
+                f"Error: number of p-values in the FDR pool ({total_p_count}) exceeds "
+                f"--total-tests ({total_tests}). The input must be the top-N "
+                "most-significant subset of total_tests for the BH estimate to be valid."
+            )
+            sys.exit(1)
         ranks = np.arange(1, total_p_count + 1)
         bh_limits = (ranks / total_tests) * 0.05
         bh_limits_01 = (ranks / total_tests) * 0.01

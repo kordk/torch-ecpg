@@ -210,6 +210,12 @@ M_PCs = pd.read_csv('$DATA_DIR/M_PCs.csv', dtype={0: str})
 M_PCs.set_index(M_PCs.columns[0], inplace=True)
 C_final = pd.concat([C, G_PCs, M_PCs], axis=1)
 C_final.to_csv('$DATA_DIR/C.csv')
+# Record the shape the PCA merge actually produced so the next stage
+# (pipeline.sh) can validate that C.csv still carries exactly this many
+# samples and covariates before deriving DF = SAMPLES - COVARS - 2. A stray
+# trailing blank line or extra index column would otherwise silently shift DF.
+with open('$DATA_DIR/C.shape.meta', 'w') as fh:
+    fh.write('samples=%d\ncovars=%d\n' % (C_final.shape[0], C_final.shape[1]))
 "
 fi
 fi
