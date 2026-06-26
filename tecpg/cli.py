@@ -1204,9 +1204,17 @@ def mlr(
 
         from .bootstrap import tecpg_mlr_qr_bootstrap
 
+        # The merged bootstrap output is named `bootstrap_merged.<ext>` by
+        # default (matching the chunked path, README, pipelinePost.sh and the
+        # docs) so the whole post-processing pipeline keeps working. We only
+        # honor an explicit --output-file; the default 'out.csv' is treated as
+        # "unset" so we don't write a Parquet file misleadingly named .csv.
         output_file_path = data['output']
-        if chunking:
-            output_file_path = os.path.join(output_path, 'bootstrap_merged.parquet')
+        if output_file_path == 'out.csv':
+            ext = 'parquet' if output_format == 'parquet' else 'csv'
+            output_file_path = os.path.join(
+                output_path, f'bootstrap_merged.{ext}'
+            )
         elif output_path and not output_file_path.startswith('/'):
             output_file_path = os.path.join(output_path, output_file_path)
 

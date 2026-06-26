@@ -327,3 +327,84 @@ def test_bootstrap_cli_forwards_ig_kwargs(tmp_path):
     assert matched['mt_ig'].notna().all()
     for covar in C.columns:
         assert matched[f'{covar}_ig'].notna().all()
+
+
+# ---------------------------------------------------------------------------
+# Regression test: the NON-chunked qr_bootstrap CLI path must default to
+# `bootstrap_merged.parquet` instead of silently writing a Parquet file under
+# the default `out.csv` name. The user supplies no --output-file here.
+# ---------------------------------------------------------------------------
+def test_bootstrap_cli_default_output_name(tmp_path):
+    import numpy as np
+    from click.testing import CliRunner
+    from tecpg.cli import cli
+
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    n_samples = 20
+    samples = [f'sample_{i}' for i in range(n_samples)]
+    mt_ids = ['cg001', 'cg002', 'cg003']
+    gt_ids = ['ENSG001', 'ENSG002', 'ENSG003']
+
+    input_dir = tmp_path / 'data'
+    output_dir = tmp_path / 'output'
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    M = pd.DataFrame(np.random.randn(3, n_samples), index=mt_ids, columns=samples)
+    G = pd.DataFrame(np.random.randn(3, n_samples), index=gt_ids, columns=samples)
+    C = pd.DataFrame(
+        np.random.randn(n_samples, 2), index=samples, columns=['age', 'sex']
+    )
+
+    M.to_csv(input_dir / 'M.csv')
+    G.to_csv(input_dir / 'G.csv')
+    C.to_csv(input_dir / 'C.csv')
+
+    pairs_file = tmp_path / 'pairs.csv'
+    pd.DataFrame({'mt_id': mt_ids, 'gt_id': gt_ids}).to_csv(pairs_file, index=False)
+
+    master_parquet = tmp_path / 'master.parquet'
+    pd.DataFrame(
+        {'mt_id': mt_ids, 'gt_id': gt_ids, 'other_col': [1, 2, 3]}
+    ).to_parquet(master_parquet)
+
+    runner = CliRunner()
+    # Force parquet output; deliberately omit --output-file so the default
+    # 'out.csv' path is exercised.
+    result = runner.invoke(
+        cli,
+        [
+            '--root-path', str(tmp_path),
+            '--input-dir', 'data',
+            '--output-dir', 'output',
+            '--cpu-threads', '1',
+            '--host-profile', 'minimum',
+            '--no-log-file',
+            'run', 'mlr',
+            '--mlr-method', 'qr_bootstrap',
+            '--output-format', 'parquet',
+            '--pairs-file', str(pairs_file),
+            '--master-parquet', str(master_parquet),
+            '--bootstrap-iterations', '5',
+            '--bootstrap-batch-size', '3',
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+
+    # Regression: must be written as bootstrap_merged.parquet, NOT out.csv.
+    expected = output_dir / 'bootstrap_merged.parquet'
+    assert expected.exists(), f'Expected bootstrap output at {expected}'
+    assert not (output_dir / 'out.csv').exists(), (
+        'bootstrap wrote a Parquet file under the misleading default out.csv name'
+    )
+
+    result_df = pd.read_parquet(expected)
+    for col in [
+        'mt_est_boot_mean', 'mt_est_boot_std',
+        'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples',
+    ]:
+        assert col in result_df.columns, f'missing core column {col}'
