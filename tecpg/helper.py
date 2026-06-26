@@ -192,8 +192,18 @@ def trim_dataframes(
     indices = [set(df.index) for df in dataframes]
     shared = indices[0].intersection(*indices[1:])
 
-    for df, index in zip(dataframes, indices):
-        df.drop(index - shared, inplace=True, **drop_kwargs)
+    for position, (df, index) in enumerate(zip(dataframes, indices)):
+        before = len(df.index)
+        dropped_index = index - shared
+        df.drop(dropped_index, inplace=True, **drop_kwargs)
+        after = len(df.index)
+        if before != after:
+            logger.info(
+                'Drop site helper.trim_dataframes[df {0}]: dropped loci/rows '
+                'not shared across all aligned dataframes: {1} -> {2} '
+                '({3} dropped)',
+                position, before, after, before - after,
+            )
 
 
 def default_region_parameter(

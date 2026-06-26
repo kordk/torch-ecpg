@@ -3,6 +3,7 @@ import math
 import time
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 
@@ -26,12 +27,26 @@ def tecpg_mlr_qr_bootstrap(
     compute_ig_deep: bool = False,
     ig_baseline: str = 'mean',
     ig_covariates_filter: Optional[list] | str = None,
+    seed: Optional[int] = None,
     *,
     logger: Logger = Logger(),
 ) -> None:
     # Set up
     device = get_device(**logger)
     dtype = DTYPE
+
+    # Seed the bootstrap RNG so a run is reproducible from its recorded seed.
+    # The only randomness in this path is the resample draw below
+    # (``np.random.choice``); there is no torch resampling here. We still seed
+    # torch for defensiveness so any future/incidental torch randomness on this
+    # path is covered. If no seed is supplied, generate one, use it, and record
+    # it so the run is never implicitly unseeded.
+    if seed is None:
+        seed = int(np.random.SeedSequence().generate_state(1)[0])
+    seed = int(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    logger.info(f"Bootstrap RNG seeded with seed={seed} (recorded with outputs).")
 
     logger.info(f"Loading bootstrap pairs from {pairs_file}...")
     try:
@@ -386,6 +401,11 @@ def tecpg_mlr_qr_bootstrap(
 
     merged_df = master_df.merge(res_df, on=['mt_id', 'gt_id'], how='left')
 
+    # Record the seed actually used alongside every output row so a run is
+    # reproducible from its artifact. The seed is a run-level constant, so it
+    # is set after the merge (applies to all rows, matched or not).
+    merged_df['seed'] = seed
+
     logger.info(f"Saving merged results to {output_file} ...")
 
     # Ensure output dir exists
@@ -395,9 +415,15 @@ def tecpg_mlr_qr_bootstrap(
 
     # Keep the on-disk format in sync with the requested file name: a
     # `.csv` name gets a CSV writer, everything else is written as Parquet.
+    # For Parquet we also stamp the seed into the file-level schema metadata
+    # so it round-trips even if the column were later dropped.
     if os.path.splitext(output_file)[1].lower() == '.csv':
         merged_df.to_csv(output_file, index=False)
     else:
-        merged_df.to_parquet(output_file, engine='pyarrow', compression='snappy')
+        table = pa.Table.from_pandas(merged_df)
+        existing_meta = table.schema.metadata or {}
+        new_meta = {**existing_meta, b'tecpg_bootstrap_seed': str(seed).encode()}
+        table = table.replace_schema_metadata(new_meta)
+        pq.write_table(table, output_file, compression='snappy')
 
     logger.info("Done.")

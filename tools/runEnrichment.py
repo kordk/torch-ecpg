@@ -51,7 +51,14 @@ def get_illumina_coordinates(unmapped_ids):
                 udf = pd.read_csv(ucsc_file, sep='\t', header=None, names=UCSC_COLNAMES)
             needed = ['chrom', 'chromStart', 'chromEnd', 'name']
             if all(c in udf.columns for c in needed):
-                udf = udf[needed].dropna(subset=['name'])
+                udf = udf[needed]
+                _udf_before = len(udf)
+                udf = udf.dropna(subset=['name'])
+                logger.info(
+                    f"Drop site runEnrichment.ucsc_recovery[name]: dropped UCSC "
+                    f"rows with missing 'name': {_udf_before} -> {len(udf)} "
+                    f"({_udf_before - len(udf)} dropped)"
+                )
                 udf = udf[udf['name'].isin(unmapped_ids)]
                 for _, row in udf.iterrows():
                     coords.append({'Chromosome': row['chrom'], 'Start': int(row['chromStart']), 'End': int(row['chromEnd']), 'name': row['name']})
@@ -121,7 +128,14 @@ def clean_and_translate_gene_ids(gene_ids):
             try:
                 reann_df = pd.read_csv(reann_file, sep='\t')
                 if 'X.PROBE_ID' in reann_df.columns and 'Gene_symbol' in reann_df.columns:
+                    _reann_before = len(reann_df)
                     reann_df = reann_df.dropna(subset=['Gene_symbol'])
+                    logger.info(
+                        f"Drop site runEnrichment.reannotator[Gene_symbol]: "
+                        f"dropped probes with missing 'Gene_symbol': "
+                        f"{_reann_before} -> {len(reann_df)} "
+                        f"({_reann_before - len(reann_df)} dropped)"
+                    )
                     mapping = dict(zip(reann_df['X.PROBE_ID'], reann_df['Gene_symbol']))
                     new_unmapped = []
                     for g in still_unmapped:
@@ -457,13 +471,29 @@ def main():
                         if 'region' in sig_df.columns:
                             for region, group in sig_df.groupby('region'):
                                 if 'gt_id' in sig_df.columns:
-                                    for _, row in group.dropna(subset=['gt_id']).iterrows():
+                                    _grp_gene = group.dropna(subset=['gt_id'])
+                                    logger.info(
+                                        f"Drop site runEnrichment.fdr_genes[gt_id] "
+                                        f"region={region}: dropped significant rows "
+                                        f"with missing 'gt_id': {len(group)} -> "
+                                        f"{len(_grp_gene)} "
+                                        f"({len(group) - len(_grp_gene)} dropped)"
+                                    )
+                                    for _, row in _grp_gene.iterrows():
                                         gene = row['gt_id']
                                         pval = row.get('precise_mt_p', row.get('mt_p', 1.0))
                                         if gene not in fdr_genes_by_region[region] or pval < fdr_genes_by_region[region][gene]:
                                             fdr_genes_by_region[region][gene] = pval
                                 if args.encode_enrichment and 'mt_chrom' in sig_df.columns and 'mt_chromStart' in sig_df.columns:
-                                    for _, row in group.dropna(subset=['mt_chrom', 'mt_chromStart']).iterrows():
+                                    _grp_cpg = group.dropna(subset=['mt_chrom', 'mt_chromStart'])
+                                    logger.info(
+                                        f"Drop site runEnrichment.fdr_cpgs[mt_chrom,"
+                                        f"mt_chromStart] region={region}: dropped "
+                                        f"significant rows with missing CpG coords: "
+                                        f"{len(group)} -> {len(_grp_cpg)} "
+                                        f"({len(group) - len(_grp_cpg)} dropped)"
+                                    )
+                                    for _, row in _grp_cpg.iterrows():
                                         chrom = row['mt_chrom']
                                         start = int(row['mt_chromStart'])
                                         fdr_significant_cpgs.add((chrom, start))
@@ -499,7 +529,14 @@ def main():
                     top_df = df.head(top_n)
                     if 'region' in top_df.columns:
                         for region, group in top_df.groupby('region'):
-                            for _, row in group.dropna(subset=['gt_id']).iterrows():
+                            _grp_ig = group.dropna(subset=['gt_id'])
+                            logger.info(
+                                f"Drop site runEnrichment.ig_genes[gt_id] "
+                                f"region={region}: dropped top-ranked rows with "
+                                f"missing 'gt_id': {len(group)} -> {len(_grp_ig)} "
+                                f"({len(group) - len(_grp_ig)} dropped)"
+                            )
+                            for _, row in _grp_ig.iterrows():
                                 gene = row['gt_id']
                                 frac = row['mt_ig_frac']
                                 if gene not in ig_genes_by_region[region] or frac > ig_genes_by_region[region][gene]:

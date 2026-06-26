@@ -866,7 +866,8 @@ def corr(
     show_default=True,
     default=42,
     type=int,
-    help='Seed for random subsampling',
+    help='Seed for random subsampling and the qr_bootstrap resample draw '
+    '(recorded with bootstrap outputs)',
 )
 @click.option(
     '--permute-label-test',
@@ -1233,6 +1234,7 @@ def mlr(
             compute_ig_deep=compute_ig_deep,
             ig_baseline=ig_baseline,
             ig_covariates_filter=ig_covariates_filter,
+            seed=seed,
             logger=logger
         )
         return

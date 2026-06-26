@@ -41,10 +41,16 @@ def main():
     M_raw.set_index(M_raw.columns[0], inplace=True)
 
     # Drop loci with missing data
+    _resid_before = M_raw.shape
     if args.transpose:
         M_raw = M_raw.dropna(axis=1)
     else:
         M_raw = M_raw.dropna(axis=0)
+    logger.info(
+        f"Drop site residualize_pca.dropna_missing: dropped loci with missing "
+        f"data (axis={'columns' if args.transpose else 'rows'}): "
+        f"{_resid_before} -> {M_raw.shape}"
+    )
 
     if not args.transpose:
         M = M_raw.transpose()

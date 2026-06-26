@@ -58,7 +58,13 @@ def main():
     cpg_col = 'CpG.probe' if 'CpG.probe' in df_kennedy.columns else df_kennedy.columns[0]
     query_col = 'exp.Probe' if 'exp.Probe' in df_kennedy.columns else ('annot.gene' if 'annot.gene' in df_kennedy.columns else df_kennedy.columns[1])
 
+    _kennedy_before = len(df_kennedy)
     df_kennedy = df_kennedy.dropna(subset=[query_col, cpg_col])
+    logging.info(
+        f"Drop site benchmark_kennedy.dropna_keys[{query_col},{cpg_col}]: dropped "
+        f"Kennedy rows with missing key columns: {_kennedy_before} -> "
+        f"{len(df_kennedy)} ({_kennedy_before - len(df_kennedy)} dropped)"
+    )
 
     # Log a sample of the key columns before merging
     if 'mt_id' in df_tecpg.columns and 'gt_id' in df_tecpg.columns:
@@ -113,7 +119,17 @@ def main():
 
     # Filter out NaNs if any
     valid_beta = df_merged[['mt_est', beta_col]].dropna()
+    logging.info(
+        f"Drop site benchmark_kennedy.valid_beta[mt_est,{beta_col}]: dropped "
+        f"merged pairs with missing effect-size values: {len(df_merged)} -> "
+        f"{len(valid_beta)} ({len(df_merged) - len(valid_beta)} dropped)"
+    )
     valid_t = df_merged[['mt_t', tstat_col]].dropna()
+    logging.info(
+        f"Drop site benchmark_kennedy.valid_t[mt_t,{tstat_col}]: dropped "
+        f"merged pairs with missing test-statistic values: {len(df_merged)} -> "
+        f"{len(valid_t)} ({len(df_merged) - len(valid_t)} dropped)"
+    )
 
     pearson_r_beta, _ = stats.pearsonr(valid_beta['mt_est'], valid_beta[beta_col])
     spearman_r_beta, _ = stats.spearmanr(valid_beta['mt_est'], valid_beta[beta_col])

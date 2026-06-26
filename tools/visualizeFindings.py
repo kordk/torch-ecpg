@@ -266,10 +266,16 @@ def plot_comparative_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str,
     C_aligned = C.loc[common_subjects]
 
     # Drop NAs
+    _vf_before = len(meth_vals)
     valid_mask = ~meth_vals.isna() & ~gene_vals.isna() & ~C_aligned.isna().any(axis=1)
     meth_vals = meth_vals[valid_mask]
     gene_vals = gene_vals[valid_mask]
     C_aligned = C_aligned[valid_mask]
+    logger.info(
+        "Drop site visualizeFindings.drop_nas[meth/gene/covar]: dropped "
+        "subjects with missing methylation, gene, or covariate values: "
+        f"{_vf_before} -> {len(meth_vals)} ({_vf_before - len(meth_vals)} dropped)"
+    )
 
     if len(meth_vals) == 0:
         logger.error("No valid data points after dropping NAs.")
@@ -373,10 +379,16 @@ def plot_adjusted_eqtm(cpg_id: str, gene_id: str, row: pd.Series, p_col: str, pr
     C_aligned = C.loc[common_subjects]
 
     # Drop NAs
+    _vf_before = len(meth_vals)
     valid_mask = ~meth_vals.isna() & ~gene_vals.isna() & ~C_aligned.isna().any(axis=1)
     meth_vals = meth_vals[valid_mask]
     gene_vals = gene_vals[valid_mask]
     C_aligned = C_aligned[valid_mask]
+    logger.info(
+        "Drop site visualizeFindings.drop_nas[meth/gene/covar]: dropped "
+        "subjects with missing methylation, gene, or covariate values: "
+        f"{_vf_before} -> {len(meth_vals)} ({_vf_before - len(meth_vals)} dropped)"
+    )
 
     if len(meth_vals) == 0:
         logger.error("No valid data points after dropping NAs.")

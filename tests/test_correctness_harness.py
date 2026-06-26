@@ -41,10 +41,10 @@ Audit items referenced:
 * C2 -- BH-FDR extraction assumes the supplied parquet holds the top-most
   hits for the given ``--total-tests``; isolated here by fixing
   ``total_tests == len(p)`` so only the BH *math* is exercised.
-* C3 -- the bootstrap resample draw is unseeded; the bootstrap-based tests
-  here seed ``numpy`` locally (independent of CLI plumbing) so they are
-  valid today, and carry a ``TODO`` to switch to a CLI ``--seed`` once C3
-  lands.
+* C3 -- the bootstrap resample draw is seeded through the production
+  ``seed`` parameter (the path the CLI ``--seed`` plumbs); the
+  bootstrap-based tests here pass that seed directly so they are
+  deterministic without touching global numpy state.
 * M4/M5/M6 -- per-drop-stage count logging; the row-count conservation
   invariants below assert what that logging will make observable.
 """
@@ -300,10 +300,12 @@ def test_p_boot_floor_oracle_local_resample():
 
     Encodes the INTENDED floor (``1/finite_count``) as the oracle on small,
     locally-seeded synthetic resample arrays -- one strictly one-sided and
-    one degenerate (some non-finite resamples). xfail until C1 lands, then
-    it passes.
+    one degenerate (some non-finite resamples).
 
-    # TODO: switch to CLI --seed once C3 lands (resample draw is unseeded).
+    This oracle exercises the p_boot math directly on synthetic arrays and
+    never invokes the bootstrap resample draw, so it is independent of the
+    C3 ``--seed`` plumbing; its determinism comes from the local
+    ``HARNESS_SEED`` rng.
     """
     rng = np.random.default_rng(HARNESS_SEED)
 
@@ -331,10 +333,9 @@ def test_p_boot_floor_oracle_local_resample():
 def _run_real_bootstrap(M, G, C, pairs, iterations, np_seed):
     """Run the production bootstrap on tiny data and return the result frame.
 
-    The resample draw inside the bootstrap is unseeded today (C3), so we
-    seed numpy locally right before the call to make it deterministic.
-
-    # TODO: switch to CLI --seed once C3 lands.
+    The bootstrap resample draw is seeded through the production ``seed``
+    parameter (the path the CLI ``--seed`` plumbs as of C3), so the run is
+    deterministic without touching global numpy state.
     """
     from tecpg.bootstrap import tecpg_mlr_qr_bootstrap
 
@@ -346,10 +347,10 @@ def _run_real_bootstrap(M, G, C, pairs, iterations, np_seed):
     pairs_df.to_csv(pairs_file, index=False)
     pairs_df.to_parquet(master_file)
 
-    np.random.seed(np_seed)  # local determinism, independent of CLI plumbing
     tecpg_mlr_qr_bootstrap(
         M, G, C, pairs_file, master_file, out_file,
-        iterations=iterations, batch_size=8, logger=_quiet_logger(),
+        iterations=iterations, batch_size=8, seed=np_seed,
+        logger=_quiet_logger(),
     )
     return pd.read_parquet(out_file)
 
@@ -543,9 +544,8 @@ def test_invariant_row_count_conservation_every_drop_stage():
 def test_invariant_p_boot_within_bounds_real_pipeline():
     """p_boot in [1/B, 1] for all rows of the REAL bootstrap output.
 
-    Auto-flips from xfail to pass once C1 lands.
-
-    # TODO: switch to CLI --seed once C3 lands.
+    The bootstrap is seeded through the production ``seed`` parameter (the
+    CLI ``--seed`` path landed in C3), so the run is deterministic.
     """
     iterations = 200
     M, G, C, pairs = _one_sided_bootstrap_fixture()
