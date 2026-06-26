@@ -1,0 +1,32 @@
+{
+  "drop_stages": [
+    {
+      "dropped": 284,
+      "in": 300,
+      "out": 16,
+      "stage": "p_threshold_filter"
+    },
+    {
+      "dropped": 300,
+      "in": 300,
+      "out": 0,
+      "stage": "fdr_bh_filter"
+    }
+  ],
+  "dummy_dims": {
+    "gene": 15,
+    "meth": 20,
+    "samples": 80
+  },
+  "fdr_alpha": 0.05,
+  "fdr_total_tests": 300,
+  "harness_seed": 1234,
+  "n_cis": 11,
+  "n_fdr_sig": 0,
+  "n_pairs_in": 300,
+  "n_trans": 289,
+  "network_edges": 0,
+  "p_max": 0.995772,
+  "p_min": 0.003706,
+  "p_threshold": 0.05
+}
