@@ -14,6 +14,11 @@ These tests validate the mathematical correctness of `tecpg`'s regression implem
   - **Purpose:** Compares the two implementation backends of `tecpg` (`regression_full` and `tecpg_mlr_qr`) to ensure both methods produce consistent results across different chunking and region filtration scenarios.
   - **Output:** Prints a detailed comparison summary of max/mean absolute and relative differences, and correlation.
   - **How to run:** `python test_mlr_comparison.py`
+- **`test_correctness_harness.py`**
+  - **Purpose:** Correctness test harness that encodes *correct* behavior independently of current output, as a precondition for later statistics fixes. Contains oracle/differential tests (batched QR regression vs. plain OLS; BH-FDR vs. `statsmodels`; `p_boot` vs. a hand-rolled empirical computation), a committed structural fingerprint of the dummy `all` pipeline, and invariant/property tests. Tests tied to a pending audit fix are marked `xfail` with the audit item (e.g. `C1` for the missing `p_boot` `1/B` floor) so the fix flips them from `xfail` to `pass`; the fingerprint flags unintended structural drift.
+  - **Reference artifact:** `fingerprint_all_pipeline.json` is the *only* committed reference (no stored output parquets, no network access). Regenerating it re-blesses structure and requires a reviewed reason.
+  - **How to run:** `pytest test_correctness_harness.py`
+  - **Regenerate fingerprint:** `python tests/test_correctness_harness.py --regenerate-fingerprint`
 - **`test_recalculate_pvalues.py`**
   - **Purpose:** Verifies that the internal helper script for recalculating p-values correctly applies the Student's t-distribution survival function.
   - **Output:** Test pass/fail output from `unittest`.

@@ -9,17 +9,23 @@ def randrange(
     start: float,
     end: float,
     integer: bool = False,
+    rng: random.Random = random,
 ) -> Callable[[], int | float]:
     """
     Returns a callable that generates a random float between start
     and end or an int if integer is True (default False).
+
+    The rng parameter selects the random source. It defaults to the
+    module-level ``random`` for backwards compatibility, but
+    ``generate_data`` threads a seeded ``random.Random`` instance through
+    here so that dummy data generation is byte-reproducible.
     """
 
     def func(*_) -> int | float:
         if integer:
-            return math.floor(random.random() * (end + 1 - start) + start)
+            return math.floor(rng.random() * (end + 1 - start) + start)
         else:
-            return random.random() * (end - start) + start
+            return rng.random() * (end - start) + start
 
     return func
 
@@ -85,6 +91,7 @@ def generate_data(
     m_rows: int,
     g_rows: int,
     annotation: bool = False,
+    seed: Optional[int] = None,
 ) -> (
     Tuple[
         pandas.DataFrame,
@@ -107,17 +114,25 @@ def generate_data(
     expression dataframes.
 
     Return order: M, G, C, M_annot, G_annot
+
+    When ``seed`` is not None, all random draws are taken from a private
+    ``random.Random(seed)`` instance, making the generated dummy data
+    byte-reproducible without mutating global RNG state. The distributions
+    are unchanged; only their source of randomness is made deterministic.
     """
+    rng = random.Random(seed) if seed is not None else random
     person_codes = generate_codes(sample_size, prefix='s')
     m_row_codes = generate_codes(m_rows, 'cg')
     g_row_codes = generate_codes(g_rows, 'ILMN_')
 
-    M = generate_dataframe(person_codes, m_row_codes, randrange(0, 1))
-    G = generate_dataframe(person_codes, g_row_codes, randrange(-1, 100))
+    M = generate_dataframe(person_codes, m_row_codes, randrange(0, 1, rng=rng))
+    G = generate_dataframe(
+        person_codes, g_row_codes, randrange(-1, 100, rng=rng)
+    )
 
     covariate_template = {
-        'age': randrange(18, 64),
-        'sex': randrange(0, 1, True),
+        'age': randrange(18, 64, rng=rng),
+        'sex': randrange(0, 1, True, rng=rng),
     }
     C = generate_from_template(person_codes, covariate_template)
 
@@ -126,12 +141,12 @@ def generate_data(
 
     def annotation_template(codes: List[str]) -> Dict[str, Any]:
         return {
-            'chrom': randrange(1, 23, True),
-            'chromStart': randrange(1, 150_000_000, True),
-            'chromEnd': randrange(1, 150_000_000, True),
+            'chrom': randrange(1, 23, True, rng=rng),
+            'chromStart': randrange(1, 150_000_000, True, rng=rng),
+            'chromEnd': randrange(1, 150_000_000, True, rng=rng),
             'name': lambda x: codes[x],
             'score': lambda _: 0,
-            'strand': lambda _: '+' if round(random.random()) else '-',
+            'strand': lambda _: '+' if round(rng.random()) else '-',
         }
 
     M_annot = generate_from_template(

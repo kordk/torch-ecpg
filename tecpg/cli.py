@@ -1462,6 +1462,16 @@ def _data() -> None:
     default=False,
     type=bool,
 )
+@click.option(
+    '--seed',
+    type=int,
+    default=None,
+    show_default=True,
+    help=(
+        'Seed for reproducible dummy data generation. When omitted the'
+        ' global RNG is used and output is non-deterministic.'
+    ),
+)
 @click.pass_context
 def dummy(
     ctx: click.Context,
@@ -1469,6 +1479,7 @@ def dummy(
     meth_rows: int,
     gene_rows: int,
     no_annotation: bool,
+    seed: Optional[int],
 ) -> None:
     """
     Generates dummy data.
@@ -1480,7 +1491,7 @@ def dummy(
     annotation = not no_annotation
 
     dataframes = generate_data(
-        samples, meth_rows, gene_rows, annotation=annotation
+        samples, meth_rows, gene_rows, annotation=annotation, seed=seed
     )
     file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
     data_path = os.path.join(data['root_path'], data['input_dir'])
