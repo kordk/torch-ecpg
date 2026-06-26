@@ -200,11 +200,15 @@ gpl_ht12_v3 = GEOparse.get_GEO("GPL6947", destdir=dest_dir)
 # ---------------------------------------------------------------------------
  
 print("Processing Methylation Data...")
+_epic_before = len(gpl_epic.table)
 epic_df = gpl_epic.table[['ID', 'CHR', 'MAPINFO']].dropna(subset=['ID'])
+print(f"Drop site generate_annotations.meth_epic[ID]: dropped EPIC probes with missing 'ID': {_epic_before} -> {len(epic_df)} ({_epic_before - len(epic_df)} dropped)")
 epic_df['CHR'] = epic_df['CHR'].astype(str)
 epic_df['MAPINFO'] = pd.to_numeric(epic_df['MAPINFO'], errors='coerce')
  
+_k450_before = len(gpl_450k.table)
 k450_df = gpl_450k.table[['ID', 'CHR', 'MAPINFO']].dropna(subset=['ID'])
+print(f"Drop site generate_annotations.meth_450k[ID]: dropped 450k probes with missing 'ID': {_k450_before} -> {len(k450_df)} ({_k450_before - len(k450_df)} dropped)")
 k450_df['CHR'] = k450_df['CHR'].astype(str)
 k450_df['MAPINFO'] = pd.to_numeric(k450_df['MAPINFO'], errors='coerce')
  
@@ -262,8 +266,12 @@ write_bed6(df_meth_hg38, "demo/annoEPIC_comprehensive.hg38.bed6")
 # ---------------------------------------------------------------------------
  
 print("Processing Gene Expression Data...")
+_ht12v4_before = len(gpl_ht12_v4.table)
 ht12_v4_df = gpl_ht12_v4.table[['ID', 'Chromosome', 'Probe_Coordinates', 'Probe_Chr_Orientation']].dropna(subset=['ID'])
+print(f"Drop site generate_annotations.ge_ht12v4[ID]: dropped HT-12 V4 probes with missing 'ID': {_ht12v4_before} -> {len(ht12_v4_df)} ({_ht12v4_before - len(ht12_v4_df)} dropped)")
+_ht12v3_before = len(gpl_ht12_v3.table)
 ht12_v3_df = gpl_ht12_v3.table[['ID', 'Chromosome', 'Probe_Coordinates', 'Probe_Chr_Orientation']].dropna(subset=['ID'])
+print(f"Drop site generate_annotations.ge_ht12v3[ID]: dropped HT-12 V3 probes with missing 'ID': {_ht12v3_before} -> {len(ht12_v3_df)} ({_ht12v3_before - len(ht12_v3_df)} dropped)")
  
 ge_df = pd.concat([ht12_v4_df, ht12_v3_df]).drop_duplicates(subset=['ID'])
  
@@ -331,7 +339,13 @@ def load_ucsc_wg6(path):
         )
         return {}
  
+    _udf_before = len(udf)
     udf = udf[needed].dropna(subset=['name'])
+    logging.info(
+        f"Drop site generate_annotations.ucsc_wg6[name]: dropped UCSC WG-6 rows "
+        f"with missing 'name': {_udf_before} -> {len(udf)} "
+        f"({_udf_before - len(udf)} dropped)"
+    )
     # One row per probe ID (single best alignment); drop multi-mapping dupes.
     udf = udf.drop_duplicates(subset=['name'], keep='first')
  

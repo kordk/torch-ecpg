@@ -198,17 +198,31 @@ def _tecpg_mlr_qr_inner(
     # Prepare annotation tensors if region filtration is used
     if region != 'all':
         logger.info('Initializing region filtration')
+        G_loci_before = len(G.index)
         G_annot = (
             G_annot.drop(columns=['chromEnd', 'score'])
             .reindex(G.index)
             .replace({'X': -1, 'Y': -2, '+': 1, '-': -1})
             .dropna()
         )
+        logger.info(
+            'Drop site processing.region_filtration[G_annot]: dropped gene '
+            'expression loci with missing/unmappable annotation '
+            '(reindex + dropna): {0} -> {1} ({2} dropped)',
+            G_loci_before, len(G_annot), G_loci_before - len(G_annot),
+        )
+        M_loci_before = len(M.index)
         M_annot = (
             M_annot.drop(columns=['chromEnd', 'score', 'strand'])
             .reindex(M.index)
             .replace({'X': -1, 'Y': -2})
             .dropna()
+        )
+        logger.info(
+            'Drop site processing.region_filtration[M_annot]: dropped '
+            'methylation loci with missing/unmappable annotation '
+            '(reindex + dropna): {0} -> {1} ({2} dropped)',
+            M_loci_before, len(M_annot), M_loci_before - len(M_annot),
         )
 
         trim_dataframes([G_annot, G], **logger)

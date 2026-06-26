@@ -866,7 +866,8 @@ def corr(
     show_default=True,
     default=42,
     type=int,
-    help='Seed for random subsampling',
+    help='Seed for random subsampling and the qr_bootstrap resample draw '
+    '(recorded with bootstrap outputs)',
 )
 @click.option(
     '--permute-label-test',
