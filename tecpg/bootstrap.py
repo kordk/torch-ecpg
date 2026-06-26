@@ -253,19 +253,19 @@ def tecpg_mlr_qr_bootstrap(
                 for b_idx in range(B):
                     ig_scores.append(ig_analytical[b_idx].cpu().numpy())
 
-        logger.info(
+        logger.debug(
             f"Batch tensor shapes - M_boot: {M_boot.shape}, G_boot: {G_boot.shape}, "
             f"X_flat: {X_flat.shape}"
         )
         # Calculate size in GB for X_flat
         x_flat_gb = X_flat.nelement() * X_flat.element_size() / (1024 ** 3)
-        logger.info(f"Estimated size of X_flat: {x_flat_gb:.2f} GB")
+        logger.debug(f"Estimated size of X_flat: {x_flat_gb:.2f} GB")
 
         # Memory snapshot
         if torch.cuda.is_available():
             alloc_mem = torch.cuda.memory_allocated() / (1024 ** 3)
             max_alloc_mem = torch.cuda.max_memory_allocated() / (1024 ** 3)
-            logger.info(f"GPU memory before qr - Allocated: {alloc_mem:.2f} GB, Max Allocated: {max_alloc_mem:.2f} GB")
+            logger.debug(f"GPU memory before qr - Allocated: {alloc_mem:.2f} GB, Max Allocated: {max_alloc_mem:.2f} GB")
 
         # Solve
         Q, R = torch.linalg.qr(X_flat, mode='reduced')
