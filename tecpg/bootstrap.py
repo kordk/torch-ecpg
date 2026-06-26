@@ -387,7 +387,7 @@ def tecpg_mlr_qr_bootstrap(
 
     # Keep the on-disk format in sync with the requested file name: a
     # `.csv` name gets a CSV writer, everything else is written as Parquet.
-    if output_file.lower().endswith('.csv'):
+    if os.path.splitext(output_file)[1].lower() == '.csv':
         merged_df.to_csv(output_file, index=False)
     else:
         merged_df.to_parquet(output_file, engine='pyarrow', compression='snappy')
