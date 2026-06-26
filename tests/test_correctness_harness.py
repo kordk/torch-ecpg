@@ -80,7 +80,6 @@ DUMMY_GENE = 15
 # total_tests / alpha used for the fingerprint's FDR aggregate. total_tests
 # equals the full pair count (the honest "all tests performed" analog for a
 # tiny dummy); the BH-vs-statsmodels oracle below uses its own fixed vector.
-FINGERPRINT_TOTAL_TESTS = DUMMY_SAMPLES  # placeholder, overwritten below
 FINGERPRINT_TOTAL_TESTS = DUMMY_METH * DUMMY_GENE  # == n_pairs == 300
 FINGERPRINT_ALPHA = 0.05
 P_THRESHOLD = 0.05
