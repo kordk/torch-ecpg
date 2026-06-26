@@ -1233,6 +1233,7 @@ def mlr(
             compute_ig_deep=compute_ig_deep,
             ig_baseline=ig_baseline,
             ig_covariates_filter=ig_covariates_filter,
+            seed=seed,
             logger=logger
         )
         return
