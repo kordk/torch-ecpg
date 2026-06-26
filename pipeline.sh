@@ -172,6 +172,11 @@ if [ -s "$DATA_DIR/C.csv" ]; then
     if [ -f "$SHAPE_META" ]; then
         EXP_SAMPLES=$(grep -o 'samples=[0-9]*' "$SHAPE_META" | cut -d= -f2)
         EXP_COVARS=$(grep -o 'covars=[0-9]*' "$SHAPE_META" | cut -d= -f2)
+        if [ -z "$EXP_SAMPLES" ] || [ -z "$EXP_COVARS" ]; then
+            log "Error: malformed $SHAPE_META (could not read expected samples/covars from the PCA merge)."
+            log "Re-run pipelinePre.sh to regenerate C.csv and its shape metadata."
+            exit 1
+        fi
         if [ "$SAMPLES" != "$EXP_SAMPLES" ]; then
             log "Error: sample count mismatch in $DATA_DIR/C.csv. Expected $EXP_SAMPLES (from PCA merge) but observed $SAMPLES."
             log "C.csv may have a stray trailing blank line or have been regenerated inconsistently. Refusing to derive DF."
