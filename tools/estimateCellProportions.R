@@ -1,28 +1,148 @@
 #!/usr/bin/env Rscript
 
-args <- commandArgs(trailingOnly=TRUE)
-if (length(args) < 3 || length(args) > 4) {
-  stop("Usage: Rscript estimateCellProportions.R <methylation_file.csv> <covariates_file.csv> <output_file.csv> [cohort_name]")
+# estimateCellProportions.R
+#
+# Estimates blood cell-type proportions with EpiDISH (RPC) and appends them to
+# the covariate matrix.
+#
+# IMPORTANT (compositional fix): EpiDISH RPC returns fractions that sum to ~1.0
+# across cell types per sample. A set of predictors that sums to a constant is
+# exactly collinear with the model intercept, making the regression design
+# rank-deficient. Downstream, that smears one shared coefficient across the
+# cell-type columns and makes their individual coefficients / IG attributions
+# uninterpretable. To break the closure, this script drops one reference cell
+# type before appending the proportions to the covariates, and (by default)
+# applies a rank-based inverse-normal transform (INT) to the remaining columns
+# so the covariates share a common scale. The raw fractions are still used for
+# the heatmaps and the closure check; only the appended copy is transformed.
+#
+# Usage:
+#   Rscript estimateCellProportions.R <methylation.csv> <covariates.csv> <out.csv> [cohort] [flags]
+#
+# Optional flags (use --key=value form; order-independent; positional args
+# unaffected, so existing pipeline calls keep working):
+#   --reference=<CellType>   Drop this specific cell type as the reference
+#                            instead of the most-abundant one (recommended when
+#                            cross-cohort reproducibility matters, so the
+#                            reference is fixed rather than data-dependent).
+#   --no-int                 Skip the inverse-normal transform; append the
+#                            reference-dropped raw proportions as-is.
+#   --int                    Force the inverse-normal transform (default ON).
+
+# ---------------------------------------------------------------------------
+# Argument parsing: separate --flags from positional args so the historical
+# positional interface (<meth> <cov> <out> [cohort]) is preserved verbatim.
+# ---------------------------------------------------------------------------
+raw_args <- commandArgs(trailingOnly = TRUE)
+is_flag  <- grepl("^--", raw_args)
+flags    <- raw_args[is_flag]
+pos      <- raw_args[!is_flag]
+
+if (length(pos) < 3 || length(pos) > 4) {
+  stop(paste0("Usage: Rscript estimateCellProportions.R <methylation_file.csv> ",
+              "<covariates_file.csv> <output_file.csv> [cohort_name] ",
+              "[--reference=<CellType>] [--no-int|--int]"))
 }
 
-meth_file <- args[1]
-cov_file <- args[2]
-out_file <- args[3]
-cohort_name <- if (length(args) == 4) args[4] else ""
+meth_file   <- pos[1]
+cov_file    <- pos[2]
+out_file    <- pos[3]
+cohort_name <- if (length(pos) == 4) pos[4] else ""
 
-# Install BiocManager if not present
+# Flag defaults: reference drop is always applied (it is the fix); the only
+# choice is WHICH cell type. INT defaults ON to match prior cohort preprocessing.
+ref_cell <- NA_character_   # NA => auto-select most abundant
+do_int   <- TRUE
+for (f in flags) {
+  if (grepl("^--reference=", f)) {
+    ref_cell <- sub("^--reference=", "", f)
+  } else if (f == "--no-int") {
+    do_int <- FALSE
+  } else if (f == "--int") {
+    do_int <- TRUE
+  } else {
+    warning(paste("Ignoring unknown flag:", f))
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Rank-based inverse-normal transform (Blom, c = 3/8), NA-safe, column-wise.
+inverse_normal_transform <- function(x, c = 3/8) {
+  out  <- rep(NA_real_, length(x))
+  mask <- !is.na(x)
+  n    <- sum(mask)
+  if (n == 0) return(out)
+  r <- rank(x[mask], ties.method = "average")
+  out[mask] <- qnorm((r - c) / (n - 2 * c + 1))
+  out
+}
+
+# Closure check on the RAW fractions: confirms the compositional constraint that
+# motivates the reference drop. This is the empirical gate we agreed on.
+report_closure <- function(cells) {
+  rs <- rowSums(cells, na.rm = TRUE)
+  cat(sprintf("Cell-fraction row sums: mean=%.4f sd=%.4g min=%.4f max=%.4f\n",
+              mean(rs), sd(rs), min(rs), max(rs)))
+  if (abs(mean(rs) - 1) < 0.01 && sd(rs) < 0.01) {
+    cat("Closure confirmed: fractions sum to ~1.0 (compositional). The cell-type ",
+        "columns are collinear with the intercept; a reference-cell drop is ",
+        "required and will be applied.\n", sep = "")
+  } else {
+    cat("WARNING: row sums are not ~1.0. Verify these are EpiDISH fractions ",
+        "before relying on the reference-drop rationale; the collinearity fix ",
+        "assumes a closed composition.\n", sep = "")
+  }
+  invisible(rs)
+}
+
+# Drop one reference cell type (breaks closure), then optionally INT-transform
+# the remaining columns. Returns the processed cell block to append.
+process_cells <- function(cells, ref_cell, do_int) {
+  means <- colMeans(cells, na.rm = TRUE)
+  if (is.na(ref_cell) || ref_cell == "") {
+    ref_cell <- names(means)[which.max(means)]
+    cat(sprintf("Reference cell type (auto, most abundant): %s (mean=%.4f)\n",
+                ref_cell, max(means)))
+  } else {
+    if (!(ref_cell %in% colnames(cells))) {
+      stop(sprintf("Requested --reference=%s not found among cell types: %s",
+                   ref_cell, paste(colnames(cells), collapse = ", ")))
+    }
+    cat(sprintf("Reference cell type (fixed): %s (mean=%.4f)\n",
+                ref_cell, means[[ref_cell]]))
+  }
+
+  kept <- setdiff(colnames(cells), ref_cell)
+  out  <- cells[, kept, drop = FALSE]
+  cat(sprintf("Dropped reference '%s'; %d cell-type column(s) remain: %s\n",
+              ref_cell, ncol(out), paste(kept, collapse = ", ")))
+
+  if (do_int) {
+    cat("Applying rank-based inverse-normal transform (Blom c=3/8), column-wise...\n")
+    int_df <- as.data.frame(lapply(out, inverse_normal_transform),
+                            check.names = FALSE)
+    rownames(int_df) <- rownames(out)
+    out <- int_df
+  } else {
+    cat("INT disabled (--no-int): appending reference-dropped raw proportions.\n")
+  }
+  out
+}
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
     cat("Installing BiocManager...\n")
     install.packages("BiocManager", repos = "https://cloud.r-project.org")
 }
-
-# Install EpiDISH if not present
 if (!requireNamespace("EpiDISH", quietly = TRUE)) {
     cat("Installing EpiDISH...\n")
     BiocManager::install("EpiDISH", ask = FALSE, update = FALSE)
 }
-
-# Install pheatmap if not present
 if (!requireNamespace("pheatmap", quietly = TRUE)) {
     cat("Installing pheatmap...\n")
     install.packages("pheatmap", repos = "https://cloud.r-project.org")
@@ -31,7 +151,9 @@ if (!requireNamespace("pheatmap", quietly = TRUE)) {
 library(EpiDISH)
 library(pheatmap)
 
+# ---------------------------------------------------------------------------
 # Load data
+# ---------------------------------------------------------------------------
 cat(paste("Loading methylation data from", meth_file, "\n"))
 # Assuming CpGs as rows, samples as columns for EpiDISH based on standard input
 beta_matrix <- read.csv(meth_file, row.names=1, check.names=FALSE)
@@ -89,7 +211,7 @@ if (tolower(cohort_name) == "mesa") {
     }
 }
 
-# Generate Heatmaps
+# Generate Heatmaps (on RAW, interpretable proportions)
 out_basename <- tools::file_path_sans_ext(out_file)
 heatmap_fully_clustered_file <- paste0(out_basename, "_heatmap_fully_clustered.png")
 heatmap_celltype_clustered_file <- paste0(out_basename, "_heatmap_celltype_clustered.png")
@@ -144,13 +266,31 @@ if (n_samples > 1000) {
     cat(paste("Saved cell type clustered heatmap to", heatmap_celltype_clustered_file, "\n"))
 }
 
-cat("Cell fractions first 5 row names (sample IDs) before merge:\n")
-print(head(rownames(cell_fractions), 5))
+# ---------------------------------------------------------------------------
+# Compositional fix: closure check (raw) -> reference drop -> optional INT.
+# Skipped for MESA, where cell columns are omitted from the output entirely.
+# ---------------------------------------------------------------------------
+cat("\n--- Cell-fraction composition handling ---\n")
+report_closure(cell_fractions)
+
+if (tolower(cohort_name) == "mesa") {
+    cat("MESA cohort: cell fractions are omitted from the output, so no ",
+        "reference-drop / INT is applied.\n", sep = "")
+    cells_for_merge <- cell_fractions
+} else {
+    cells_for_merge <- process_cells(cell_fractions, ref_cell, do_int)
+    cat("\nSummary report of appended cell columns (after processing):\n")
+    print(summary(cells_for_merge))
+    cat("\n")
+}
+
+cat("Cell columns first 5 row names (sample IDs) before merge:\n")
+print(head(rownames(cells_for_merge), 5))
 
 # Merge based on row names
 # EpiDISH returns sample IDs as row names in cell_fractions
-cat("Merging cell fractions with covariates...\n")
-merged_cov <- merge(cov_matrix, cell_fractions, by="row.names", all.x=FALSE) # only keep samples present in filtered fractions
+cat("Merging cell columns with covariates...\n")
+merged_cov <- merge(cov_matrix, cells_for_merge, by="row.names", all.x=FALSE) # only keep samples present in filtered fractions
 
 # Restore row names and remove the temporary 'Row.names' column
 rownames(merged_cov) <- merged_cov$Row.names
@@ -159,7 +299,7 @@ merged_cov$Row.names <- NULL
 if (tolower(cohort_name) == "mesa") {
     cat("MESA cohort detected. Omitting cell fraction columns from output.\n")
     # Remove all columns that came from cell_fractions
-    cols_to_remove <- colnames(cell_fractions)
+    cols_to_remove <- colnames(cells_for_merge)
     merged_cov <- merged_cov[, !(colnames(merged_cov) %in% cols_to_remove), drop=FALSE]
 }
 
