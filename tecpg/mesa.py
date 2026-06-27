@@ -194,6 +194,21 @@ def process_mesa(
     G = G.clip(lower=0)
     G = np.log2(G + 1)
 
+    logger.info(f'Applying between-sample quantile normalization to Gene Expression (G) [shape {G.shape}]')
+    if G.isna().any().any() or np.isinf(G).any().any():
+        raise ValueError("G contains NaN or inf before QN.")
+
+    sorted_vals = np.sort(G.values, axis=0)
+    row_means = np.mean(sorted_vals, axis=1)
+
+    G_norm = pandas.DataFrame(index=G.index, columns=G.columns, dtype=float)
+    for col in G.columns:
+        col_vals = G[col].values
+        col_sorted = np.sort(col_vals)
+        mapping = pandas.Series(row_means).groupby(col_sorted).mean()
+        G_norm[col] = G[col].map(mapping)
+    G = G_norm
+
     logger.info('Sorting columns')
     M = M.reindex(sorted(M.columns, key=int), axis=1)
     G = G.reindex(sorted(G.columns, key=int), axis=1)
