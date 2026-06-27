@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev11**.
+The current development version on the `dev` branch is **2.0.0b2.dev25**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -16,6 +16,155 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 2.0.0b2.dev25
+
+### Features
+- Add between-sample quantile normalization for gene expression (`G`),
+  applied immediately after the existing floor and `log2` transforms in
+  `tecpg/gtp.py`, `tecpg/mesa.py`, and `tecpg/test_data.py` (PR #281).
+  Includes a finite-input guard that rejects `NaN`/`inf` before computing,
+  and exact pandas rank-mapping so tied values average across ranks.
+
+## 2.0.0b2.dev24
+
+### Improvements / Performance
+- Add diagnostics for the dominant expression-PC concentration observed in
+  `residualize_pca`.
+
+## 2.0.0b2.dev23
+
+### Bug Fixes
+- Drop near-degenerate cell types before the reference drop and INT. The
+  RPC reference panel sometimes fails to resolve a cell type (e.g.
+  eosinophils nonzero in only ~1.5% of samples), leaving a near-constant
+  column that INT collapses to a single tie-rank and that weakly
+  reintroduces collinearity with the intercept. `drop_degenerate_cells()`
+  removes cell types nonzero in fewer than `--min-nonzero-frac` of samples
+  (default 0.5; 0 disables), guards against fewer than two survivors, and
+  falls back to the most-abundant remaining type when a pinned
+  `--reference` is itself dropped.
+
+### Improvements / Performance
+- Key the input-scale diagnostic FLAG off each covariate's scale-adjusted
+  `|beta|` (`mean|IG| / input_MAD`) relative to methylation's, rather than
+  the largest raw input MAD, so it distinguishes real coefficient dominance
+  from input-scale effects.
+
+## 2.0.0b2.dev22
+
+### Bug Fixes
+- Break cell-proportion collinearity before appending EpiDISH RPC fractions
+  to the covariate matrix. The fractions sum to ~1 per sample, making the
+  cell-type columns collinear with the intercept and smearing one shared
+  coefficient across them (uninterpretable per-cell coefficients and IG
+  attributions). Drop one reference cell type (default most-abundant; pin
+  with `--reference` for cross-cohort reproducibility) and apply a
+  rank-based inverse-normal transform (Blom c=3/8) to the remaining cell
+  columns (`--no-int` to skip). Non-cell covariates pass through untouched.
+- Restrict every saliency aggregate in `tools/evaluateSaliency.py` to rows
+  that actually carry IG (the bootstrapped subset), dropping the silent
+  `fillna(0)` that poisoned fraction distributions, rank bands, and
+  per-feature proportions. Adds top-50 tables ranked by `|mt_ig|` and
+  `p_boot`, effect and input-scale diagnostics, and a `--frac-exclude`
+  filter.
+
+## 2.0.0b2.dev21
+
+### Features
+- Implement the tecpg batch-2/3 completion pass (PR #280). Removes the
+  `DF=96` fallback so degrees of freedom are derived unconditionally from
+  `C.csv`, with the `M7-DF` `C.shape.meta` cross-check failing closed before
+  DF computation. Hardens the correctness harness with an independent
+  bootstrap p-value oracle, a strict `p_boot_floor` assertion, a seed
+  round-trip subprocess check across PyArrow formats, and fingerprint
+  comparison (`np.isclose`, atol=1e-5) on `p_min`/`p_max`.
+
+### Documentation
+- Update the eCpG filtering & prioritization living document against `dev`
+  HEAD (PR #279).
+
+## 2.0.0b2.dev20
+
+### Features
+- Seed the bootstrap resample draw and record the seed in the outputs for
+  reproducibility (PR #278).
+
+### Improvements / Performance
+- Add before/after row-count logging at silent drop sites (observability
+  only) (PR #278).
+
+## 2.0.0b2.dev19
+
+### Bug Fixes
+- Statistics-trust fixes, Batch 2 (PR #277). Floor `p_boot` at its true
+  empirical resolution (`1 / finite resample count`) in float64 so a
+  one-sided resample distribution reports the smallest representable
+  p-value instead of 0. Require `TOTAL_TESTS` (the BH-FDR denominator) to be
+  extracted from the mlr log with no placeholder fallback, aborting the
+  pipeline on failure. Add an `M7-DF` stage-boundary check that validates
+  `C.csv` still matches the `(samples, covars)` shape recorded in
+  `C.shape.meta` and asserts `DF > 0` before recalculating p-values.
+
+## 2.0.0b2.dev18
+
+### Improvements / Performance
+- Add a tecpg correctness test harness with seeded `test_data` and a
+  committed structural fingerprint (PR #276). See
+  `tests/test_correctness_harness.py`; regenerate the reference with
+  `--regenerate-fingerprint`.
+
+## 2.0.0b2.dev17
+
+### Improvements / Performance
+- Demote verbose bootstrap memory logs from INFO to DEBUG (PR #275).
+
+## 2.0.0b2.dev16
+
+### Bug Fixes
+- Write non-chunked bootstrap output to `bootstrap_merged.<ext>`, preserving
+  the configured file extension via `os.path.splitext` (PR #274).
+
+## 2.0.0b2.dev15
+
+### Bug Fixes
+- Fix `TOTAL_TESTS` and reservoir-deletion bugs (PR #273). The end-of-run
+  summary block was skipped when `chunking=False`, so `TOTAL_TESTS` was
+  never logged for `pipeline.sh`; it now always logs. `save_dataframes` also
+  called `initialize_dir` on the final non-chunked save, wiping the freshly
+  generated `sample_reservoir.csv`; a `clear_dir=False` flag now preserves
+  it.
+
+## 2.0.0b2.dev14
+
+### Bug Fixes
+- Forward the IG keyword arguments to `tecpg_mlr_qr_bootstrap` in the
+  `qr_bootstrap` CLI branch so per-feature IG columns are emitted; adds a
+  CLI regression test for the forwarding (PR #272).
+
+## 2.0.0b2.dev13
+
+### Breaking Changes
+- Hard rename of the MLR computation methods from `lstsq`,
+  `lstsq_bootstrap`, and `manual` to `qr`, `qr_bootstrap`, and
+  `legacy_normal_eq` respectively, to reflect the underlying QR
+  decomposition + triangular solve (PR #271). All associated Python symbols,
+  CLI arguments, and documentation are updated; there are no
+  backward-compatible aliases.
+
+### Bug Fixes
+- Make `test_cross_method_equivalence` deterministic and non-empty by
+  seeding the fixtures and passing `p_thresh=1.0`, so it actually exercises
+  numerical equivalence instead of comparing empty frames (PR #271).
+
+## 2.0.0b2.dev12
+
+### Features
+- Add Integrated Gradients (IG) computation to the MLR bootstrap (PR #268).
+  Adds `compute_ig`, `compute_ig_deep`, `ig_baseline`, and
+  `ig_covariates_filter` arguments, integrating Captum IG and analytical IG
+  derived from the original (non-bootstrapped) regression coefficients, with
+  end-to-end tests for the IG column outputs.
 
 ## 2.0.0b2.dev11
 
@@ -1177,8 +1326,3 @@ changes. Each version section is organized into **Features**,
   `tests/README.md`.
 - Increase estimate tolerance for `float32` precision in the accuracy
   test.
-
-## v2.0.0
-
-### Breaking Changes
-* **Hard Rename: `lstsq` to `qr`**: The MLR computation methods previously named `lstsq`, `lstsq_bootstrap`, and `manual` have been renamed to `qr`, `qr_bootstrap`, and `legacy_normal_eq` respectively to accurately reflect the underlying mathematical implementation (QR decomposition + triangular solve). All associated Python symbols, CLI arguments, and documentation have been updated. There are no backward-compatible aliases.
