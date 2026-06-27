@@ -366,16 +366,27 @@ def report_input_scales(df, denom_cols, covar_csv, meth_csv=None, out_dir=None):
     print("scale_adj|b| = mean|IG| / input_MAD  (input-scale-free coefficient size).")
     print("MADx_vs_mt   = input_MAD / methylation_MAD  (how many x wider the input is).")
 
-    covar_mads = [r[1] for r in rows if r[0] != 'mt_ig' and r[1] == r[1] and r[1] > 0]
-    if covar_mads and meth_mad and meth_mad > 0:
-        maxratio = max(covar_mads) / meth_mad
-        if maxratio >= 10:
-            print(f"FLAG: largest covariate input MAD is {maxratio:.1f}x methylation's. "
-                  "Covariate IG dominance is at least partly an input-scale effect; "
-                  "compare scale_adj|b| (not raw IG) across features.")
+    # Verdict keyed off scale-adjusted coefficient size (input scale removed),
+    # NOT raw input MAD. Raw MAD flags whichever feature has the widest input
+    # (e.g. expression PCs), which is misleading because those can carry tiny
+    # scale-adjusted coefficients. The decision we care about is whether
+    # covariate IG dominance survives removing input scale.
+    meth_mean_ig = float(df['mt_ig'].mean())
+    meth_sadj = (meth_mean_ig / meth_mad) if (meth_mad and meth_mad > 0) else float('nan')
+    covar_sadj = [(r[0], r[2] / r[1]) for r in rows
+                  if r[0] != 'mt_ig' and r[1] == r[1] and r[1] > 0 and r[2] == r[2]]
+    if covar_sadj and meth_sadj == meth_sadj and meth_sadj > 0:
+        top_name, top_sadj = max(covar_sadj, key=lambda t: t[1])
+        ratio = top_sadj / meth_sadj
+        if ratio >= 10:
+            print(f"FLAG: after removing input scale, the largest covariate scale_adj|b| "
+                  f"({top_name.replace('_ig', '')}) is {ratio:.0f}x methylation's. Covariate "
+                  "IG dominance is real coefficient dominance, not an input-scale artifact; "
+                  "methylation's small IG share is genuine.")
         else:
-            print(f"Input scales are within ~{maxratio:.1f}x across features; covariate IG "
-                  "dominance is not primarily a scale artifact.")
+            print(f"After removing input scale, covariate scale_adj|b| is within ~{ratio:.1f}x "
+                  "of methylation's. Raw IG dominance is primarily an input-scale effect; "
+                  "compare scale_adj|b|, not raw IG.")
 
     # Plot: input MAD vs mean|IG| (log-log) with a slope-1 reference. Points far
     # off the line have coefficient sizes that differ from the median feature.

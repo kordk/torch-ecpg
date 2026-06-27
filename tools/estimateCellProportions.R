@@ -28,6 +28,12 @@
 #   --no-int                 Skip the inverse-normal transform; append the
 #                            reference-dropped raw proportions as-is.
 #   --int                    Force the inverse-normal transform (default ON).
+#   --min-nonzero-frac=<f>   Drop near-degenerate cell types whose fraction of
+#                            samples with a nonzero proportion is below <f>
+#                            (default 0.5). Catches cells the RPC reference
+#                            panel cannot resolve (e.g. eosinophils -> mostly
+#                            zeros), which INT would otherwise collapse to a
+#                            near-constant column. Set to 0 to disable.
 
 # ---------------------------------------------------------------------------
 # Argument parsing: separate --flags from positional args so the historical
@@ -41,7 +47,7 @@ pos      <- raw_args[!is_flag]
 if (length(pos) < 3 || length(pos) > 4) {
   stop(paste0("Usage: Rscript estimateCellProportions.R <methylation_file.csv> ",
               "<covariates_file.csv> <output_file.csv> [cohort_name] ",
-              "[--reference=<CellType>] [--no-int|--int]"))
+              "[--reference=<CellType>] [--no-int|--int] [--min-nonzero-frac=<f>]"))
 }
 
 meth_file   <- pos[1]
@@ -51,8 +57,9 @@ cohort_name <- if (length(pos) == 4) pos[4] else ""
 
 # Flag defaults: reference drop is always applied (it is the fix); the only
 # choice is WHICH cell type. INT defaults ON to match prior cohort preprocessing.
-ref_cell <- NA_character_   # NA => auto-select most abundant
-do_int   <- TRUE
+ref_cell         <- NA_character_   # NA => auto-select most abundant
+do_int           <- TRUE
+min_nonzero_frac <- 0.5             # drop cells nonzero in fewer than this fraction of samples
 for (f in flags) {
   if (grepl("^--reference=", f)) {
     ref_cell <- sub("^--reference=", "", f)
@@ -60,6 +67,11 @@ for (f in flags) {
     do_int <- FALSE
   } else if (f == "--int") {
     do_int <- TRUE
+  } else if (grepl("^--min-nonzero-frac=", f)) {
+    min_nonzero_frac <- as.numeric(sub("^--min-nonzero-frac=", "", f))
+    if (is.na(min_nonzero_frac) || min_nonzero_frac < 0 || min_nonzero_frac > 1) {
+      stop("--min-nonzero-frac must be a number in [0, 1].")
+    }
   } else {
     warning(paste("Ignoring unknown flag:", f))
   }
@@ -98,10 +110,55 @@ report_closure <- function(cells) {
   invisible(rs)
 }
 
-# Drop one reference cell type (breaks closure), then optionally INT-transform
-# the remaining columns. Returns the processed cell block to append.
-process_cells <- function(cells, ref_cell, do_int) {
+# Drop near-degenerate cell types: those whose proportion is nonzero in fewer
+# than `min_nonzero_frac` of samples. The RPC reference panel sometimes fails to
+# resolve a cell type (e.g. eosinophils -> mostly exact zeros). Such a column is
+# near-constant; after INT it collapses to a single tie-rank value for most
+# samples, carries no usable signal, and is weakly collinear with the intercept.
+# Removing it is cleaner than appending a degenerate covariate.
+drop_degenerate_cells <- function(cells, min_nonzero_frac = 0.5, eps = 1e-6) {
+  if (min_nonzero_frac <= 0) {
+    cat("Near-degenerate cell drop disabled (--min-nonzero-frac=0).\n")
+    return(cells)
+  }
+  nz_frac <- vapply(cells, function(x) mean(abs(x) > eps, na.rm = TRUE), numeric(1))
+  degenerate <- names(nz_frac)[nz_frac < min_nonzero_frac]
+  if (length(degenerate) > 0) {
+    for (d in degenerate) {
+      cat(sprintf("Dropping near-degenerate cell type '%s': nonzero in only %.1f%% of ",
+                  d, 100 * nz_frac[[d]]))
+      cat(sprintf("samples (> %g), below the %.0f%% threshold.\n",
+                  eps, 100 * min_nonzero_frac))
+    }
+    cells <- cells[, setdiff(colnames(cells), degenerate), drop = FALSE]
+  } else {
+    cat("No near-degenerate cell types detected.\n")
+  }
+  cells
+}
+
+# Drop near-degenerate cells, then one reference cell type (breaks closure),
+# then optionally INT-transform the remaining columns. Returns the processed
+# cell block to append.
+process_cells <- function(cells, ref_cell, do_int, min_nonzero_frac = 0.5) {
+  cells <- drop_degenerate_cells(cells, min_nonzero_frac = min_nonzero_frac)
+  if (ncol(cells) < 2) {
+    stop(sprintf(paste0("After dropping near-degenerate cell types, only %d column(s) ",
+                        "remain; need at least 2 (one is dropped as the reference)."),
+                 ncol(cells)))
+  }
+
   means <- colMeans(cells, na.rm = TRUE)
+  # If a fixed reference was requested but it was removed as degenerate, fall
+  # back to the most-abundant remaining type (a reference drop is still required
+  # to break the closure among the surviving columns).
+  if (!is.na(ref_cell) && ref_cell != "" && !(ref_cell %in% colnames(cells))) {
+    cat(sprintf("Requested --reference=%s is no longer present (dropped as ",
+                ref_cell))
+    cat("near-degenerate); falling back to most-abundant remaining type.\n")
+    ref_cell <- NA_character_
+  }
+
   if (is.na(ref_cell) || ref_cell == "") {
     ref_cell <- names(means)[which.max(means)]
     cat(sprintf("Reference cell type (auto, most abundant): %s (mean=%.4f)\n",
@@ -278,7 +335,7 @@ if (tolower(cohort_name) == "mesa") {
         "reference-drop / INT is applied.\n", sep = "")
     cells_for_merge <- cell_fractions
 } else {
-    cells_for_merge <- process_cells(cell_fractions, ref_cell, do_int)
+    cells_for_merge <- process_cells(cell_fractions, ref_cell, do_int, min_nonzero_frac)
     cat("\nSummary report of appended cell columns (after processing):\n")
     print(summary(cells_for_merge))
     cat("\n")
