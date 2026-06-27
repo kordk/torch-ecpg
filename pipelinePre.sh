@@ -220,6 +220,11 @@ with open('$DATA_DIR/C.shape.meta', 'w') as fh:
 fi
 fi
 
+if [ $DATASET == "gtp" ]; then
+    log "GTP - Diagnosing expression PCs..."
+    python3 -u tools/diagnoseExpressionPCs.py     --expression "$DATA_DIR/G.csv"     --covariates "$DATA_DIR/C_post_cellTypes.csv"
+fi
+
 log "======================================"
 log "Preprocessing completed successfully!"
 log "Data directory $DATA_DIR now contains M.csv, G.csv, and C.csv"
