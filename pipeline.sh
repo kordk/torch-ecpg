@@ -153,57 +153,58 @@ done
 EXECUTE=0
 if [ "$START_STAGE" == "all" ] || [ "$START_STAGE" == "map" ]; then EXECUTE=1; fi
 
-# We calculate DF inside the block that needs it (or we can just calculate it here unconditionally if the file exists)
+if [ ! -s "$DATA_DIR/C.csv" ]; then
+    log "Error: $DATA_DIR/C.csv is missing or empty. Run pipelinePre.sh to regenerate it."
+    exit 1
+fi
+
+# We calculate DF inside the block that needs it unconditionally since the file exists
 # SAMPLES - COVARIATES - 1 (M) - 1 (Intercept)
-# Using placeholder calculation if needed; assuming df=96 for dummy (100 - 2 - 2)
 # Here we just parse the C.csv lines dynamically
-if [ -s "$DATA_DIR/C.csv" ]; then
-    SAMPLES=$(wc -l < "$DATA_DIR/C.csv")
-    SAMPLES=$((SAMPLES - 1)) # Header
-    COVARS=$(head -n 1 "$DATA_DIR/C.csv" | awk -F, '{print NF-1}')
+SAMPLES=$(wc -l < "$DATA_DIR/C.csv")
+SAMPLES=$((SAMPLES - 1)) # Header
+COVARS=$(head -n 1 "$DATA_DIR/C.csv" | awk -F, '{print NF-1}')
 
-    # M7-DF: stage-boundary check. pipelinePre.sh records the exact (samples,
-    # covars) shape the PCA merge produced in C.shape.meta. Validate that the
-    # counts C.csv now carries still match before deriving DF, so a stray
-    # trailing blank line (shifts SAMPLES) or an extra index column (shifts
-    # COVARS) fails loudly instead of silently shifting DF and corrupting every
-    # precise_mt_p / FDR downstream.
-    SHAPE_META="$DATA_DIR/C.shape.meta"
-    if [ -f "$SHAPE_META" ]; then
-        EXP_SAMPLES=$(grep -o 'samples=[0-9]*' "$SHAPE_META" | cut -d= -f2)
-        EXP_COVARS=$(grep -o 'covars=[0-9]*' "$SHAPE_META" | cut -d= -f2)
-        if [ -z "$EXP_SAMPLES" ] || [ -z "$EXP_COVARS" ]; then
-            log "Error: malformed $SHAPE_META (could not read expected samples/covars from the PCA merge)."
-            log "Re-run pipelinePre.sh to regenerate C.csv and its shape metadata."
-            exit 1
-        fi
-        if [ "$SAMPLES" != "$EXP_SAMPLES" ]; then
-            log "Error: sample count mismatch in $DATA_DIR/C.csv. Expected $EXP_SAMPLES (from PCA merge) but observed $SAMPLES."
-            log "C.csv may have a stray trailing blank line or have been regenerated inconsistently. Refusing to derive DF."
-            exit 1
-        fi
-        if [ "$COVARS" != "$EXP_COVARS" ]; then
-            log "Error: covariate count mismatch in $DATA_DIR/C.csv. Expected $EXP_COVARS (from PCA merge) but observed $COVARS."
-            log "C.csv may carry an extra index column or have been regenerated inconsistently. Refusing to derive DF."
-            exit 1
-        fi
-    else
-        log "Warning: $SHAPE_META not found; cannot cross-check C.csv against the PCA merge. Proceeding with parsed counts."
+# M7-DF: stage-boundary check. pipelinePre.sh records the exact (samples,
+# covars) shape the PCA merge produced in C.shape.meta. Validate that the
+# counts C.csv now carries still match before deriving DF, so a stray
+# trailing blank line (shifts SAMPLES) or an extra index column (shifts
+# COVARS) fails loudly instead of silently shifting DF and corrupting every
+# precise_mt_p / FDR downstream.
+SHAPE_META="$DATA_DIR/C.shape.meta"
+if [ -f "$SHAPE_META" ]; then
+    EXP_SAMPLES=$(grep -o 'samples=[0-9]*' "$SHAPE_META" | cut -d= -f2)
+    EXP_COVARS=$(grep -o 'covars=[0-9]*' "$SHAPE_META" | cut -d= -f2)
+    if [ -z "$EXP_SAMPLES" ] || [ -z "$EXP_COVARS" ]; then
+        log "Error: malformed $SHAPE_META (could not read expected samples/covars from the PCA merge)."
+        log "Re-run pipelinePre.sh to regenerate C.csv and its shape metadata."
+        exit 1
     fi
-
-    DF=$((SAMPLES - COVARS - 2))
-    log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
-
-    # Assert DF > 0 BEFORE recalculation, not only inside
-    # recalculate_pvalues_parquet.py, so a non-positive DF aborts the pipeline.
-    if [ "$DF" -le 0 ]; then
-        log "Error: Non-positive degrees of freedom (DF=$DF) from SAMPLES=$SAMPLES, COVARS=$COVARS."
-        log "Too few samples relative to covariates; p-value recalculation would be invalid."
+    if [ "$SAMPLES" != "$EXP_SAMPLES" ]; then
+        log "Error: sample count mismatch in $DATA_DIR/C.csv. Expected $EXP_SAMPLES (from PCA merge) but observed $SAMPLES."
+        log "C.csv may have a stray trailing blank line or have been regenerated inconsistently. Refusing to derive DF."
+        exit 1
+    fi
+    if [ "$COVARS" != "$EXP_COVARS" ]; then
+        log "Error: covariate count mismatch in $DATA_DIR/C.csv. Expected $EXP_COVARS (from PCA merge) but observed $COVARS."
+        log "C.csv may carry an extra index column or have been regenerated inconsistently. Refusing to derive DF."
         exit 1
     fi
 else
-    # Default placeholder
-    DF=96
+    log "Error: $SHAPE_META not found. pipelinePre.sh failed to write it."
+    log "Cannot cross-check C.csv against the PCA merge. Aborting."
+    exit 1
+fi
+
+DF=$((SAMPLES - COVARS - 2))
+log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
+
+# Assert DF > 0 BEFORE recalculation, not only inside
+# recalculate_pvalues_parquet.py, so a non-positive DF aborts the pipeline.
+if [ "$DF" -le 0 ]; then
+    log "Error: Non-positive degrees of freedom (DF=$DF) from SAMPLES=$SAMPLES, COVARS=$COVARS."
+    log "Too few samples relative to covariates; p-value recalculation would be invalid."
+    exit 1
 fi
 
 # Stage 3: Mapping (qr + ig)
