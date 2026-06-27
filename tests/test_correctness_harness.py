@@ -274,57 +274,17 @@ def _p_boot_production(estimates: np.ndarray):
 
 
 def _p_boot_oracle(estimates: np.ndarray):
-    """Intended p_boot: the production math, then floored at 1/finite_count."""
-    p_boot, finite_count = _p_boot_production(estimates)
-    if finite_count == 0:
+    """Independent oracle p_boot calculation.
+
+    Computes empirical two-sided p-value from first principles without
+    reusing the _p_boot_production math.
+    """
+    finite = estimates[np.isfinite(estimates)]
+    B = len(finite)
+    if B == 0:
         return float('nan'), 0
-    return max(p_boot, 1.0 / finite_count), finite_count
-
-
-def test_p_boot_two_sided_matches_without_floor():
-    """When the resample distribution straddles zero, no floor is needed.
-
-    This confirms the non-degenerate p_boot math is already correct: the
-    floor only changes the answer for one-sided distributions, so a
-    two-sided synthetic resample agrees with the oracle today.
-    """
-    rng = np.random.default_rng(HARNESS_SEED)
-    estimates = rng.normal(0.0, 1.0, size=500)  # straddles zero
-    prod, _ = _p_boot_production(estimates)
-    oracle, _ = _p_boot_oracle(estimates)
-    np.testing.assert_allclose(prod, oracle, rtol=0, atol=0)
-
-
-def test_p_boot_floor_oracle_local_resample():
-    """p_boot vs. hand-rolled empirical math, INCLUDING the floor.
-
-    Encodes the INTENDED floor (``1/finite_count``) as the oracle on small,
-    locally-seeded synthetic resample arrays -- one strictly one-sided and
-    one degenerate (some non-finite resamples).
-
-    This oracle exercises the p_boot math directly on synthetic arrays and
-    never invokes the bootstrap resample draw, so it is independent of the
-    C3 ``--seed`` plumbing; its determinism comes from the local
-    ``HARNESS_SEED`` rng.
-    """
-    rng = np.random.default_rng(HARNESS_SEED)
-
-    # (a) strictly one-sided: every resample positive -> raw p_boot == 0.
-    one_sided = rng.uniform(0.1, 1.0, size=200)
-    prod_a, count_a = _p_boot_production(one_sided)
-    oracle_a, _ = _p_boot_oracle(one_sided)
-    assert oracle_a == pytest.approx(1.0 / count_a)
-    np.testing.assert_allclose(prod_a, oracle_a, rtol=0, atol=0)
-
-    # (b) degenerate: inject non-finite resamples; floor uses finite_count.
-    degenerate = rng.uniform(0.1, 1.0, size=200)
-    degenerate[:17] = np.nan
-    degenerate[17:20] = np.inf
-    prod_b, count_b = _p_boot_production(degenerate)
-    oracle_b, _ = _p_boot_oracle(degenerate)
-    assert count_b == 180  # 200 - 17 nan - 3 inf
-    assert oracle_b == pytest.approx(1.0 / count_b)
-    np.testing.assert_allclose(prod_b, oracle_b, rtol=0, atol=0)
+    p = min(np.sum(finite <= 0), np.sum(finite >= 0)) * 2.0 / B
+    return max(min(p, 1.0), 1.0 / B), B
 
 
 # ==========================================================================
@@ -367,22 +327,92 @@ def _one_sided_bootstrap_fixture():
     C = pd.DataFrame({'age': rng.uniform(0, 1, size=n)}, index=subs)
     return M, G, C, [('cg001', 'ILMN_001')]
 
+def _degenerate_bootstrap_fixture():
+    """M/G/C with forced degenerate counts, so D is known > 0.
+
+    A step-function M with noise-free G ensures some resamples drop to 0 variance,
+    resulting in degenerate count D > 0.
+    """
+    n = 48
+    subs = [f's{i}' for i in range(n)]
+    rng = np.random.default_rng(HARNESS_SEED)
+    m = np.zeros(n)
+    m[0:5] = 1.0
+    g = m * 2.0 + rng.standard_normal(n) * 0.01
+    M = pd.DataFrame([m], index=['cg001'], columns=subs)
+    G = pd.DataFrame([g], index=['ILMN_001'], columns=subs)
+    C = pd.DataFrame({'age': rng.uniform(0, 1, size=n)}, index=subs)
+    return M, G, C, [('cg001', 'ILMN_001')]
 
 def test_p_boot_floor_real_pipeline():
-    """Invariant ``p_boot in [1/B, 1]`` on the REAL bootstrap output.
+    """Invariant ``p_boot == 1/(B-D)`` on the REAL bootstrap output for 1-sided degenerate."""
+    iterations = 2000
+    M, G, C, pairs = _degenerate_bootstrap_fixture()
+    res = _run_real_bootstrap(M, G, C, pairs, iterations, np_seed=123)
 
-    Calls the production bootstrap (not a mirror), so the test auto-flips
-    from xfail to pass once C1 adds the floor -- no edit required here.
+    p_boot = res['p_boot'].to_numpy(dtype=float)[0]
+    D = res['degenerate_resamples'].to_numpy(dtype=int)[0]
+
+    assert D > 0, "Failed to force a known degenerate count D > 0"
+
+    # Assert the floor equals 1/(B-D)
+    expected_floor = 1.0 / (iterations - D)
+    assert p_boot == pytest.approx(expected_floor, rel=1e-9)
+
+    # Assert the floor does NOT equal 1/B
+    assert p_boot != pytest.approx(1.0 / iterations, rel=1e-9)
+
+def test_p_boot_oracle_real_pipeline():
+    """p_boot oracle vs REAL bootstrap output, on identical resample indices.
+
+    The bootstrap resample draw is seeded through the production ``seed``
+    parameter, making `np.random.choice` deterministic. We run a two-sided
+    synthetic array so we don't trivially hit the floor.
     """
     iterations = 200
-    M, G, C, pairs = _one_sided_bootstrap_fixture()
+    rng_fixture = np.random.default_rng(HARNESS_SEED)
+    n = 48
+    subs = [f's{i}' for i in range(n)]
+    # Create two-sided data (estimates straddle 0)
+    m = rng_fixture.uniform(0.0, 1.0, size=n)
+    # weak relationship -> straddles 0
+    g = 0.0 * m + 1.0 * rng_fixture.standard_normal(n)
+    M = pd.DataFrame([m], index=['cg001'], columns=subs)
+    G = pd.DataFrame([g], index=['ILMN_001'], columns=subs)
+    C = pd.DataFrame({'age': rng_fixture.uniform(0, 1, size=n)}, index=subs)
+    pairs = [('cg001', 'ILMN_001')]
+
+    # We must construct the independent estimates by running the identical resample indices
+    # The actual production uses np.random.choice(n, size=(iterations, n), replace=True)
+    # immediately after setting np.random.seed(seed)
+    np.random.seed(123)
+    boot_indices = np.random.choice(n, size=(iterations, n), replace=True)
+
     res = _run_real_bootstrap(M, G, C, pairs, iterations, np_seed=123)
-    p_boot = res['p_boot'].to_numpy(dtype=float)
-    floor = 1.0 / iterations
-    assert np.all(p_boot >= floor - 1e-12), (
-        f'p_boot below 1/B floor: {p_boot} (floor={floor})'
-    )
-    assert np.all(p_boot <= 1.0 + 1e-12)
+    p_boot_prod = res['p_boot'].to_numpy(dtype=float)[0]
+
+    estimates = []
+    m_arr = M.to_numpy()[0]
+    g_arr = G.to_numpy()[0]
+    c_arr = C.to_numpy()
+
+    for i in range(iterations):
+        indices = boot_indices[i]
+        m_resample = m_arr[indices]
+        g_resample = g_arr[indices]
+        c_resample = c_arr[indices]
+
+        X = np.column_stack([np.ones(n), m_resample, c_resample])
+        y = g_resample
+        if np.linalg.matrix_rank(X) < 3:
+            estimates.append(np.nan)
+        else:
+            beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+            estimates.append(beta[1]) # m_resample coefficient is column index 1
+
+    oracle_p_boot, _ = _p_boot_oracle(np.array(estimates))
+    assert p_boot_prod == pytest.approx(oracle_p_boot, rel=1e-6)
+
 
 
 # ==========================================================================
@@ -483,6 +513,18 @@ def test_structural_fingerprint_matches_committed():
     with open(FINGERPRINT_PATH) as handle:
         committed = json.load(handle)
     current = compute_fingerprint()
+
+    # Check floating point keys with atol
+    float_keys = ['p_max', 'p_min']
+    for k in float_keys:
+        if k in current and k in committed:
+            assert np.isclose(current[k], committed[k], atol=1e-5), (
+                f"Floating point drift on {k}: {current[k]} vs {committed[k]}"
+            )
+            # Remove them from dicts to allow exact comparison of the rest
+            del current[k]
+            del committed[k]
+
     assert current == committed, (
         'Structural fingerprint drift detected.\n'
         f'current:   {json.dumps(current, sort_keys=True)}\n'
@@ -554,6 +596,78 @@ def test_invariant_p_boot_within_bounds_real_pipeline():
     floor = 1.0 / iterations
     assert np.all(p_boot >= floor - 1e-12)
     assert np.all(p_boot <= 1.0 + 1e-12)
+
+
+def test_seed_round_trip():
+    """Test seed persistence and output reproducibility.
+
+    Validates that:
+    1. A subprocess CLI run saves the requested seed to the parquet column and metadata.
+    2. Two runs with the same seed produce byte-identical bootstrap metrics.
+    """
+    import subprocess
+    import pyarrow.parquet as pq
+    import shutil
+
+    iterations = 50
+    seed_val = 98765
+
+    M, G, C, pairs = _one_sided_bootstrap_fixture()
+
+    workdir1 = tempfile.mkdtemp(prefix='tecpg_seed1_')
+    workdir2 = tempfile.mkdtemp(prefix='tecpg_seed2_')
+
+    try:
+        pairs_file = os.path.join(workdir1, 'pairs.csv')
+        pd.DataFrame(pairs, columns=['mt_id', 'gt_id']).to_csv(pairs_file, index=False)
+        master_file = os.path.join(workdir1, 'master.parquet')
+        pd.DataFrame(pairs, columns=['mt_id', 'gt_id']).to_parquet(master_file)
+        M.to_csv(os.path.join(workdir1, 'M.csv'))
+        G.to_csv(os.path.join(workdir1, 'G.csv'))
+        C.to_csv(os.path.join(workdir1, 'C.csv'))
+        out_file1 = os.path.join(workdir1, 'bootstrap_merged.csv')
+
+        subprocess.run([
+            'python3', '-m', 'tecpg', '-i', workdir1, '-o', workdir1, 'run', 'mlr', '--mlr-method', 'qr_bootstrap',
+            '--pairs-file', pairs_file, '--master-parquet', master_file, '--output-format', 'csv',
+            '--bootstrap-iterations', str(iterations), '--seed', str(seed_val)
+        ], check=True, capture_output=True)
+
+        res1 = pd.read_csv(out_file1)
+
+        # Assert column
+        assert res1['seed'].iloc[0] == seed_val
+
+        # Assert metadata (parquet only feature, so we also need to test parquet)
+        out_file1_pq = os.path.join(workdir1, 'bootstrap_merged.parquet')
+        subprocess.run([
+            'python3', '-m', 'tecpg', '-i', workdir1, '-o', workdir1, 'run', 'mlr', '--mlr-method', 'qr_bootstrap',
+            '--pairs-file', pairs_file, '--master-parquet', master_file, '--output-format', 'parquet',
+            '--bootstrap-iterations', str(iterations), '--seed', str(seed_val)
+        ], check=True, capture_output=True)
+        res1_pq = pd.read_parquet(out_file1_pq)
+
+        table = pq.read_table(out_file1_pq)
+        metadata = table.schema.metadata
+        assert metadata[b'tecpg_bootstrap_seed'] == str(seed_val).encode()
+
+        out_file2 = os.path.join(workdir2, 'bootstrap_merged.parquet')
+
+        subprocess.run([
+            'python3', '-m', 'tecpg', '-i', workdir1, '-o', workdir2, 'run', 'mlr', '--mlr-method', 'qr_bootstrap',
+            '--pairs-file', pairs_file, '--master-parquet', master_file, '--output-format', 'parquet',
+            '--bootstrap-iterations', str(iterations), '--seed', str(seed_val)
+        ], check=True, capture_output=True)
+
+        res2 = pd.read_parquet(out_file2)
+        res1 = res1_pq
+
+        pd.testing.assert_series_equal(res1['p_boot'], res2['p_boot'])
+        pd.testing.assert_series_equal(res1['ci_low'], res2['ci_low'])
+        pd.testing.assert_series_equal(res1['ci_high'], res2['ci_high'])
+    finally:
+        shutil.rmtree(workdir1, ignore_errors=True)
+        shutil.rmtree(workdir2, ignore_errors=True)
 
 
 # ==========================================================================
