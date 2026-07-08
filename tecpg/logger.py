@@ -346,7 +346,7 @@ class Logger(PassAsKwarg):
             gpu_reserved = 0
 
         if torch.cuda.is_available():
-            self.info(
+            self.debug(
                 '[{0}] RAM: {1:.2f} MB, GPU: {2:.2f} MB Allocated, {3:.2f} MB Reserved',
                 function_name,
                 ram_usage,
@@ -356,7 +356,7 @@ class Logger(PassAsKwarg):
                 **kwargs,
             )
         else:
-            self.info(
+            self.debug(
                 '[{0}] RAM: {1:.2f} MB, GPU: {2:.2f} MB',
                 function_name,
                 ram_usage,
