@@ -709,7 +709,16 @@ def cli(
     ctx.obj['logger'] = logger
 
 
-@cli.group()
+class RunGroup(click.Group):
+    def list_commands(self, ctx: click.Context):
+        cmds = super().list_commands(ctx)
+        logger = ctx.obj.get('logger') if ctx.obj else None
+        is_debug = getattr(logger, 'is_debug', False) if logger else False
+        if not is_debug and 'mlr-single' in cmds:
+            cmds.remove('mlr-single')
+        return cmds
+
+@cli.group(cls=RunGroup)
 def run() -> None:
     """Base group for running algorithms."""
 
@@ -972,6 +981,11 @@ def mlr(
     output_format: str,
     aggressive_gc: bool,
 ) -> None:
+    """
+    Calculates Multiple Linear Regression using highly-optimized batched tensor operations.
+
+    Ideal for large-scale analysis, it utilizes QR decomposition by default to efficiently process multiple gene and methylation loci simultaneously, supporting features like integrated gradients, reservoir sampling, and bootstrapping. Supports 2D chunking to manage GPU memory limits.
+    """
     logger: Logger = ctx.obj['logger']
 
     # Auto-resolve prefetch_chunks (-1 sentinel) based on free RAM and the
@@ -1354,11 +1368,9 @@ def mlr_single(
     ig_baseline: str,
 ) -> None:
     """
-    Calculates the multiple linear regression.
+    Calculates Multiple Linear Regression using a single-iteration, sequential approach over each gene/methylation pair.
 
-    Calculate the multiple linear regression with methylation, gene
-    expression, and covariate matrices. Optional chunking to avoid
-    memory limits.
+    This option computes regressions row-by-row rather than using optimized tensor operations. It is considerably slower than `mlr` and is primarily intended for validation, debugging, and small-scale testing. Supports 1D chunking (number of regressions per chunk) to manage memory.
     """
     logger: Logger = ctx.obj['logger']
 
