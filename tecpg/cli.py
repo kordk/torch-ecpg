@@ -519,7 +519,7 @@ from .tool import (
     '-v', '--verbosity', show_default=True, default=1, type=int, count=True
 )
 @click.option(
-    '-d', '--debug', is_flag=True, show_default=True, default=False, type=bool
+    '-D', '--debug', is_flag=True, show_default=True, default=False, type=bool
 )
 @click.option(
     '-l',
