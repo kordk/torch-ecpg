@@ -712,8 +712,15 @@ def cli(
 class RunGroup(click.Group):
     def list_commands(self, ctx: click.Context):
         cmds = super().list_commands(ctx)
-        logger = ctx.obj.get('logger') if ctx.obj else None
-        is_debug = getattr(logger, 'is_debug', False) if logger else False
+
+        root_ctx = ctx.find_root()
+        is_debug = False
+        if root_ctx and 'debug' in root_ctx.params:
+            is_debug = root_ctx.params['debug']
+        else:
+            logger = ctx.obj.get('logger') if ctx.obj else None
+            is_debug = getattr(logger, 'is_debug', False) if logger else False
+
         if not is_debug and 'mlr-single' in cmds:
             cmds.remove('mlr-single')
         return cmds
@@ -771,7 +778,7 @@ def corr(
     logger.save()
 
 
-@run.command()
+@run.command(short_help="Calculates Multiple Linear Regression using highly-optimized batched tensor operations.")
 @click.option('--gene-loci-per-chunk', show_default=True, type=int)
 @click.option('--meth-loci-per-chunk', show_default=True, type=int)
 @click.option('-p', '--p-thresh', show_default=True, default=0.001, type=float)
@@ -1278,7 +1285,7 @@ def mlr(
         save_dataframes([output], output_path, [data['output']], clear_dir=False, **logger)
 
 
-@run.command()
+@run.command(name='mlr-single', short_help="Calculates Multiple Linear Regression using a single-iteration, sequential approach.")
 @click.option(
     '-r', '--regressions-per-chunk', show_default=True, default=0, type=int
 )
