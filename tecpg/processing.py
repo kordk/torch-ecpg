@@ -439,7 +439,13 @@ def _tecpg_mlr_qr_inner(
                 meth_chunk_index + 1,
                 meth_chunk_count,
             )
+            mc_logger.info_template = '[INFO] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
+            inner_logger.info_template = '[INFO] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
+            mc_logger.debug_template = '[DEBUG] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
+            inner_logger.debug_template = '[DEBUG] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
             mc_logger.current_count = 0
+            inner_logger.current_count = 0
+            mc_logger.start_timer('info', 'Running tecpg_mlr_qr...')
 
             # Slice M into M_chunk or copy for no methylation chunking
             if meth_loci_per_chunk is not None:
@@ -462,8 +468,6 @@ def _tecpg_mlr_qr_inner(
                 # If no filtration, output size is constant per gene chunk
                 pass # Calculated later
 
-            mc_logger_start_time = time.time()
-            mc_logger.info('[tecpg_mlr_qr] Chunk {0}: Running tecpg_mlr_qr...', meth_chunk_index + 1)
 
             # Create methylation loci chromosome and position tensors
             # for the current chunk
@@ -499,7 +503,7 @@ def _tecpg_mlr_qr_inner(
             X: torch.Tensor = torch.cat((ones, Mt, Ct), 2) # (M, S, K)
             del Mt, ones
 
-            mc_logger.memory_check(f'tecpg_mlr_qr - peak | Chunk {meth_chunk_index + 1}')
+            mc_logger.memory_check('tecpg_mlr_qr - peak')
 
             if compute_ig or compute_ig_deep:
                 if ig_baseline == 'mean':
@@ -570,7 +574,7 @@ def _tecpg_mlr_qr_inner(
                 )
 
             # Loop over gene chunks
-            inner_logger.info('[tecpg_mlr_qr] Chunk {0}: Calculating regression (qr)...', meth_chunk_index + 1)
+            inner_logger.start_timer('info', 'Calculating regression (qr)...')
 
             gene_end_index = 0
 
@@ -656,11 +660,11 @@ def _tecpg_mlr_qr_inner(
                 # Q is (M_chunk, S, K). Y is (S, G_chunk).
                 # To avoid materializing Y_expanded, do QtY = torch.einsum('msk,sg->mkg', Q, Y)
                 QtY = torch.einsum('msk,sg->mkg', Q, Y)
-                inner_logger.memory_check(f'tecpg_mlr_qr - QtY computed | Chunk {meth_chunk_index + 1}')
+                inner_logger.memory_check('tecpg_mlr_qr - QtY computed')
 
                 # Coefficients B
                 B = R_inv.matmul(QtY) # (M_chunk, K, G_chunk)
-                inner_logger.memory_check(f'tecpg_mlr_qr - solve (QR reuse) | Chunk {meth_chunk_index + 1}')
+                inner_logger.memory_check('tecpg_mlr_qr - solve (QR reuse)')
 
                 # Calculate Residuals (RSS) algebraically without materializing E
                 # ||Y - XB||^2 = ||Y||^2 - ||Q^T Y||^2
@@ -669,7 +673,7 @@ def _tecpg_mlr_qr_inner(
 
                 # clamp_min(0) guards against float32 cancellation producing small negatives
                 RSS = (Y_norm_sq.unsqueeze(0) - QtY_norm_sq).clamp_min(0) # (M_chunk, G_chunk)
-                inner_logger.memory_check(f'tecpg_mlr_qr - RSS (no E) | Chunk {meth_chunk_index + 1}')
+                inner_logger.memory_check('tecpg_mlr_qr - RSS (no E)')
 
                 # Sigma = sqrt(RSS / df)
                 # Standard Errors S = XtXi_diag_sqrt * Sigma
@@ -720,7 +724,7 @@ def _tecpg_mlr_qr_inner(
 
                 T = B / S
                 P = normal_p(T)
-                inner_logger.memory_check(f'tecpg_mlr_qr - pvals | Chunk {meth_chunk_index + 1}')
+                inner_logger.memory_check('tecpg_mlr_qr - pvals')
 
                 # Now we have tensors of shape (M, G, K).
 
@@ -1155,11 +1159,8 @@ def _tecpg_mlr_qr_inner(
                         inner_logger.info(bottleneck)
 
                     # Save
-                    mc_logger.current_count += 1
-                    mc_logger.info(
-                        '[tecpg_mlr_qr] Chunk {0}: Saving part {1}/{2}',
-                        meth_chunk_index + 1,
-                        mc_logger.current_count,
+                    mc_logger.count(
+                        'Saving part {i}/{0}',
                         gene_chunk_count,
                     )
                     # Backpressure: bounded by save_queue_depth (auto-scales)
@@ -1183,8 +1184,8 @@ def _tecpg_mlr_qr_inner(
 
             del Q, R_inv, XtXi_diag_sqrt
 
-            mc_logger_elapsed = time.time() - mc_logger_start_time
-            mc_logger.info('[tecpg_mlr_qr] Chunk {0}: Calculated tecpg_mlr_qr in {1:.4f} seconds', meth_chunk_index + 1, mc_logger_elapsed)
+            mc_logger.time('Looped over methylation loci in {l} seconds')
+            mc_logger.time('Calculated tecpg_mlr_qr in {t} seconds')
 
             # If no gene chunking (gene_loci_per_chunk is None), save/return results
             if gene_loci_per_chunk is None:
@@ -1224,9 +1225,8 @@ def _tecpg_mlr_qr_inner(
                     )
                     file_path = os.path.join(output_dir, file_name)
 
-                    mc_logger.current_count += 1
-                    mc_logger.info(
-                        '[tecpg_mlr_qr] Chunk {0}: Saving methylation chunk {0}/{1}',
+                    mc_logger.count(
+                        'Saving methylation chunk {0}/{1}',
                         meth_chunk_index + 1,
                         meth_chunk_count,
                     )
@@ -1261,21 +1261,21 @@ def _tecpg_mlr_qr_inner(
             estimated_remaining_seconds = average_time * remaining_chunks
             estimated_remaining_hours = estimated_remaining_seconds / 3600
 
-            logger.info(
-                '[tecpg_mlr_qr] Chunk {0}: FINISHED METHYLATION CHUNK IN {1:.4f} SECONDS. ESTIMATED TIME REMAINING: {2:.2f} SECONDS ({3:.2f} HOURS)',
+            logger.time(
+                'FINISHED METHYLATION CHUNK {0} IN {l} SECONDS. ESTIMATED TIME REMAINING: {1:.2f} SECONDS ({2:.2f} HOURS)',
                 completed_chunks,
-                chunk_duration,
                 estimated_remaining_seconds,
                 estimated_remaining_hours,
             )
 
         # Wait for chunks
         if chunking:
-            logger.info('[tecpg_mlr_qr] Waiting for chunks to save...')
+            logger.time('Waiting for chunks to save...')
+            wait_start = time.time()
             while futures:
                 futures.popleft().result()
             pool.shutdown(wait=True)
-            logger.info('[tecpg_mlr_qr] Finished waiting for chunks to save in {0:.4f} seconds', time.time() - (chunk_end_time if 'chunk_end_time' in locals() else methylation_loop_start_time))
+            logger.time('Finished waiting for chunks to save in {l} seconds')
 
         if prefetch_executor:
             prefetch_executor.shutdown(wait=True)
@@ -1336,9 +1336,12 @@ def _tecpg_mlr_qr_inner(
 
             res_file_path = os.path.join(res_output_dir, 'sample_reservoir.csv')
             out_reservoir.to_csv(res_file_path)
-            logger.info('[tecpg_mlr_qr] Finished saving reservoir sample to {0}', res_file_path)
+            logger.time('Finished saving reservoir sample to {0}', res_file_path)
 
-        logger.info('[tecpg_mlr_qr] Finished calculating the multiple linear regression (qr) in {0:.4f} total seconds', time.time() - methylation_loop_start_time)
+        logger.time(
+            'Finished calculating the multiple linear regression (qr) in {t} total'
+            ' seconds'
+        )
 
         if not chunking:
             return out
