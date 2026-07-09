@@ -804,13 +804,15 @@ def corr(
 )
 @click.option(
     '--mlr-method',
-    type=click.Choice(['legacy_normal_eq', 'qr', 'qr_bootstrap']),
+    type=click.Choice(['legacy_normal_eq', 'qr', 'qr_bootstrap', 'qr_permute']),
     default='legacy_normal_eq',
     show_default=True,
     help=(
         "The MLR computation method to use. 'legacy_normal_eq' uses the original"
         " optimized inversion; 'qr' uses QR decomposition (torch.linalg.qr) + torch.linalg.solve_triangular;"
-        " 'qr_bootstrap' runs empirical bootstrap on specific pairs."
+        " 'qr_bootstrap' runs empirical bootstrap on specific pairs;"
+
+        "        'qr_permute' runs permutation-null testing."
     ),
 )
 @click.option(
@@ -864,6 +866,13 @@ def corr(
     show_default=True,
     type=int,
     help='Number of tests to retain in the reservoir buffer (only for qr method)',
+)
+@click.option(
+    '--permutations',
+    show_default=True,
+    default=100,
+    type=int,
+    help='Number of permutations for qr_permute.',
 )
 @click.option(
     '--subsample-mt-count',
@@ -971,6 +980,7 @@ def mlr(
     thermal_threshold: int,
     thermal_wait: int,
     reservoir_count: Optional[int],
+    permutations: int,
     subsample_mt_count: Optional[int],
     subsample_g_count: Optional[int],
     seed: int,
@@ -1256,6 +1266,43 @@ def mlr(
             ig_baseline=ig_baseline,
             ig_covariates_filter=ig_covariates_filter,
             seed=seed,
+            logger=logger
+        )
+        return
+
+    if mlr_method == 'qr_permute':
+        from .permute import tecpg_mlr_qr_permute
+
+        # The merged permute output is named `permutation_results.<ext>` by
+        # default. We only honor an explicit --output-file; the default 'out.csv'
+        # is treated as "unset".
+        output_file_path = data['output']
+        if output_file_path == 'out.csv':
+            ext = 'parquet' if output_format == 'parquet' else 'csv'
+            output_file_path = os.path.join(
+                output_path, f'permutation_results.{ext}'
+            )
+        elif output_path and not output_file_path.startswith('/'):
+            output_file_path = os.path.join(output_path, output_file_path)
+
+        tecpg_mlr_qr_permute(
+            M=M,
+            G=G,
+            C=C,
+            M_annot=M_annot if region != 'all' else None,
+            G_annot=G_annot if region != 'all' else None,
+            region=region,
+            window_base=window_base,
+            downstream=downstream,
+            upstream=upstream,
+            permutations=permutations,
+            subsample_mt_count=subsample_mt_count,
+            subsample_g_count=subsample_g_count,
+            seed=seed,
+            output_file=output_file_path,
+            output_format=output_format,
+            thermal_threshold=thermal_threshold,
+            thermal_wait=thermal_wait,
             logger=logger
         )
         return
