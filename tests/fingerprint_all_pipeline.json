@@ -1,9 +1,9 @@
 {
   "drop_stages": [
     {
-      "dropped": 283,
+      "dropped": 284,
       "in": 300,
-      "out": 17,
+      "out": 16,
       "stage": "p_threshold_filter"
     },
     {
@@ -26,7 +26,7 @@
   "n_pairs_in": 300,
   "n_trans": 289,
   "network_edges": 0,
-  "p_max": 0.994291,
-  "p_min": 0.001143,
+  "p_max": 0.995772,
+  "p_min": 0.003706,
   "p_threshold": 0.05
 }
