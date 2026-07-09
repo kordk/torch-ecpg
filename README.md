@@ -4,10 +4,13 @@ Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) map
 
 If you use Torch-eCpG in your research, please cite the following paper: Kober, K.M., Berger, L., Roy, R. et al. Torch-eCpG: a fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. BMC Bioinformatics 25, 71 (2024). https://doi.org/10.1186/s12859-024-05670-4
 
-The current development version on the `dev` branch is **1.27.6-dev**. Since the
-`1.0.0` release on `main`, the project has grown a preprocessing pipeline
-(`pipelinePre.sh`), an end-to-end analysis pipeline (`pipeline.sh`), a
-downstream visualization/network pipeline
+The current development version on the `dev` branch is **2.0.0b2.dev29**. As of
+`2.0.0b2.dev0` the project version scheme migrated to the
+[PEP 440](https://peps.python.org/pep-0440/) standard, replacing the older
+`X.Y.Z-dev` suffix with pre-release / development tags such as `2.0.0b1` (beta)
+and `2.0.0b2.devN`. Since the `1.0.0` release on `main`, the project has grown a
+preprocessing pipeline (`pipelinePre.sh`), an end-to-end analysis pipeline
+(`pipeline.sh`), a downstream visualization/network pipeline
 (`pipelinePost.sh`), Parquet output, anchored auto chunk-sizing, Integrated
 Gradients (IG), an empirical bootstrap MLR backend, support for the MESA
 dataset, comprehensive HT-12/EPIC BED6 annotations, and a host-profile aware
