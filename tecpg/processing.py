@@ -439,10 +439,13 @@ def _tecpg_mlr_qr_inner(
                 meth_chunk_index + 1,
                 meth_chunk_count,
             )
-            mc_logger.info_template = (
-                '[CHUNK' + str(meth_chunk_index + 1) + '{modifier}] {message}'
-            )
+            mc_logger.info_template = '[INFO] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
+            inner_logger.info_template = '[INFO] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
+            mc_logger.debug_template = '[DEBUG] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
+            inner_logger.debug_template = '[DEBUG] [tecpg_mlr_qr] Chunk ' + str(meth_chunk_index + 1) + ': {message}'
             mc_logger.current_count = 0
+            inner_logger.current_count = 0
+            mc_logger.start_timer('info', 'Running tecpg_mlr_qr...')
 
             # Slice M into M_chunk or copy for no methylation chunking
             if meth_loci_per_chunk is not None:
@@ -465,7 +468,6 @@ def _tecpg_mlr_qr_inner(
                 # If no filtration, output size is constant per gene chunk
                 pass # Calculated later
 
-            mc_logger.start_timer('info', 'Running tecpg_mlr_qr...')
 
             # Create methylation loci chromosome and position tensors
             # for the current chunk
@@ -1269,6 +1271,7 @@ def _tecpg_mlr_qr_inner(
         # Wait for chunks
         if chunking:
             logger.time('Waiting for chunks to save...')
+            wait_start = time.time()
             while futures:
                 futures.popleft().result()
             pool.shutdown(wait=True)
