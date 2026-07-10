@@ -112,9 +112,9 @@ assert_files_present() {
     echo "[test_minimal_config] OK: $count '$pattern' file(s) written, >=1 non-empty"
 }
 
-# 2. Auto output-format. On minimum profile this must resolve to CSV.
+# 2. Auto output-format. It must resolve to parquet.
 run_mlr auto_format
-assert_files_present auto_format '*.csv'
+assert_files_present auto_format '*.parquet'
 
 # 3. Explicit --output-format csv (historical default behavior).
 run_mlr explicit_csv --output-format csv
