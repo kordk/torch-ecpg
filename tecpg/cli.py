@@ -952,8 +952,7 @@ def corr(
         "snappy compression and is typically 5-10x smaller and 5-10x faster to "
         "write than CSV; recommended on slow filesystems (e.g. dm-crypt/RAID6). "
         "'csv' preserves the previous behavior for downstream tooling. "
-        "'auto' (default) selects 'parquet' on server-class hosts and 'csv' on "
-        "minimum-class hosts (controlled by --host-profile)."
+        "'auto' (default) resolves to 'parquet' on all host profiles."
     ),
 )
 @click.option(
@@ -1037,11 +1036,7 @@ def mlr(
     output_format = output_format.lower()
     if output_format == 'auto':
         host_profile = logger.carry_data.get('host_profile', 'minimum')
-        # Server-class hosts default to parquet (faster + far smaller on
-        # RAID6/dm-crypt). Minimum-class hosts keep the historical CSV
-        # default so downstream tooling and small-fixture tests are
-        # unchanged. Explicit --output-format always wins.
-        output_format = 'parquet' if host_profile == 'server' else 'csv'
+        output_format = 'parquet'
         logger.info(
             'Auto-resolved output_format={0} (host_profile={1})',
             output_format, host_profile,
