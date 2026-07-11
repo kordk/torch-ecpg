@@ -25,7 +25,7 @@ from colorama import Fore as colors
 
 from .config import DTYPE, get_device
 from .gpu_monitor import gpu_guardian, report_thermal_status, throttle_if_needed
-from .helper import logit_transform_torch, trim_dataframes
+from .helper import compute_region_mask, logit_transform_torch, trim_dataframes
 from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger, analyze_bottleneck
 
@@ -748,23 +748,18 @@ def _tecpg_mlr_qr_inner(
                     G_strand_chunk = G_strand_t[gene_start_index:gene_end_index]
 
                     # Compute mask (M, G)
-                    if region in ('cis', 'distal'):
-                        # M_chrom_t: (M,)
-                        # G_chrom_chunk: (G,)
-                        # Broadcast: (M, 1) vs (1, G) -> (M, G)
-                        # Note: regression_full loop was over genes, so it did (M, 1) vs scalar.
-                        # Here:
-                        region_mask = (
-                            (M_chrom_t.unsqueeze(1) == G_chrom_chunk.unsqueeze(0))
-                            .logical_and(
-                                G_strand_chunk.unsqueeze(0) * (window_base - upstream) < (G_pos_chunk.unsqueeze(0) - M_pos_t.unsqueeze(1))
-                            )
-                            .logical_and(
-                                (G_pos_chunk.unsqueeze(0) - M_pos_t.unsqueeze(1)) < (G_strand_chunk.unsqueeze(0) * (window_base + downstream))
-                            )
-                        )
-                    elif region == 'trans':
-                        region_mask = (M_chrom_t.unsqueeze(1) != G_chrom_chunk.unsqueeze(0))
+                    # Broadcast: (M, 1) vs (1, G) -> (M, G)
+                    region_mask = compute_region_mask(
+                        region,
+                        M_chrom_t.unsqueeze(1),
+                        M_pos_t.unsqueeze(1),
+                        G_chrom_chunk.unsqueeze(0),
+                        G_pos_chunk.unsqueeze(0),
+                        G_strand_chunk.unsqueeze(0),
+                        window_base=window_base,
+                        upstream=upstream,
+                        downstream=downstream,
+                    )
 
                 # Flatten the tensors to (M*G, K)
                 # We want the order to match regression_full:

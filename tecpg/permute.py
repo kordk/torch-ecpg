@@ -7,6 +7,7 @@ import torch
 from typing import Literal
 from .config import get_device, DTYPE
 from .logger import Logger
+from .helper import compute_region_mask
 
 
 def _select_null_population(M, G, C, M_annot, G_annot, region,
@@ -20,8 +21,31 @@ def _select_null_population(M, G, C, M_annot, G_annot, region,
 def _compute_trans_mask(reported_pairs, M_annot, G_annot, region,
                         window_base, downstream, upstream, logger):
     # CHUNK 3: real cis/trans masking via the shared mask helper.
-    # STUB: all-True over reported_pairs.
-    return np.ones(len(reported_pairs), dtype=bool)
+    if region == 'all':
+        return np.ones(len(reported_pairs), dtype=bool)
+
+    device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
+
+    M_chrom, M_pos = M_annot.to_numpy().T.astype(int)
+    G_chrom, G_pos, G_strand = G_annot.to_numpy().T.astype(int)
+
+    m_mapped = M_annot.index.astype(str).get_indexer(reported_pairs['mt_id'].astype(str))
+    g_mapped = G_annot.index.astype(str).get_indexer(reported_pairs['gt_id'].astype(str))
+
+    if (m_mapped == -1).any() or (g_mapped == -1).any():
+        raise ValueError("qr_permute region mask: reported mt_id/gt_id not found in annotation index")
+
+    m_chrom_pp = torch.tensor(M_chrom[m_mapped], device=device, dtype=torch.int8)
+    m_pos_pp = torch.tensor(M_pos[m_mapped], device=device, dtype=torch.int32)
+    g_chrom_pp = torch.tensor(G_chrom[g_mapped], device=device, dtype=torch.int8)
+    g_pos_pp = torch.tensor(G_pos[g_mapped], device=device, dtype=torch.int32)
+    g_strand_pp = torch.tensor(G_strand[g_mapped], device=device, dtype=torch.int8)
+
+    mask = compute_region_mask(
+        region, m_chrom_pp, m_pos_pp, g_chrom_pp, g_pos_pp, g_strand_pp,
+        window_base=window_base, upstream=upstream, downstream=downstream
+    )
+    return mask.cpu().numpy()
 
 
 def _compute_observed_statistic(M, G, C, reported_pairs, logger):

@@ -334,3 +334,23 @@ def logit_transform_pandas(
     logger.info('[Transformation] Conversion successful. Proceeding to MLR.')
 
     return result
+
+def compute_region_mask(region, m_chrom, m_pos, g_chrom, g_pos, g_strand, *,
+                        window_base=None, upstream=None, downstream=None):
+    """In-region membership for methylation-gene pairs.
+
+    Inputs are broadcastable tensors. The caller controls shape:
+    the qr grid path passes (M,1) vs (1,G) -> (M,G); the permutation
+    path passes aligned (P,) vs (P,) -> (P,).
+    Reproduces the existing qr-path predicate exactly.
+    """
+    if region in ('cis', 'distal'):
+        delta = g_pos - m_pos
+        return (
+            (m_chrom == g_chrom)
+            & (g_strand * (window_base - upstream) < delta)
+            & (delta < g_strand * (window_base + downstream))
+        )
+    if region == 'trans':
+        return m_chrom != g_chrom
+    raise ValueError(f"compute_region_mask: unsupported region {region!r}")
