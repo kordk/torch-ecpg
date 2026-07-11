@@ -160,8 +160,39 @@ def _compute_observed_statistic(M, G, C, reported_pairs, logger):
 def _residualize_and_permute(G, C, perm_vector, logger):
     # CHUNK 5: design-fixed Freedman–Lane (residualize G on [1,C], permute
     # reduced-model residuals, refit against cached [1,M,C] pseudo-inverse).
-    # STUB: identity — return G unchanged.
-    return G
+    #
+    # Permuted: the reduced-model response residuals (R), along the sample axis, by perm_vector.
+    # Fixed (untouched by the permutation): M, C, the reduced design [1, C], and therefore
+    # the full design [1, M, C] used downstream. Nothing on the predictor side moves.
+
+    # 1. D = [ones(S, 1) | C.to_numpy()] -> shape (S, 1+K)
+    S = len(C)
+    ones = np.ones((S, 1), dtype=np.float64)
+    C_mat = C.to_numpy(dtype=np.float64)
+    D = np.hstack([ones, C_mat])
+
+    # 2. Y = G.to_numpy().T -> shape (S, n_genes)
+    Y = G.to_numpy(dtype=np.float64).T
+
+    # 3. Reduced fit, one solve for all genes: B_red = lstsq(D, Y) -> (1+K, n_genes)
+    # Using numpy lstsq which handles any rank robustly with rcond=None.
+    B_red, _, _, _ = np.linalg.lstsq(D, Y, rcond=None)
+
+    # 4. Fitted values: Yhat = D @ B_red -> (S, n_genes)
+    Yhat = D @ B_red
+
+    # 5. Reduced residuals: R = Y - Yhat -> (S, n_genes)
+    R = Y - Yhat
+
+    # 6. Permute the residuals along the sample axis: R_perm = R[perm_vector, :]
+    R_perm = R[perm_vector, :]
+
+    # 7. Add back the (unpermuted) reduced fitted values: Y_star = Yhat + R_perm
+    Y_star = Yhat + R_perm
+
+    # 8. Return pd.DataFrame(Y_star.T, index=G.index, columns=G.columns)
+    # Cast is inherently float64 because inputs were cast to np.float64
+    return pd.DataFrame(Y_star.T, index=G.index, columns=G.columns)
 
 
 def _accumulate_null(permuted_stats, accumulator, logger):
