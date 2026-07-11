@@ -1,6 +1,6 @@
 # `qr_permute` — Permutation-Null Significance for eQTM Mapping
 
-> **Status: under active development.** The walking skeleton is merged; the observed-statistic stage is in progress. **`qr_permute` does not yet produce valid p-values** — the current build emits a placeholder `perm_mt_p = 0.5` for every pair. Do **not** use `perm_mt_p` for inference until this notice is removed. See [§5 Implementation status](#5-implementation-status).
+> **Status: under active development.** Phase 1 (trans-global) is in progress — the null-estimation stages are landing chunk by chunk. **`qr_permute` does not yet produce valid p-values** — scoring is not yet implemented, so the current build emits a placeholder `perm_mt_p = 0.5` for every pair. Do **not** use `perm_mt_p` for inference until this notice is removed. See [§5 Implementation status](#5-implementation-status).
 
 **Applies to:** `tecpg run mlr --mlr-method qr_permute` (torch-eCpG v2, `dev`).
 **Audience:** method reviewers, maintainers, and (eventually) users.
@@ -136,24 +136,14 @@ At trans scale the null cannot be materialized as a list (`~2e10` pairs × permu
 
 ## 5. Implementation status
 
-The method is built as a **walking skeleton**: the full pipeline is first wired as trivial stubs (freezing the interfaces and the output contract), then each stage is replaced by real logic one **chunk** at a time, each guarded by an oracle and a **forced-fail proof** (green → red on a deliberately injected bug → green on revert).
+The build has **four phases**, delivered as a **walking skeleton**: the pipeline is first wired as trivial stubs (freezing interfaces and the output contract), then each stage is replaced by real logic one **chunk** at a time, each guarded by an oracle and a **forced-fail proof** (green → red on a deliberately injected bug → green on revert).
 
-Current phase: **trans-global null (Phase 1).**
+- **Phase 1 — trans-global null** *(in progress)*. All-pairs coverage; design-fixed Freedman–Lane; streaming null; empirical p + GPD tail; finalized output. Decomposed into chunks 0–9.
+- **Phase 2 — cis Beta-approximation** *(pending)*. Per-gene min-p Beta null for the cis stratum (§3.4), fit in the t-domain, reusing Phase 1's residualize/refit primitives and the shared cis mask as each gene's local test set.
+- **Phase 3 — evaluation / diagnostics script** *(pending)*. Standalone, read-only: calibration vs the analytic p, GPD ξ / quantile convergence, null sanity, and the cis-vs-trans comparison that **decides** whether stratification is warranted. A first cut is needed partway through Phase 1 (around the tail-fitting chunk), since it produces the evidence for that decision.
+- **Phase 4 — downstream / FDR integration** *(pending — deferred to last, gated on validation)*. The only phase that edits shared downstream code.
 
-| Chunk | Stage | Status |
-|------:|-------|--------|
-| 0 | Method registration + placeholder output contract | ✅ merged |
-| 1 | All stages stubbed, wired end-to-end (`perm_mt_p = 0.5`) | ✅ merged |
-| 2 | Real observed statistic (pivotal t) | 🚧 in progress |
-| 3 | Real cis/trans mask | ⏳ planned |
-| 4 | Real null subsampling | ⏳ planned |
-| 5 | Design-fixed Freedman–Lane (single permutation) | ⏳ planned |
-| 6 | Iterate permutations + streaming accumulation | ⏳ planned |
-| 7 | Real scoring (empirical p + floor) | ⏳ planned |
-| 8 | GPD tail (trans) | ⏳ planned |
-| 9 | Output finalization (`mt_t`, seed, `n_perm`, thresholding) | ⏳ planned |
-
-**Subsequent phases:** cis Beta-approximation (§3.4); a standalone evaluation script (calibration vs the analytic p, `ξ`/quantile convergence, null sanity); adaptive permutation count; and — last, and deliberately deferred — downstream selector and FDR integration.
+**Granular per-chunk status lives in the code, not this document.** Each stage function in `tecpg/permute.py` carries a `# CHUNK N` tag with `# STUB:` if not yet real, so the next stage to implement is the lowest-numbered stub. This document tracks status at phase level to stay accurate through routine merges.
 
 ---
 
@@ -198,11 +188,13 @@ Relevant options:
 
 ## 8. Limitations and open decisions
 
-- **Not yet functional.** Only the skeleton and (in progress) the observed statistic are implemented; `perm_mt_p` is placeholder until the pipeline is complete and validated.
+- **Not yet functional.** Scoring is not yet implemented, so `perm_mt_p` is a placeholder (`0.5`) until Phase 1 completes and is validated.
 - **Extrapolation ceiling.** p-values are trustworthy to the resolution the test count demands (§3.6); beyond that they are reported as `< threshold`, since the tail model's assumptions become the dominant uncertainty.
-- **Open — cis/trans mask reuse.** Whether the region-mask construction is factored into a shared helper (single source of truth, small edit to the qr path) or duplicated in `permute.py` (maximum isolation, divergence risk) is decided at chunk 3.
-- **Open — output-thresholding policy.** Which reported pairs are written (all vs a p-cutoff) at genome scale is decided at chunk 9; a computed p for every pair does not imply materializing `~2e10` rows.
-- **Open — downstream/FDR integration timing.** Deferred to a final phase, gated on method validation.
+- **Resolved — cis/trans mask reuse.** The region-mask logic is factored into a shared helper (`helper.py:compute_region_mask`) — a single source of truth for both the qr path and `permute.py`.
+- **Open — stratify-or-not calibration.** Whether to fit separate cis/trans nulls or a single global null is an empirical question, decided from the evaluation script (Phase 3): does the cis null diverge enough from trans to warrant the per-gene Beta machinery? The design assumes two strata (statistically motivated, §3.4); **coverage is all-pairs regardless of how this resolves.**
+- **Open — null-pair stratification.** Once streaming accumulation is real, the null pairs must be stratified to match the scored stratum (rather than the full unmasked cross product used while accumulation is a no-op).
+- **Open — output-thresholding policy.** Which reported pairs are written at genome scale (all vs a p-cutoff); a computed p for every pair does not imply materializing `~2e10` rows.
+- **Open — downstream/FDR integration timing.** Deferred to a final phase (Phase 4), gated on validation.
 
 ---
 
@@ -216,4 +208,4 @@ Relevant options:
 
 ---
 
-*This is a living document maintained alongside the implementation; update it as chunks land and as the open decisions above are resolved.*
+*This is a living document maintained alongside the implementation; update it as phases progress and as the open decisions above are resolved. Granular per-chunk status is tracked in the code (`tecpg/permute.py` stub comments), not here.*
