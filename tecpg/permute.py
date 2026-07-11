@@ -14,8 +14,36 @@ def _select_null_population(M, G, C, M_annot, G_annot, region,
                             window_base, downstream, upstream,
                             subsample_mt_count, subsample_g_count, seed, logger):
     # CHUNK 4: seeded uniform pair subsample for the NULL population.
-    # STUB: identity — return the full M, G (null population = all).
-    return M, G
+    if subsample_mt_count is None and subsample_g_count is None:
+        return M, G
+
+    rng = np.random.default_rng(seed)
+
+    if subsample_mt_count is None:
+        null_M = M
+    elif subsample_mt_count <= 0:
+        raise ValueError("qr_permute subsample mt_count must be positive; got {0}".format(subsample_mt_count))
+    elif subsample_mt_count > len(M):
+        logger.warning('Requested mt_count {0} > available {1} for null population; using full.', subsample_mt_count, len(M))
+        null_M = M
+    else:
+        idx = rng.choice(len(M), size=subsample_mt_count, replace=False)
+        idx.sort()
+        null_M = M.iloc[idx]
+
+    if subsample_g_count is None:
+        null_G = G
+    elif subsample_g_count <= 0:
+        raise ValueError("qr_permute subsample g_count must be positive; got {0}".format(subsample_g_count))
+    elif subsample_g_count > len(G):
+        logger.warning('Requested g_count {0} > available {1} for null population; using full.', subsample_g_count, len(G))
+        null_G = G
+    else:
+        idx = rng.choice(len(G), size=subsample_g_count, replace=False)
+        idx.sort()
+        null_G = G.iloc[idx]
+
+    return null_M, null_G
 
 
 def _compute_trans_mask(reported_pairs, M_annot, G_annot, region,
@@ -193,10 +221,15 @@ def tecpg_mlr_qr_permute(
     rng = np.random.default_rng(seed)
     n_samples = len(C)
 
+    null_pairs = pd.MultiIndex.from_product(
+        [null_M.index.astype(str), null_G.index.astype(str)],
+        names=['mt_id', 'gt_id'],
+    ).to_frame(index=False)
+
     for _ in range(permutations):
         perm_vector = rng.permutation(n_samples)
         G_perm = _residualize_and_permute(null_G, C, perm_vector, logger)
-        perm_stats = _compute_observed_statistic(M, G_perm, C, reported_pairs, logger)
+        perm_stats = _compute_observed_statistic(null_M, G_perm, C, null_pairs, logger)
         accumulator = _accumulate_null(perm_stats, accumulator, logger)
 
     empirical_p = _score_observed(observed_t, accumulator, logger)
