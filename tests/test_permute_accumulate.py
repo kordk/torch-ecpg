@@ -61,8 +61,12 @@ def test_accumulate_histogram_correctness():
     np.testing.assert_array_equal(acc['hist_counts'], expected_counts)
 
     # Verify overflow
-    expected_overflow = (a >= T_MAX).sum()
+    expected_overflow = (a > T_MAX).sum()
     assert acc['overflow_count'] == expected_overflow
+
+    # Boundary regression for T_MAX exact value
+    acc_edge = _accumulate_null(np.array([T_MAX, 5.0]), None, logger)
+    assert acc_edge['hist_counts'].sum() + acc_edge['overflow_count'] == acc_edge['total_count']
 
 def test_accumulate_topk_correctness():
     logger = Logger()
@@ -102,22 +106,6 @@ def test_accumulate_determinism(tmp_path):
     df2 = pd.read_csv(out2)
     pd.testing.assert_frame_equal(df1, df2)
 
-def test_accumulate_null_pair_stratification(tmp_path):
-    # Need to access the accumulator to verify counts, but it's not returned.
-    # We will test total permutations execution and trans pair count indirectly
-    # or by patching _accumulate_null. Let's patch it.
-
-    M, G, C = generate_data(sample_size=30, m_rows=15, g_rows=15, annotation=True, seed=42)
-    M_annot = M_annot.set_index("name")[["chrom", "chromStart"]]
-    M_annot["chromStart"] = M_annot["chromStart"].astype(int)
-    M_annot["chrom"] = M_annot["chrom"].astype(int)
-    G_annot = G_annot.set_index("name")[["chrom", "chromStart", "strand"]]
-    G_annot["chromStart"] = G_annot["chromStart"].astype(int)
-    G_annot["chrom"] = G_annot["chrom"].astype(int)
-    G_annot["strand"] = G_annot["strand"].replace({"+": 1, "-": -1}).astype(int)
-
-
-    # M_annot and G_annot should be returned by generate_data if annotation=True. Let's verify what generate_data returns.
 def test_accumulate_null_pair_stratification(tmp_path, monkeypatch):
     M, G, C, M_annot, G_annot = generate_data(sample_size=30, m_rows=15, g_rows=15, annotation=True, seed=42)
     M_annot = M_annot.set_index("name")[["chrom", "chromStart"]]

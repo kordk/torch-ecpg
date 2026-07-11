@@ -221,7 +221,7 @@ def _accumulate_null(permuted_stats, accumulator, logger):
     accumulator['hist_counts'] += counts
 
     # Overflow values
-    overflow = (a >= T_MAX).sum()
+    overflow = (a > T_MAX).sum()
     accumulator['overflow_count'] += int(overflow)
 
     accumulator['total_count'] += a.size
