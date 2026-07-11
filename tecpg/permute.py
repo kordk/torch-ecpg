@@ -26,8 +26,83 @@ def _compute_trans_mask(reported_pairs, M_annot, G_annot, region,
 
 def _compute_observed_statistic(M, G, C, reported_pairs, logger):
     # CHUNK 2: pivotal t = B/S per reported pair (reuse qr solve primitives).
-    # STUB: zeros, one per reported pair.
-    return np.zeros(len(reported_pairs), dtype=np.float64)
+    device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
+    dtype = DTYPE
+
+    if len(reported_pairs) == 0:
+        return np.array([], dtype=np.float32)
+
+    # Map to integer row positions
+    m_idx_str = pd.Index(M.index.astype(str))
+    g_idx_str = pd.Index(G.index.astype(str))
+
+    m_mapped = m_idx_str.get_indexer(reported_pairs['mt_id'].astype(str))
+    g_mapped = g_idx_str.get_indexer(reported_pairs['gt_id'].astype(str))
+
+    if (m_mapped == -1).any() or (g_mapped == -1).any():
+        raise ValueError("Some reported pairs contain IDs not found in M or G indices.")
+
+    P = len(reported_pairs)
+
+    # Degrees of freedom computation
+    nrows, ncols = C.shape[0], C.shape[1] + 1
+    df = nrows - ncols - 1
+
+    C_tensor = torch.tensor(C.to_numpy(), device=device, dtype=dtype)
+    M_tensor = torch.tensor(M.to_numpy(), device=device, dtype=dtype)
+    G_tensor = torch.tensor(G.to_numpy(), device=device, dtype=dtype)
+
+    M_subset = M_tensor[m_mapped]  # (P, S)
+    G_subset = G_tensor[g_mapped]  # (P, S)
+
+    S = nrows
+
+    # 1. Intercept
+    ones = torch.ones((P, S, 1), device=device, dtype=dtype)
+
+    # 2. Methylation
+    Mt = M_subset.unsqueeze(2)  # (P, S, 1)
+
+    # 3. Covariates
+    Ct = C_tensor.unsqueeze(0).expand(P, -1, -1)  # (P, S, K_covars)
+
+    # X design matrix: (P, S, K)
+    X = torch.cat((ones, Mt, Ct), dim=2)
+
+    # Y response matrix: (P, S, 1)
+    Y = G_subset.unsqueeze(2)
+
+    # QR solve
+    Q, R = torch.linalg.qr(X, mode='reduced')
+
+    K_dim = X.shape[2]
+
+    R_inv = torch.linalg.solve_triangular(
+        R,
+        torch.eye(K_dim, device=device, dtype=dtype).expand(P, -1, -1),
+        upper=True
+    )
+
+    XtXi_diag_sqrt = (R_inv.pow(2).sum(dim=2)).sqrt()
+
+    QtY = torch.einsum('psk,psg->pkg', Q, Y)
+
+    B = R_inv.matmul(QtY)
+
+    Y_norm_sq = (Y * Y).sum(dim=1)
+    QtY_norm_sq = (QtY * QtY).sum(dim=1)
+
+    RSS = (Y_norm_sq - QtY_norm_sq).clamp_min(0)
+
+    Sigma = (RSS / df).sqrt().unsqueeze(1)
+    S_err = XtXi_diag_sqrt.unsqueeze(2) * Sigma
+
+    T = B / S_err
+
+    # Slice methylation coefficient at index 1
+    t_meth = T[:, 1, 0]
+
+    return t_meth.cpu().numpy()
 
 
 def _residualize_and_permute(G, C, perm_vector, logger):
