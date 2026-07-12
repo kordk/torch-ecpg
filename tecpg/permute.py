@@ -316,6 +316,18 @@ def _fit_tail(empirical_p, observed_stats, null_accumulator, logger):
     return perm_mt_p
 
 
+def _finalize_output(reported_pairs, observed_stats, perm_mt_p, seed, n_perm,
+                     output_p_threshold, logger):
+    df = reported_pairs.copy()
+    df['mt_t'] = np.asarray(observed_stats, dtype=np.float64)
+    df['perm_mt_p'] = np.asarray(perm_mt_p, dtype=np.float64)
+    df['seed'] = seed
+    df['n_perm'] = n_perm
+    if output_p_threshold is not None:
+        df = df[df['perm_mt_p'] <= output_p_threshold].reset_index(drop=True)
+    return df
+
+
 def tecpg_mlr_qr_permute(
     M, G, C,
     M_annot=None, G_annot=None,
@@ -324,7 +336,7 @@ def tecpg_mlr_qr_permute(
     permutations=100,
     subsample_mt_count=None, subsample_g_count=None,
     seed=42,
-    output_file=None, output_format='auto',
+    output_file=None, output_format='auto', output_p_threshold=None,
     thermal_threshold=80, thermal_wait=30,
     logger=None,
 ):
@@ -336,6 +348,11 @@ def tecpg_mlr_qr_permute(
             "qr_permute requires methylation and expression annotations to build the "
             "chromosome-stratified (trans) null; none were provided."
         )
+
+    if seed is None:
+        seed = int(np.random.SeedSequence().generate_state(1)[0])
+        logger.info("No seed provided; generated seed={0} (recorded with outputs).", seed)
+    seed = int(seed)
 
     logger.info("Starting qr_permute with permutations={0}, seed={1}, output_file={2}", permutations, seed, output_file)
 
@@ -379,8 +396,9 @@ def tecpg_mlr_qr_permute(
     empirical_p = _score_observed(observed_t, accumulator, logger)
     perm_mt_p = _fit_tail(empirical_p, observed_t, accumulator, logger)
 
-    # Add final permutation p-values to dataframe
-    reported_pairs['perm_mt_p'] = perm_mt_p
+    n_reported = len(reported_pairs)
+
+    final_df = _finalize_output(reported_pairs, observed_t, perm_mt_p, seed, permutations, output_p_threshold, logger)
 
     # Honor output format
     if output_format == 'auto':
@@ -392,9 +410,17 @@ def tecpg_mlr_qr_permute(
 
     if ext == 'parquet' or (output_file and output_file.endswith('.parquet')):
         # Use pyarrow to write parquet
-        table = pa.Table.from_pandas(reported_pairs)
-        pq.write_table(table, output_file)
+        table = pa.Table.from_pandas(final_df)
+        existing = table.schema.metadata or {}
+        new_meta = {
+            **existing,
+            b'tecpg_perm_seed': str(seed).encode(),
+            b'tecpg_perm_n_perm': str(permutations).encode(),
+            b'tecpg_perm_n_reported': str(n_reported).encode(),
+        }
+        table = table.replace_schema_metadata(new_meta)
+        pq.write_table(table, output_file, compression='snappy')
     else:
-        reported_pairs.to_csv(output_file, index=False)
+        final_df.to_csv(output_file, index=False)
 
-    logger.info("Finished qr_permute, wrote {0} pairs to {1}", len(reported_pairs), output_file)
+    logger.info("Finished qr_permute, wrote {0} of {1} reported pairs to {2}", len(final_df), n_reported, output_file)
