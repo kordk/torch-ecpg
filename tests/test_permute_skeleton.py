@@ -34,7 +34,7 @@ def test_permute_skeleton_end_to_end(tmp_path, annotated_fixture):
     df = pd.read_csv(output_file)
 
     # Assert correct columns (schema)
-    expected_cols = ['mt_id', 'gt_id', 'perm_mt_p']
+    expected_cols = ['mt_id', 'gt_id', 'mt_t', 'perm_mt_p', 'seed', 'n_perm']
     assert list(df.columns) == expected_cols
 
     # Assert row count = |M| x |G|
@@ -45,3 +45,9 @@ def test_permute_skeleton_end_to_end(tmp_path, annotated_fixture):
     assert (df['perm_mt_p'] > 0).all()
     assert (df['perm_mt_p'] <= 1.0).all()
     assert df['perm_mt_p'].nunique() > 1
+
+    # Assert additional columns
+    import numpy as np
+    assert np.isfinite(df['mt_t']).all()
+    assert (df['seed'] == 42).all()
+    assert (df['n_perm'] == 10).all()
