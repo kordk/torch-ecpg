@@ -9,6 +9,13 @@ from .config import get_device, DTYPE
 from .logger import Logger
 from .helper import compute_region_mask
 
+# CHUNK 6: Provisional calibration constants for null accumulation.
+# These dictate the memory bounds of the streaming accumulator.
+# They will be revisited/finalized in Chunk 8 based on convergence evidence.
+T_MAX = 10.0
+N_BINS = 1000
+TOPK_CAPACITY = 10_000
+
 
 def _select_null_population(M, G, C, M_annot, G_annot, region,
                             window_base, downstream, upstream,
@@ -197,7 +204,35 @@ def _residualize_and_permute(G, C, perm_vector, logger):
 
 def _accumulate_null(permuted_stats, accumulator, logger):
     # CHUNK 6: streaming t-histogram + tail-exceedance buffer.
-    # STUB: no-op — return accumulator unchanged.
+    if accumulator is None:
+        accumulator = {
+            'bin_edges': np.linspace(0, T_MAX, N_BINS + 1, dtype=np.float64),
+            'hist_counts': np.zeros(N_BINS, dtype=np.int64),
+            'overflow_count': 0,
+            'total_count': 0,
+            'topk_values': np.array([], dtype=np.float64),
+            'topk_capacity': TOPK_CAPACITY
+        }
+
+    a = np.abs(permuted_stats).astype(np.float64)
+
+    # Histogram the values
+    counts, _ = np.histogram(a, bins=accumulator['bin_edges'])
+    accumulator['hist_counts'] += counts
+
+    # Overflow values
+    overflow = (a > T_MAX).sum()
+    accumulator['overflow_count'] += int(overflow)
+
+    accumulator['total_count'] += a.size
+
+    # Merge into topk buffer
+    merged = np.concatenate([accumulator['topk_values'], a])
+    if merged.size <= accumulator['topk_capacity']:
+        accumulator['topk_values'] = merged
+    else:
+        accumulator['topk_values'] = np.partition(merged, -accumulator['topk_capacity'])[-accumulator['topk_capacity']:]
+
     return accumulator
 
 
@@ -256,6 +291,13 @@ def tecpg_mlr_qr_permute(
         [null_M.index.astype(str), null_G.index.astype(str)],
         names=['mt_id', 'gt_id'],
     ).to_frame(index=False)
+
+    if M_annot is None or G_annot is None:
+        logger.warning("No annotations provided; null distribution will not be stratified (using all pairs).")
+    else:
+        trans_mask_null = _compute_trans_mask(null_pairs, M_annot, G_annot, 'trans',
+                                              window_base, downstream, upstream, logger)
+        null_pairs = null_pairs[trans_mask_null].reset_index(drop=True)
 
     for _ in range(permutations):
         perm_vector = rng.permutation(n_samples)
