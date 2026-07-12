@@ -31,11 +31,19 @@ def test_continuity_at_threshold():
 
     u = acc['topk_values'].min()
 
-    # Check that at exactly `u`, the returned p-value from `_fit_tail` equals `_score_observed`
+    # Check that at `u` and `u + epsilon`, the GPD and empirical pieces match (N_u / N)
     emp_p = _score_observed([u], acc, logger)
-    tail_p = _fit_tail(emp_p, [u], acc, logger)
 
-    assert np.isclose(emp_p[0], tail_p[0], atol=1e-7)
+    # Evaluate at a tiny bit above u, so we evaluate the GPD branch `abs_obs > u`
+    obs_just_above = np.array([u + 1e-9])
+    emp_p_just_above = _score_observed(obs_just_above, acc, logger)
+    tail_p_gpd = _fit_tail(emp_p_just_above, obs_just_above, acc, logger)
+
+    # Expected empirical value at exactly u is simply N_u / N (if no ties exactly on boundaries, this is what empirical calculates)
+    # The GPD evaluation should meet it continuously.
+    # We test it against exactly N_u / N, which should be what _score_observed returns if we aren't at bin boundaries, but to be sure we just test it against the math.
+    expected_p_u = acc['topk_values'].size / acc['total_count']
+    assert np.isclose(expected_p_u, tail_p_gpd[0], atol=1e-7)
 
 
 def test_monotonicity_across_handoff():
