@@ -238,8 +238,30 @@ def _accumulate_null(permuted_stats, accumulator, logger):
 
 def _score_observed(observed_stats, null_accumulator, logger):
     # CHUNK 7: empirical two-sided p = frac(null |t| >= observed |t|), floored 1/(N+1).
-    # STUB: 0.5 for every reported pair.
-    return np.full(len(observed_stats), 0.5, dtype=np.float64)
+    acc = null_accumulator
+    if acc is None or acc['total_count'] <= 0:
+        raise ValueError("Empty null accumulator; cannot score observed statistics.")
+
+    N = acc['total_count']
+    bin_edges = acc['bin_edges']
+    hist = acc['hist_counts']
+    overflow = acc['overflow_count']
+    n_bins = hist.size
+
+    abs_obs = np.abs(np.asarray(observed_stats, dtype=np.float64))   # two-sided: fold to |t|
+
+    # rev[i] = count of null |t| in bin i and all higher bins
+    rev = np.cumsum(hist[::-1])[::-1]
+
+    # bin index containing each observed value (conservative: count that whole bin + above)
+    b = np.searchsorted(bin_edges, abs_obs, side='right') - 1        # in [-1 .. n_bins]
+    in_range = b < n_bins                                            # False => |t| beyond T_MAX
+    b_clipped = np.clip(b, 0, n_bins - 1)
+    count = np.where(in_range, rev[b_clipped], 0) + overflow
+
+    p = count / N
+    p = np.maximum(p, 1.0 / (N + 1))                                 # empirical floor
+    return p
 
 
 def _fit_tail(empirical_p, null_accumulator, logger):
@@ -262,6 +284,12 @@ def tecpg_mlr_qr_permute(
 ):
     if logger is None:
         logger = Logger()
+
+    if M_annot is None or G_annot is None:
+        raise ValueError(
+            "qr_permute requires methylation and expression annotations to build the "
+            "chromosome-stratified (trans) null; none were provided."
+        )
 
     logger.info("Starting qr_permute with permutations={0}, seed={1}, output_file={2}", permutations, seed, output_file)
 
@@ -292,12 +320,9 @@ def tecpg_mlr_qr_permute(
         names=['mt_id', 'gt_id'],
     ).to_frame(index=False)
 
-    if M_annot is None or G_annot is None:
-        logger.warning("No annotations provided; null distribution will not be stratified (using all pairs).")
-    else:
-        trans_mask_null = _compute_trans_mask(null_pairs, M_annot, G_annot, 'trans',
-                                              window_base, downstream, upstream, logger)
-        null_pairs = null_pairs[trans_mask_null].reset_index(drop=True)
+    trans_mask_null = _compute_trans_mask(null_pairs, M_annot, G_annot, 'trans',
+                                          window_base, downstream, upstream, logger)
+    null_pairs = null_pairs[trans_mask_null].reset_index(drop=True)
 
     for _ in range(permutations):
         perm_vector = rng.permutation(n_samples)
