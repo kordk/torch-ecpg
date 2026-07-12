@@ -2,6 +2,40 @@
 
 This directory contains validation, regression, performance, and smoke tests for the `tecpg` pipeline and its associated tools. The tests are organized below by theme.
 
+## Running the tests
+
+Most tests import `tecpg`, so install the package in editable mode first and
+run the tests from this `tests/` directory:
+
+```bash
+# from the repository root
+pip install --editable .
+
+cd tests
+```
+
+The suite is a mix of `pytest`-style tests, `unittest` modules, plain
+executable scripts, and shell scripts. The individual "How to run" lines below
+give the exact command for each file. The Python tests are all `pytest`
+compatible, so the quickest way to run the whole Python suite is:
+
+```bash
+# from the tests/ directory
+pytest
+```
+
+You can also run a single file or a single test:
+
+```bash
+pytest test_permute_skeleton.py
+pytest test_permute_subsample.py::test_select_null_population_determinism
+```
+
+The tests are deterministic and run on CPU; a GPU is not required (GPU-specific
+behavior is mocked). Running `pytest` requires `pytest` to be installed
+(`pip install pytest`); the shell scripts (`*.sh`) are run directly and are not
+collected by `pytest`.
+
 ## 1. Accuracy and Method Comparison
 
 These tests validate the mathematical correctness of `tecpg`'s regression implementations against established statistical libraries (like `statsmodels`) and ensure consistency across different backend methods.
@@ -19,6 +53,10 @@ These tests validate the mathematical correctness of `tecpg`'s regression implem
   - **Reference artifact:** `fingerprint_all_pipeline.json` is the *only* committed reference (no stored output parquets, no network access). Regenerating it re-blesses structure and requires a reviewed reason.
   - **How to run:** `pytest test_correctness_harness.py`
   - **Regenerate fingerprint:** `python tests/test_correctness_harness.py --regenerate-fingerprint`
+- **`test_bootstrap_qr.py`**
+  - **Purpose:** Validates the `qr_bootstrap` MLR backend (`tecpg/bootstrap.py`). Confirms the batched QR + triangular-solve regression matches `torch.linalg.lstsq` on well-conditioned inputs and behaves on degenerate designs, runs the bootstrap end-to-end, and checks that the CLI forwards integrated-gradients kwargs and the default output filename.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_bootstrap_qr.py`
 - **`test_recalculate_pvalues.py`**
   - **Purpose:** Verifies that the internal helper script for recalculating p-values correctly applies the Student's t-distribution survival function.
   - **Output:** Test pass/fail output from `unittest`.
@@ -113,6 +151,37 @@ Basic verification scripts to quickly determine if the environment is set up cor
   - **Purpose:** End-to-end smoke test validating the CPU-only execution path (`--host-profile minimum`) on a synthetic dataset.
   - **Output:** Console output detailing the pipeline steps and assertion results.
   - **How to run:** `./test_minimal_config.sh`
+
+## 6. Permutation Testing
+
+These tests cover the permutation-based null-distribution backend
+(`tecpg/permute.py`), which estimates empirical p-values by permuting samples
+and accumulating a null statistic distribution.
+
+- **`test_permute_skeleton.py`**
+  - **Purpose:** End-to-end smoke test of `tecpg_mlr_qr_permute` on a small synthetic fixture, asserting the output file is written with the expected schema and row count.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_skeleton.py`
+- **`test_permute_oracle.py`**
+  - **Purpose:** Differential/oracle test comparing `_compute_observed_statistic` (batched QR regression) against a hand-rolled plain OLS t-statistic to confirm the observed statistics match.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_oracle.py`
+- **`test_permute_residualize.py`**
+  - **Purpose:** Verifies the `_residualize_and_permute` step: an oracle check against a strong-covariate fixture, an identity invariant, and determinism under a fixed seed.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_residualize.py`
+- **`test_permute_accumulate.py`**
+  - **Purpose:** Tests `_accumulate_null` for memory-bounded streaming accumulation (histogram + bounded top-k), histogram and top-k correctness, determinism, per-pair stratification, and calibration sanity.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_accumulate.py`
+- **`test_permute_subsample.py`**
+  - **Purpose:** Tests `_select_null_population` subsampling behavior (correct subset sizes, determinism, warning/full-population fallback, zero-count errors) and permutation with subsampling enabled.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_subsample.py`
+- **`test_permute_mask.py`**
+  - **Purpose:** Verifies `_compute_trans_mask` cis/trans classification semantics using chromosome and position annotations.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_mask.py`
 
 ## Troubleshooting
 
