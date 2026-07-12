@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import scipy.stats
 import torch
 from typing import Literal
 from .config import get_device, DTYPE
@@ -264,10 +265,55 @@ def _score_observed(observed_stats, null_accumulator, logger):
     return p
 
 
-def _fit_tail(empirical_p, null_accumulator, logger):
+def _fit_gpd(exc):
+    """
+    Fit a Generalized Pareto Distribution to threshold exceedances.
+    Returns (xi, sigma) where xi is the shape parameter and sigma is the scale parameter.
+    """
+    xi, _, sigma = scipy.stats.genpareto.fit(exc, floc=0)
+    return xi, sigma
+
+def _fit_tail(empirical_p, observed_stats, null_accumulator, logger):
     # CHUNK 8: generalized-Pareto tail (float64) extending p below the empirical floor.
-    # STUB: passthrough — return empirical_p unchanged.
-    return empirical_p
+    acc = null_accumulator
+    if acc is None or acc['total_count'] <= 0:
+        return empirical_p
+
+    N = acc['total_count']
+    topk = acc['topk_values']
+
+    if topk.size == 0:
+        return empirical_p
+
+    # PROVISIONAL: threshold u = min(topk) uses all retained exceedances. A higher u
+    # may be warranted — to be informed by the eval script's xi-convergence diagnostic.
+    u = topk.min()
+    N_u = topk.size
+
+    exc = topk[topk > u] - u
+
+    if exc.size < 50:
+        logger.warning("GPD tail fit skipped: only {0} exceedances above threshold (need >= 50); returning empirical p-values.", exc.size)
+        return empirical_p
+
+    xi, sigma = _fit_gpd(exc)
+
+    if not (np.isfinite(xi) and np.isfinite(sigma)):
+        logger.warning("GPD tail fit produced non-finite parameters (xi={0}, sigma={1}); returning empirical p-values.", xi, sigma)
+        return empirical_p
+
+    abs_obs = np.abs(np.asarray(observed_stats, dtype=np.float64))
+
+    # Calculate GPD tail probability
+    p_gpd = (N_u / N) * scipy.stats.genpareto.sf(abs_obs - u, xi, loc=0, scale=sigma)
+
+    # Clamp to strictly-positive floor
+    tiny = np.finfo(np.float64).tiny
+    p_gpd = np.maximum(p_gpd, tiny)
+
+    # GPD in the tail, empirical in the bulk
+    perm_mt_p = np.where(abs_obs > u, p_gpd, empirical_p)
+    return perm_mt_p
 
 
 def tecpg_mlr_qr_permute(
@@ -331,7 +377,7 @@ def tecpg_mlr_qr_permute(
         accumulator = _accumulate_null(perm_stats, accumulator, logger)
 
     empirical_p = _score_observed(observed_t, accumulator, logger)
-    perm_mt_p = _fit_tail(empirical_p, accumulator, logger)
+    perm_mt_p = _fit_tail(empirical_p, observed_t, accumulator, logger)
 
     # Add final permutation p-values to dataframe
     reported_pairs['perm_mt_p'] = perm_mt_p
