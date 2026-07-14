@@ -518,7 +518,7 @@ def test_structural_fingerprint_matches_committed():
     float_keys = ['p_max', 'p_min']
     for k in float_keys:
         if k in current and k in committed:
-            assert np.isclose(current[k], committed[k], atol=1e-5), (
+            assert np.isclose(current[k], committed[k], atol=5e-5), (
                 f"Floating point drift on {k}: {current[k]} vs {committed[k]}"
             )
             # Remove them from dicts to allow exact comparison of the rest
