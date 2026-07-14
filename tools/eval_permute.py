@@ -33,24 +33,20 @@ def fit_gpd(data, u):
     Fits Generalized Pareto Distribution to data > u using method of moments or MLE.
     This is a standalone stub/fitter used by the sidecar-gated arm.
     """
-    exceedances = data[data > u] - u
-    if len(exceedances) < 5:
+    exc = data[data > u] - u
+    if exc.size < 50:
         return np.nan, np.nan
 
-    # Simple Method of Moments (MoM) as a robust fallback/fitter
-    mean_ex = np.mean(exceedances)
-    var_ex = np.var(exceedances, ddof=1)
-
-    # MoM estimators for GPD
-    xi = 0.5 * (1 - (mean_ex**2) / var_ex)
-    sigma = 0.5 * mean_ex * (1 + (mean_ex**2) / var_ex)
-
-    return xi, sigma
+    xi, _, sigma = scipy.stats.genpareto.fit(exc, floc=0)
+    return float(xi), float(sigma)
 
 # ==============================================================================
 # DIAGNOSTICS & ARMS
 # ==============================================================================
-def compute_calibration_stats(t_vals, p_perm, df_val, p_ana, is_bulk, is_tail):
+def compute_analytic_p(t, df):
+    return 2.0 * scipy.stats.t.sf(np.abs(np.asarray(t, dtype=np.float64)), df)
+
+def compute_calibration_stats(t_vals, p_perm, p_ana, is_bulk, is_tail):
     """Arm A.a: Calibration"""
     stats = {}
 
@@ -97,6 +93,26 @@ def compute_calibration_stats(t_vals, p_perm, df_val, p_ana, is_bulk, is_tail):
         stats['tail_90th_log_ratio'] = None
 
     return stats
+
+def _canon_chrom(arr):
+    s = pd.Series(arr).astype(str).str.strip()
+    s = s.str.replace(r'^chr', '', regex=True, case=False)
+    return s.to_numpy()
+
+def label_strata(output, m_annot, g_annot):
+    m_mapped = m_annot.index.astype(str).get_indexer(output['mt_id'].astype(str))
+    g_mapped = g_annot.index.astype(str).get_indexer(output['gt_id'].astype(str))
+
+    if (m_mapped == -1).any() or (g_mapped == -1).any():
+        raise ValueError("Reported mt_id/gt_id missing from annotations.")
+
+    m_chrom = _canon_chrom(m_annot.iloc[m_mapped]['chrom'].to_numpy())
+    g_chrom = _canon_chrom(g_annot.iloc[g_mapped]['chrom'].to_numpy())
+
+    is_cis = (m_chrom == g_chrom)
+    is_trans = ~is_cis
+
+    return is_cis, is_trans, int(is_cis.sum()), int(is_trans.sum())
 
 def calculate_genomic_inflation(t_vals):
     """Arm A.c: Genomic Inflation Lambda"""
@@ -158,16 +174,12 @@ def main():
         print(f"Error: Missing columns in permutation output. Requires {required_cols}", file=sys.stderr)
         sys.exit(1)
 
-    # Map Chromosomes
-    m_mapped = m_annot.index.astype(str).get_indexer(output['mt_id'].astype(str))
-    g_mapped = g_annot.index.astype(str).get_indexer(output['gt_id'].astype(str))
 
-    if (m_mapped == -1).any() or (g_mapped == -1).any():
-        print("Error: Reported mt_id/gt_id missing from annotations.", file=sys.stderr)
+    try:
+        is_cis, is_trans, n_cis, n_trans = label_strata(output, m_annot, g_annot)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-    m_chrom = m_annot.iloc[m_mapped]['chrom'].to_numpy()
-    g_chrom = g_annot.iloc[g_mapped]['chrom'].to_numpy()
 
     # -------------------------------------------------------------------------
     # Core Data Extraction
@@ -177,11 +189,8 @@ def main():
     df_val = args.df
 
     # Precise analytic ref
-    p_ana = 2.0 * scipy.stats.t.sf(np.abs(t), df_val)
+    p_ana = compute_analytic_p(t, df_val)
 
-    # Strata
-    is_cis = (m_chrom == g_chrom)
-    is_trans = ~is_cis
 
     # Bands
     is_bulk = (p_ana >= args.bulk_lo) & (p_ana <= args.bulk_hi)
@@ -190,6 +199,8 @@ def main():
     report = {
         "metadata": {
             "n_pairs": len(t),
+            "n_cis": n_cis,
+            "n_trans": n_trans,
             "df": df_val,
             "bulk_lo": args.bulk_lo,
             "bulk_hi": args.bulk_hi,
@@ -204,11 +215,11 @@ def main():
     calib = {}
 
     # all
-    calib['all'] = compute_calibration_stats(t, p_perm, df_val, p_ana, is_bulk, is_tail)
+    calib['all'] = compute_calibration_stats(t, p_perm, p_ana, is_bulk, is_tail)
     # cis
-    calib['cis'] = compute_calibration_stats(t[is_cis], p_perm[is_cis], df_val, p_ana[is_cis], is_bulk[is_cis], is_tail[is_cis])
+    calib['cis'] = compute_calibration_stats(t[is_cis], p_perm[is_cis], p_ana[is_cis], is_bulk[is_cis], is_tail[is_cis])
     # trans
-    calib['trans'] = compute_calibration_stats(t[is_trans], p_perm[is_trans], df_val, p_ana[is_trans], is_bulk[is_trans], is_tail[is_trans])
+    calib['trans'] = compute_calibration_stats(t[is_trans], p_perm[is_trans], p_ana[is_trans], is_bulk[is_trans], is_tail[is_trans])
 
     # Downsampled QQ Data (All)
     n_qq = min(len(t), 5000)
