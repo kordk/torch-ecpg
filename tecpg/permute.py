@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import scipy.stats
 import torch
 from typing import Literal
 from .config import get_device, DTYPE
@@ -264,10 +265,67 @@ def _score_observed(observed_stats, null_accumulator, logger):
     return p
 
 
-def _fit_tail(empirical_p, null_accumulator, logger):
+def _fit_gpd(exc):
+    """
+    Fit a Generalized Pareto Distribution to threshold exceedances.
+    Returns (xi, sigma) where xi is the shape parameter and sigma is the scale parameter.
+    """
+    xi, _, sigma = scipy.stats.genpareto.fit(exc, floc=0)
+    return xi, sigma
+
+def _fit_tail(empirical_p, observed_stats, null_accumulator, logger):
     # CHUNK 8: generalized-Pareto tail (float64) extending p below the empirical floor.
-    # STUB: passthrough — return empirical_p unchanged.
-    return empirical_p
+    acc = null_accumulator
+    if acc is None or acc['total_count'] <= 0:
+        return empirical_p
+
+    N = acc['total_count']
+    topk = acc['topk_values']
+
+    if topk.size == 0:
+        return empirical_p
+
+    # PROVISIONAL: threshold u = min(topk) uses all retained exceedances. A higher u
+    # may be warranted — to be informed by the eval script's xi-convergence diagnostic.
+    u = topk.min()
+    N_u = topk.size
+
+    exc = topk[topk > u] - u
+
+    if exc.size < 50:
+        logger.warning("GPD tail fit skipped: only {0} exceedances above threshold (need >= 50); returning empirical p-values.", exc.size)
+        return empirical_p
+
+    xi, sigma = _fit_gpd(exc)
+
+    if not (np.isfinite(xi) and np.isfinite(sigma)):
+        logger.warning("GPD tail fit produced non-finite parameters (xi={0}, sigma={1}); returning empirical p-values.", xi, sigma)
+        return empirical_p
+
+    abs_obs = np.abs(np.asarray(observed_stats, dtype=np.float64))
+
+    # Calculate GPD tail probability
+    p_gpd = (N_u / N) * scipy.stats.genpareto.sf(abs_obs - u, xi, loc=0, scale=sigma)
+
+    # Clamp to strictly-positive floor
+    tiny = np.finfo(np.float64).tiny
+    p_gpd = np.maximum(p_gpd, tiny)
+
+    # GPD in the tail, empirical in the bulk
+    perm_mt_p = np.where(abs_obs > u, p_gpd, empirical_p)
+    return perm_mt_p
+
+
+def _finalize_output(reported_pairs, observed_stats, perm_mt_p, seed, n_perm,
+                     output_p_threshold, logger):
+    df = reported_pairs.copy()
+    df['mt_t'] = np.asarray(observed_stats, dtype=np.float64)
+    df['perm_mt_p'] = np.asarray(perm_mt_p, dtype=np.float64)
+    df['seed'] = seed
+    df['n_perm'] = n_perm
+    if output_p_threshold is not None:
+        df = df[df['perm_mt_p'] <= output_p_threshold].reset_index(drop=True)
+    return df
 
 
 def tecpg_mlr_qr_permute(
@@ -278,7 +336,7 @@ def tecpg_mlr_qr_permute(
     permutations=100,
     subsample_mt_count=None, subsample_g_count=None,
     seed=42,
-    output_file=None, output_format='auto',
+    output_file=None, output_format='auto', output_p_threshold=None,
     thermal_threshold=80, thermal_wait=30,
     logger=None,
 ):
@@ -290,6 +348,11 @@ def tecpg_mlr_qr_permute(
             "qr_permute requires methylation and expression annotations to build the "
             "chromosome-stratified (trans) null; none were provided."
         )
+
+    if seed is None:
+        seed = int(np.random.SeedSequence().generate_state(1)[0])
+        logger.info("No seed provided; generated seed={0} (recorded with outputs).", seed)
+    seed = int(seed)
 
     logger.info("Starting qr_permute with permutations={0}, seed={1}, output_file={2}", permutations, seed, output_file)
 
@@ -331,10 +394,11 @@ def tecpg_mlr_qr_permute(
         accumulator = _accumulate_null(perm_stats, accumulator, logger)
 
     empirical_p = _score_observed(observed_t, accumulator, logger)
-    perm_mt_p = _fit_tail(empirical_p, accumulator, logger)
+    perm_mt_p = _fit_tail(empirical_p, observed_t, accumulator, logger)
 
-    # Add final permutation p-values to dataframe
-    reported_pairs['perm_mt_p'] = perm_mt_p
+    n_reported = len(reported_pairs)
+
+    final_df = _finalize_output(reported_pairs, observed_t, perm_mt_p, seed, permutations, output_p_threshold, logger)
 
     # Honor output format
     if output_format == 'auto':
@@ -346,9 +410,17 @@ def tecpg_mlr_qr_permute(
 
     if ext == 'parquet' or (output_file and output_file.endswith('.parquet')):
         # Use pyarrow to write parquet
-        table = pa.Table.from_pandas(reported_pairs)
-        pq.write_table(table, output_file)
+        table = pa.Table.from_pandas(final_df)
+        existing = table.schema.metadata or {}
+        new_meta = {
+            **existing,
+            b'tecpg_perm_seed': str(seed).encode(),
+            b'tecpg_perm_n_perm': str(permutations).encode(),
+            b'tecpg_perm_n_reported': str(n_reported).encode(),
+        }
+        table = table.replace_schema_metadata(new_meta)
+        pq.write_table(table, output_file, compression='snappy')
     else:
-        reported_pairs.to_csv(output_file, index=False)
+        final_df.to_csv(output_file, index=False)
 
-    logger.info("Finished qr_permute, wrote {0} pairs to {1}", len(reported_pairs), output_file)
+    logger.info("Finished qr_permute, wrote {0} of {1} reported pairs to {2}", len(final_df), n_reported, output_file)

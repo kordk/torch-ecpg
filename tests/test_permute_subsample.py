@@ -102,7 +102,7 @@ def test_permute_with_subsample(tmp_path):
     assert os.path.exists(output_file)
     df = pd.read_csv(output_file)
 
-    expected_cols = ['mt_id', 'gt_id', 'perm_mt_p']
+    expected_cols = ['mt_id', 'gt_id', 'mt_t', 'perm_mt_p', 'seed', 'n_perm']
     assert list(df.columns) == expected_cols
 
     expected_rows = len(M) * len(G)
