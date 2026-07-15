@@ -18,6 +18,56 @@ N_BINS = 1000
 TOPK_CAPACITY = 10_000
 
 
+def _normalize_annotations(M_annot, G_annot, M, G, logger):
+    def map_chrom(s):
+        # Allow pass-through of integer columns
+        if pd.api.types.is_integer_dtype(s):
+            return s
+        s = s.astype('string').str.strip()
+        s = s
+        s = s.str.upper()
+        s = s.str.replace(r'^chr', '', regex=True, case=False)
+        num = pd.to_numeric(s, errors='coerce')
+        spec = s.map({'X': -1, 'Y': -2, 'MT': -3, 'M': -3})
+        return num.fillna(spec)
+
+    M_annot_n = M_annot.copy()
+    G_annot_n = G_annot.copy()
+
+    M_annot_n['chrom'] = map_chrom(M_annot_n['chrom'])
+    G_annot_n['chrom'] = map_chrom(G_annot_n['chrom'])
+
+    if hasattr(G_annot_n['strand'], "replace"):
+        G_annot_n['strand'] = pd.to_numeric(G_annot_n['strand'].replace({'+': 1, '-': -1}), errors='coerce')
+
+    M_annot_n = M_annot_n[['chrom', 'chromStart']]
+    G_annot_n = G_annot_n[['chrom', 'chromStart', 'strand']]
+
+    M_loci_before = len(M.index)
+    M_annot_n = M_annot_n.reindex(M.index).dropna()
+    logger.info(
+        'Drop site permute._normalize_annotations[M_annot]: dropped methylation loci with '
+        'missing/unmappable annotation: {0} -> {1} ({2} dropped)',
+        M_loci_before, len(M_annot_n), M_loci_before - len(M_annot_n)
+    )
+
+    G_loci_before = len(G.index)
+    G_annot_n = G_annot_n.reindex(G.index).dropna()
+    logger.info(
+        'Drop site permute._normalize_annotations[G_annot]: dropped gene expression loci with '
+        'missing/unmappable annotation: {0} -> {1} ({2} dropped)',
+        G_loci_before, len(G_annot_n), G_loci_before - len(G_annot_n)
+    )
+
+    if len(M_annot_n) == 0 or len(G_annot_n) == 0:
+        raise ValueError("Normalization dropped all loci on one or both axes.")
+
+    M_n = M.loc[M_annot_n.index]
+    G_n = G.loc[G_annot_n.index]
+
+    return M_annot_n, G_annot_n, M_n, G_n
+
+
 def _select_null_population(M, G, C, M_annot, G_annot, region,
                             window_base, downstream, upstream,
                             subsample_mt_count, subsample_g_count, seed, logger):
@@ -353,6 +403,8 @@ def tecpg_mlr_qr_permute(
         seed = int(np.random.SeedSequence().generate_state(1)[0])
         logger.info("No seed provided; generated seed={0} (recorded with outputs).", seed)
     seed = int(seed)
+
+    M_annot, G_annot, M, G = _normalize_annotations(M_annot, G_annot, M, G, logger)
 
     logger.info("Starting qr_permute with permutations={0}, seed={1}, output_file={2}", permutations, seed, output_file)
 
