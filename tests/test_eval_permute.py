@@ -40,8 +40,12 @@ def test_analytic_p_oracle():
         assert np.isclose(p_ana, expected_p, atol=1e-8), f"Failed for t={t_val}, df={df}: got {p_ana}, expected {expected_p}"
 
 # ==============================================================================
-# ORACLE 2: GPD-RECOVERY():
+# ORACLE 2: GPD-RECOVERY
+# ==============================================================================
+def test_gpd_recovery_oracle():
     """
+    Draw genpareto samples with known (xi, sigma), fit via the script's fitter,
+    assert recovery within a stated tolerance. Includes a xi approx 0 case.
     Draw genpareto samples with known (xi, sigma), fit via the script's fitter,
     assert recovery within a stated tolerance. Includes a xi approx 0 case.
     """
@@ -61,7 +65,6 @@ def test_analytic_p_oracle():
 
         fit_xi, fit_sigma = ep.fit_gpd(data, u)
 
-        # Method of moments is roughly robust but we need a loose tolerance for it
         assert np.isclose(fit_xi, xi, atol=0.02), f"Failed xi recovery: expected {xi}, got {fit_xi}"
         assert np.isclose(fit_sigma, sigma, atol=0.02), f"Failed sigma recovery: expected {sigma}, got {fit_sigma}"
 
@@ -189,6 +192,13 @@ def test_label_strata_value_error():
     with pytest.raises(ValueError, match="missing from annotations"):
         ep.label_strata(output, m_annot, g_annot)
 
+
+def test_label_strata_nan_chrom():
+    m_annot = pd.DataFrame({'name': ['m1'], 'chrom': [None]}).set_index('name')
+    g_annot = pd.DataFrame({'name': ['g1'], 'chrom': [1]}).set_index('name')
+    output = pd.DataFrame({'mt_id': ['m1'], 'gt_id': ['g1']})
+    with pytest.raises(ValueError, match="NaN chromosome in annotation"):
+        ep.label_strata(output, m_annot, g_annot)
 def test_stratify_decision_smoke(tmp_path):
     """
     Construct one synthetic case where cis == trans (expect "single_global_null_adequate")
@@ -347,32 +357,37 @@ def test_sidecar_absent_smoke(tmp_path):
     assert np.isclose(rep['arms']['calibration']['qq_data']['neg_log10_p_ana'][0], expected_neg_log)
 
 
-def test_stratum_mixed_dtype_regression(tmp_path):
+
+@pytest.mark.parametrize("m_chrom_col, g_chrom_col", [
+    ([1, 2, 'X'], [1, 2, 3]),  # object-vs-int (existing)
+    ([1.0, 2.0, None], [1, 2, 3]),  # float-vs-int (None on unused forces float64)
+    (['chr1', 'chr2', 'chr3'], [1, 2, 3])  # 'chr1'-vs-1
+])
+def test_stratum_mixed_dtype_regression(tmp_path, m_chrom_col, g_chrom_col):
     import json
     import subprocess
     import sys
     import os
     import pandas as pd
 
-    # Mixed dtype fixture: m_annot has 'X' row (object dtype), g_annot is autosome-only (int64)
     m_annot = pd.DataFrame({
-        'name': ['m1', 'm2', 'mX'],
-        'chrom': [1, 2, 'X'],
+        'name': ['m1', 'm2', 'm3'],
+        'chrom': m_chrom_col,
         'chromStart': [100, 200, 300]
     })
 
     g_annot = pd.DataFrame({
         'name': ['g1', 'g2', 'g3'],
-        'chrom': [1, 2, 3],
+        'chrom': g_chrom_col,
         'chromStart': [150, 250, 350]
     })
 
-    # m1-g1 is cis (1-1), m2-g2 is cis (2-2), mX-g3 is trans ('X'-3)
+    # m1-g1 is cis (1-1), m2-g2 is cis (2-2)
     output = pd.DataFrame({
-        'mt_id': ['m1', 'm2', 'mX'],
-        'gt_id': ['g1', 'g2', 'g3'],
-        'mt_t': [1.0, 1.0, 1.0],
-        'perm_mt_p': [0.5, 0.5, 0.5]
+        'mt_id': ['m1', 'm2'],
+        'gt_id': ['g1', 'g2'],
+        'mt_t': [1.0, 1.0],
+        'perm_mt_p': [0.5, 0.5]
     })
 
     m_annot_path = tmp_path / "m_annot.csv"
@@ -403,4 +418,4 @@ def test_stratum_mixed_dtype_regression(tmp_path):
         report = json.load(f)
 
     assert report['metadata']['n_cis'] == 2, f"Expected 2 cis, got {report['metadata'].get('n_cis')}"
-    assert report['metadata']['n_trans'] == 1, f"Expected 1 trans, got {report['metadata'].get('n_trans')}"
+    assert report['metadata']['n_trans'] == 0, f"Expected 0 trans, got {report['metadata'].get('n_trans')}"

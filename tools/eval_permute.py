@@ -94,10 +94,14 @@ def compute_calibration_stats(t_vals, p_perm, p_ana, is_bulk, is_tail):
 
     return stats
 
-def _canon_chrom(arr):
-    s = pd.Series(arr).astype(str).str.strip()
-    s = s.str.replace(r'^chr', '', regex=True, case=False)
-    return s.to_numpy()
+def _canon_chrom(arr, which):
+    s = pd.Series(arr)
+    if s.isna().any():
+        raise ValueError(f"{which}: NaN chromosome in annotation")
+    s = s.astype(str).str.strip()
+    s = s.str.replace(r'\.0$', '', regex=True)              # 1.0 -> 1
+    s = s.str.replace(r'^chr', '', regex=True, case=False)  # chr1 -> 1
+    return s.str.upper().to_numpy()                         # x -> X
 
 def label_strata(output, m_annot, g_annot):
     m_mapped = m_annot.index.astype(str).get_indexer(output['mt_id'].astype(str))
@@ -106,8 +110,9 @@ def label_strata(output, m_annot, g_annot):
     if (m_mapped == -1).any() or (g_mapped == -1).any():
         raise ValueError("Reported mt_id/gt_id missing from annotations.")
 
-    m_chrom = _canon_chrom(m_annot.iloc[m_mapped]['chrom'].to_numpy())
-    g_chrom = _canon_chrom(g_annot.iloc[g_mapped]['chrom'].to_numpy())
+    m_chrom = _canon_chrom(m_annot.iloc[m_mapped]['chrom'].to_numpy(), 'm_annot')
+    g_chrom = _canon_chrom(g_annot.iloc[g_mapped]['chrom'].to_numpy(), 'g_annot')
+
 
     is_cis = (m_chrom == g_chrom)
     is_trans = ~is_cis
