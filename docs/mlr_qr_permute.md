@@ -1,6 +1,6 @@
 # `qr_permute` — Permutation-Null Significance for eQTM Mapping
 
-> **Status: under active development.** The **Phase-1 trans pipeline is functionally complete** — `qr_permute` now produces real per-pair p-values for the **trans** stratum (empirical p with a GPD tail extension), replacing the earlier `perm_mt_p = 0.5` placeholder. **It is not yet ready for inference.** Its calibration has not been validated (the diagnostics of Phase 3 are pending); the cis stratum has no dedicated null yet, so **every reported pair is currently scored against the trans-global null**; the output schema is not finalized (chunk 9); and `perm_mt_p` is not wired into the downstream FDR pipeline (Phase 4). Do **not** use `perm_mt_p` for inference until validation is complete and this notice is updated. See [§5 Implementation status](#5-implementation-status).
+> **Status: under active development.** The **Phase-1 trans pipeline is complete** — `qr_permute` produces real per-pair p-values for the **trans** stratum (empirical p with a GPD tail extension), on a finalized, seeded, provenance-stamped output schema. **It is not yet ready for inference.** Its calibration has not been validated (the Phase-3 diagnostics exist but have not yet been run on real data); the cis stratum has no dedicated null yet, so **every reported pair is currently scored against the trans-global null**; and `perm_mt_p` is not wired into the downstream FDR pipeline (Phase 4). Do **not** use `perm_mt_p` for inference until validation is complete and this notice is updated. See [§5 Implementation status](#5-implementation-status).
 
 **Applies to:** `tecpg run mlr --mlr-method qr_permute` (torch-eCpG v2, `dev`).
 **Audience:** method reviewers, maintainers, and (eventually) users.
@@ -93,6 +93,8 @@ The two strata have different test geometry and are ultimately meant to take dif
 
 **Current behavior:** because the cis Beta is not yet built, **all reported pairs — cis and trans alike — are currently scored against the trans-global null.** Whether the cis stratum ultimately needs its own null (rather than sharing the global one) is the open *stratify-or-not* question, to be decided from the Phase-3 evaluation evidence (§5, §8).
 
+**Chromosome equality is not a naive comparison.** Assigning strata requires canonicalizing chromosome labels before testing equality: annotation columns arrive as bare integers, `chr`-prefixed strings, mixed case, or `float64` (pandas infers a float column whenever any value is missing, silently turning `1` into `1.0`). A raw `==` across two differently-typed annotation sources evaluates false for *every* pair, which would relabel the entire cis stratum as trans **with no error raised**. The canonical form strips a `chr` prefix and a trailing `.0`, uppercases, and **raises on a missing chromosome** for any reported pair rather than guessing (§3.8, fail-closed).
+
 ### 3.5 Scoring and tail extrapolation
 
 The empirical two-sided p for an observed `|t|` is the fraction of null `|t|` at least as large, floored by the finite null size:
@@ -119,15 +121,29 @@ Resolution is set by the multiple-testing denominator, not chosen for its own sa
 
 The **number of permutations** is governed by **tail-shape convergence** — whether the GPD shape parameter `ξ` and the extrapolated genome-wide quantile stabilize as permutations increase — **not** by the target p. Reaching `1e-12` by counting would require ~`1e12` tail draws and is the wrong estimator; the GPD tail is both necessary and more honest there. Any value reported beyond the correction threshold should be given as `< threshold`, not as a precise number, since past that point the extrapolation's assumptions (Pareto-like tail, exchangeability) are the limiting uncertainty rather than the arithmetic.
 
+> The ξ-convergence diagnostic that would *measure* this is not yet available: it requires the null accumulator, which is not persisted (§5, Phase 3b). Until then, the permutation count is set by judgment, not evidence.
+
 ### 3.7 Null storage
 
-At trans scale the null cannot be materialized as a list (`~2e10` pairs × permutations). It is accumulated in **fixed memory**, independent of permutation count: a **fixed-resolution `|t|`-histogram** (with an overflow count for values beyond its range) plus a bounded **top-K tail-exceedance buffer** that retains the largest `|t|` seen exactly. The empirical body is read from the histogram; the GPD tail is fit to the exact exceedances in the buffer. Accumulation is streaming — each permutation folds into the same fixed structures, and the retained footprint does not grow with the number of permutations. The observed/reported side is likewise intended to be emitted under an output-thresholding policy rather than writing the full cross-product (chunk 9).
+At trans scale the null cannot be materialized as a list (`~2e10` pairs × permutations). It is accumulated in **fixed memory**, independent of permutation count: a **fixed-resolution `|t|`-histogram** (with an overflow count for values beyond its range) plus a bounded **top-K tail-exceedance buffer** that retains the largest `|t|` seen exactly. The empirical body is read from the histogram; the GPD tail is fit to the exact exceedances in the buffer. Accumulation is streaming — each permutation folds into the same fixed structures, and the retained footprint does not grow with the number of permutations.
+
+**These structures are in-memory only and are discarded when the run exits** — only the per-pair output is written (§3.9). That is the reason the Phase-3 diagnostics split into arms that can be computed from the output and arms that cannot (§5).
+
+On the observed/reported side, a computed p for every pair does not imply writing every pair: the output supports an optional p-threshold (§3.9).
 
 ### 3.8 Validity conditions
 
 - **Exchangeability / constant df.** The pooled null requires `df = n − k` constant across all pairs and no per-pair missingness that varies `n`. In the current pipeline `df` is a single run-level scalar (`df = n_samples − covariates − 2`) and missingness is removed globally before the solve, so this holds. If per-pair `df` ever varied, both the pooled null and the subsampling shortcut would break.
 - **Pivotal statistic.** Pooling requires a scale-free statistic; the t-statistic qualifies, the raw coefficient does not (§3.1).
-- **Annotations required.** Because the scored null is stratified by chromosome (§3.4), the method requires methylation and expression annotations. Running without them **fails closed** (raises) rather than silently scoring against an unstratified null.
+- **Annotations required.** Because the scored null is stratified by chromosome (§3.4), the method requires methylation and expression annotations. Running without them **fails closed** (raises) rather than silently scoring against an unstratified null. The same principle extends to unusable annotations: a missing chromosome on a reported pair raises rather than defaulting to a stratum.
+
+### 3.9 Output schema
+
+Each reported pair carries `mt_id`, `gt_id`, the observed statistic `mt_t`, the permutation p-value `perm_mt_p`, and the run's `seed` and `n_perm`. Provenance is additionally stamped into the **parquet** schema metadata as `tecpg_perm_seed`, `tecpg_perm_n_perm`, and `tecpg_perm_n_reported`.
+
+`tecpg_perm_n_reported` records the **pre-threshold** universe size. This matters: scoring computes a p for every reported pair, but an optional `output_p_threshold` writes only pairs at or below a cutoff (genome scale cannot materialize `~2e10` rows). The default writes **all** reported pairs, preserving the full FDR universe on disk; when a threshold is used, `tecpg_perm_n_reported` is what keeps a downstream BH-FDR correction honest about the universe it was drawn from (Phase 4).
+
+> **Two current gaps.** (i) The metadata keys are written on the **parquet** path only — a CSV run keeps the `seed` and `n_perm` *columns* but loses `n_reported`, so a thresholded CSV artifact cannot reconstruct its FDR universe. Prefer parquet for permutation output. (ii) `output_p_threshold` is presently a function-level parameter and is **not exposed as a CLI flag**.
 
 ---
 
@@ -139,6 +155,7 @@ At trans scale the null cannot be materialized as a list (`~2e10` pairs × permu
 - **Coverage vs stratification are independent axes.** The user's region flag (`--all`/`--cis`/`--distal`/`--trans`) is a *coverage* filter selecting which pairs are reported; the *scoring* stratum is derived per pair from its own chromosomes (§3.4), so a pair receives the same p regardless of the coverage flag. Region-mask logic lives in a single shared helper (`helper.py:compute_region_mask`).
 - **Genome-wide data-flow.** Unlike `qr_bootstrap` (candidate `--pairs-file` + master-parquet merge), `qr_permute` scans genome-wide with subsampled null estimation. Its data-flow therefore resembles the `qr` full-scan path, not the bootstrap subset path.
 - **Self-contained solve.** The regression kernel is implemented within `permute.py` (as `bootstrap.py` does), replicating the qr path's formula, with an independent per-pair OLS oracle guaranteeing numerical equivalence.
+- **Diagnostics are read-only and torch-free.** The evaluation script (§5, Phase 3) consumes permutation output only; it imports no torch and no `tecpg` runtime module, so it runs anywhere and is testable without a GPU environment.
 - **Deferred downstream integration.** Wiring `perm_mt_p` into the downstream significance selectors and the BH-FDR universe is a deliberate final phase, undertaken only after the method is validated, so that in-progress output can never affect existing pipelines.
 
 ---
@@ -147,12 +164,16 @@ At trans scale the null cannot be materialized as a list (`~2e10` pairs × permu
 
 The build has **four phases**, delivered as a **walking skeleton**: the pipeline was first wired as trivial stubs (freezing interfaces and the output contract), then each stage replaced by real logic one **chunk** at a time, each guarded by an oracle and a **forced-fail proof** (green → red on a deliberately injected bug → green on revert).
 
-- **Phase 1 — trans-global null** *(nearly complete)*. All-pairs coverage; design-fixed Freedman–Lane; streaming null; empirical p + GPD tail; finalized output. Chunks 0–9. **The four null-estimation stages are all implemented** — Freedman–Lane residualization, streaming histogram + tail-buffer accumulation, empirical scoring with the `1/(N+1)` floor, and the GPD tail. **Remaining: chunk 9 (output finalization)** — adding the observed t (`mt_t`), the seed, and `n_perm` to the output schema and settling the output-thresholding policy.
-- **Phase 2 — cis Beta-approximation** *(pending)*. Per-gene min-p Beta null for the cis stratum (§3.4), fit in the t-domain, reusing Phase 1's residualize/refit primitives and the shared cis mask as each gene's local test set. Until it lands, cis pairs are scored against the trans-global null.
-- **Phase 3 — evaluation / diagnostics script** *(pending — begin now)*. Standalone, read-only: calibration vs the analytic p, GPD ξ / quantile convergence, null sanity, and the cis-vs-trans comparison that **decides** whether stratification is warranted. Its first cut is due now — the trans tail is in place, and this script produces the evidence for the stratify-or-not decision and for validating calibration before the method is trusted.
+- **Phase 1 — trans-global null** *(complete, chunks 0–9)*. All-pairs coverage; design-fixed Freedman–Lane; streaming fixed-memory null; empirical p + GPD tail; finalized output. All stage functions are real, and the output schema is settled (§3.9): `mt_t`, `perm_mt_p`, `seed`, `n_perm`, parquet provenance metadata, and the optional output threshold. **Complete is not validated** — see Phase 3.
+- **Phase 2 — cis Beta-approximation** *(pending)*. Per-gene min-p Beta null for the cis stratum (§3.4), fit in the t-domain, reusing Phase 1's residualize/refit primitives and the shared cis mask as each gene's local test set. Until it lands, cis pairs are scored against the trans-global null. **Gated on the Phase-3 stratify-or-not evidence** — the machinery is only built if the evidence says the cis null actually diverges from trans.
+- **Phase 3 — evaluation / diagnostics** *(partially delivered)*. A standalone read-only script. Its arms divide by what the persisted output can support (§3.7):
+  - **3a — output-derivable** *(built)*: calibration of `perm_mt_p` against a `float64` analytic reference recomputed from `mt_t`; null sanity via genomic inflation and a uniformity test on the trans (mostly-null) bulk; and the **stratify-or-not decision** in its *calibration-divergence* form — comparing how cis and trans each depart from the analytic reference. The recommendation keys on **effect size**, with the two-sample test statistic reported but non-gating: at genome scale any such test's p-value collapses to zero from sample size alone and carries no information. Three outcomes: stratification warranted, single global null adequate, or inconclusive-because-cis-signal-confounds — the last being an honest verdict rather than a forced call, since real cis signal inflates the cis bulk and can masquerade as null divergence.
+  - **3b — sidecar-gated** *(deferred)*: ξ / extrapolated-quantile convergence (§3.6), literal null flatness, and the rigorous *null-shape* stratify comparison. These need the null accumulator itself, which is not persisted, so they are stubbed behind an optional sidecar input whose contract is frozen in the consumer. Whether to add the corresponding writer to the core module is deliberately left to the 3a evidence.
+  
+  **Nothing downstream should be trusted until 3a has been run on real data.** Its thresholds are provisional placeholders chosen to make the logic exercisable, not calibrated values; the script's own output on real cohorts is what should set them.
 - **Phase 4 — downstream / FDR integration** *(pending — deferred to last, gated on validation)*. The only phase that edits shared downstream code.
 
-**Granular per-chunk status lives in the code, not this document.** Each stage function in `tecpg/permute.py` carries a `# CHUNK N` tag; the stage functions are now all real. This document tracks status at phase level to stay accurate through routine merges.
+**Granular per-chunk status lives in the code, not this document.** Each stage function in `tecpg/permute.py` carries a `# CHUNK N` tag. This document tracks status at phase level to stay accurate through routine merges.
 
 ---
 
@@ -161,14 +182,14 @@ The build has **four phases**, delivered as a **walking skeleton**: the pipeline
 These are enforced for every chunk:
 
 - **Existing-method byte-identity.** `legacy_normal_eq`, `qr`, `qr_bootstrap`, and all `tools/` behave identically; the fingerprint JSON is never modified to make a test pass.
-- **Forced-fail proof.** Every guard and every real computation is verified by injecting a bug, observing the test fail, then reverting — a passing test that does not fail on injection is not accepted as verification.
-- **Oracle / differential tests.** Correctness is checked against independent implementations (per-pair OLS via numpy `lstsq` for the observed t; a single-permutation numpy Freedman–Lane for the residualization; a direct null recount for the empirical p; GPD parameter recovery on simulated Pareto data for the tail) — not against stored golden outputs.
+- **Forced-fail proof.** Every guard and every real computation is verified by injecting a bug, observing the test fail, then reverting — a passing test that does not fail on injection is not accepted as verification. This applies to read-only diagnostics as well as to core code: a green suite is not evidence of coverage, and assertions that run under the wrong test name are worse than absent ones.
+- **Oracle / differential tests.** Correctness is checked against independent implementations (per-pair OLS via numpy `lstsq` for the observed t; a single-permutation numpy Freedman–Lane for the residualization; a direct null recount for the empirical p; GPD parameter recovery on simulated Pareto data for the tail) — not against stored golden outputs. Where a diagnostic re-implements a pipeline quantity, it must use the **same estimator** as the pipeline (e.g. the same GPD fitting method), or it measures something other than what it claims to.
 - **Design-fixed Freedman–Lane.** The null permutes the reduced-model response residuals with the design held fixed (§3.2); permuting a predictor is a correctness *and* cost error.
 - **Pivotal statistic.** The pooled/scored statistic is the t-stat, never raw β (§3.1).
 - **Bounded-memory accumulation.** The null footprint is fixed and independent of permutation count (§3.7).
 - **Per-pair floor and positivity.** The empirical p is floored per pair at `1 / (N_null + 1)`; the GPD extension is clamped strictly positive.
-- **Fail-closed / fail-safe guards.** Missing annotations and non-positive subsample counts fail closed (raise); a degenerate tail fit fails safe to the empirical p.
-- **Seed / determinism.** Permutation draws follow a recorded seed (default 42); the same seed reproduces the null, and the seed will be written to output metadata (chunk 9).
+- **Fail-closed / fail-safe guards.** Missing annotations, unusable (missing-chromosome) annotations on reported pairs, and non-positive subsample counts fail closed (raise); a degenerate tail fit fails safe to the empirical p.
+- **Seed / determinism.** Permutation draws follow a recorded seed (default 42); the same seed reproduces the null, and the seed is written to the output and its parquet metadata (§3.9).
 
 ---
 
@@ -195,20 +216,22 @@ Relevant options:
 
 **Annotations are required.** Because the null is chromosome-stratified (§3.4, §3.8), methylation and expression annotations must be supplied; running without them raises rather than silently producing an unstratified null.
 
-**Output:** `permutation_results.{parquet,csv}`. The frozen contract is the columns `mt_id`, `gt_id`, `perm_mt_p`; the finalized schema (chunk 9) will additionally carry the observed t (`mt_t`), the seed, and `n_perm`. An explicit `--output-file` is honored verbatim; the default writes `permutation_results.<ext>` into the output directory.
+**Output:** `permutation_results.{parquet,csv}` with columns `mt_id`, `gt_id`, `mt_t`, `perm_mt_p`, `seed`, `n_perm`, plus parquet provenance metadata (§3.9). An explicit `--output-file` is honored verbatim; the default writes `permutation_results.<ext>` into the output directory. **Parquet is recommended** — the CSV path does not carry the provenance metadata (§3.9).
 
 ---
 
 ## 8. Limitations and open decisions
 
-- **Not yet validated.** The trans pipeline produces real p-values, but calibration has not been checked and the stratify-or-not decision has not been made (both await Phase 3). Do not use `perm_mt_p` for inference yet.
+- **Not yet validated.** The trans pipeline produces real p-values, but calibration has not been checked and the stratify-or-not decision has not been made. The Phase-3a diagnostics that answer both now exist but have not been run on real cohort data. Do not use `perm_mt_p` for inference yet.
 - **Cis has no dedicated null yet.** Until Phase 2 lands, cis pairs are scored against the trans-global null (§3.4).
 - **Extrapolation ceiling.** p-values are trustworthy to the resolution the test count demands (§3.6); beyond that they are reported as `< threshold`, since the tail model's assumptions become the dominant uncertainty.
 - **Resolved — cis/trans mask reuse.** The region-mask logic is factored into a shared helper (`helper.py:compute_region_mask`) — a single source of truth for both the qr path and `permute.py`.
 - **Resolved — null-pair stratification.** The accumulated null is stratified by chromosome to the trans stratum (§3.4); the earlier unmasked cross-product placeholder is gone.
-- **Open — stratify-or-not calibration.** Whether to fit separate cis/trans nulls or a single global null is an empirical question, decided from the evaluation script (Phase 3): does the cis null diverge enough from trans to warrant the per-gene Beta machinery? The design assumes two strata (statistically motivated, §3.4); **coverage is all-pairs regardless of how this resolves.**
-- **Open — GPD threshold selection.** The tail threshold is provisionally the smallest retained exceedance (all of the top-K buffer); a higher threshold may be warranted, to be informed by the ξ-convergence diagnostic (Phase 3).
-- **Open — output-thresholding policy.** Which reported pairs are written at genome scale (all vs a p-cutoff); a computed p for every pair does not imply materializing `~2e10` rows (chunk 9).
+- **Resolved — output-thresholding policy.** Write-all by default, with an optional p-cutoff and a recorded pre-threshold universe size (§3.9).
+- **Open — stratify-or-not calibration.** Whether to fit separate cis/trans nulls or a single global null is an empirical question, answered by running the Phase-3a evaluation: does the cis null diverge enough from trans to warrant the per-gene Beta machinery? The design assumes two strata (statistically motivated, §3.4); **coverage is all-pairs regardless of how this resolves.**
+- **Open — GPD threshold selection.** The tail threshold is provisionally the smallest retained exceedance (all of the top-K buffer); a higher threshold may be warranted, to be informed by the ξ-convergence diagnostic — which is itself sidecar-gated (§5, Phase 3b), so this remains open longer than originally planned.
+- **Open — null-state persistence.** The accumulator and GPD fit are discarded at exit (§3.7), which is what gates the Phase-3b arms. Whether to persist them to a sidecar artifact is deliberately deferred until the 3a evidence shows the rigorous null-shape comparison is actually needed.
+- **Open — CSV provenance and CLI threshold exposure.** The parquet-only metadata and the unexposed `output_p_threshold` flag (§3.9) are both small gaps to close before Phase 4 relies on them.
 - **Open — downstream/FDR integration timing.** Deferred to a final phase (Phase 4), gated on validation.
 
 ---
@@ -220,7 +243,3 @@ Relevant options:
 - Taylor-Weiner, A. et al. (2019). *Scaling computational genomics to millions of individuals with GPUs* (tensorQTL). Genome Biology 20:228. — GPU permutation QTL mapping and the per-gene Beta null.
 - Generalized Pareto / extreme-value peaks-over-threshold tail modeling for permutation p-values (§3.5–3.6).
 - Kober, K.M. et al. (2024). torch-eCpG. BMC Bioinformatics 25:71. — the base tecpg tool.
-
----
-
-*This is a living document maintained alongside the implementation; update it as phases progress and as the open decisions above are resolved. Granular per-chunk status is tracked in the code (`tecpg/permute.py` chunk comments), not here.*
