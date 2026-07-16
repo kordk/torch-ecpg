@@ -1,0 +1,235 @@
+#!/bin/bash
+set -e
+
+export PYTHONUNBUFFERED=1
+
+# Log function for timestamps
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
+}
+
+# Default settings
+DATASET="dummy"
+MAPPING="all"
+START_STAGE="all"
+
+PERMUTE_ARGS=()
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            echo "Usage: ./pipelinePermute.sh [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  -h, --help                     Show this help message and exit"
+            echo "  -d, --dataset DATASET          Specify the dataset to use. Options: dummy (default), gtp, mesa"
+            echo "  -m, --mapping MAPPING          Specify the mapping method. Options: all (default)."
+            echo "                                 'cis' is accepted by the parser but rejected at runtime:"
+            echo "                                 qr_permute's null is trans-global and Phase 2 (cis Beta)"
+            echo "                                 is not implemented."
+            echo "  -s, --start-stage STAGE        Specify the starting stage. Options: all, permute, eval. Default is 'all'."
+            echo "      --permutations N           Passthrough to qr_permute."
+            echo "      --subsample-mt-count N     Passthrough to qr_permute. NOTE: does NOT shrink output."
+            echo "      --subsample-g-count N      Passthrough to qr_permute. NOTE: does NOT shrink output."
+            echo "      --seed N                   Passthrough to qr_permute."
+            exit 0
+            ;;
+        -s|--start-stage)
+            START_STAGE="$2"
+            shift 2
+            ;;
+        -d|--dataset)
+            DATASET="$2"
+            shift 2
+            ;;
+        -m|--mapping)
+            MAPPING="$2"
+            shift 2
+            ;;
+        --permutations)
+            PERMUTE_ARGS+=(--permutations "$2")
+            shift 2
+            ;;
+        --subsample-mt-count)
+            PERMUTE_ARGS+=(--subsample-mt-count "$2")
+            shift 2
+            ;;
+        --subsample-g-count)
+            PERMUTE_ARGS+=(--subsample-g-count "$2")
+            shift 2
+            ;;
+        --seed)
+            PERMUTE_ARGS+=(--seed "$2")
+            shift 2
+            ;;
+        *)
+            echo "Unknown parameter passed: $1"
+            echo "Use --help for usage information."
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$MAPPING" != "all" ]; then
+    log "Error: qr_permute supports --mapping all only."
+    log "  --cis filters COVERAGE, but qr_permute's null is trans-global and Phase 2 (cis Beta)"
+    log "  is not implemented. A cis-coverage run leaves eval_permute's stratify arm with no"
+    log "  trans stratum, which yields a confidently wrong verdict rather than an error."
+    exit 1
+fi
+
+VALID_STAGES=("all" "permute" "eval")
+IS_VALID_STAGE=0
+for stage in "${VALID_STAGES[@]}"; do
+    if [ "$START_STAGE" == "$stage" ]; then
+        IS_VALID_STAGE=1
+        break
+    fi
+done
+
+if [ $IS_VALID_STAGE -eq 0 ]; then
+    log "Error: Unknown start stage: $START_STAGE"
+    log "Usage: ./pipelinePermute.sh --dataset [dummy|gtp|mesa] --start-stage [STAGE]"
+    exit 1
+fi
+
+VALID_DATASETS=("dummy" "gtp" "mesa")
+IS_VALID_DATASET=0
+for ds in "${VALID_DATASETS[@]}"; do
+    if [ "$DATASET" == "$ds" ]; then
+        IS_VALID_DATASET=1
+        break
+    fi
+done
+
+if [ $IS_VALID_DATASET -eq 0 ]; then
+    log "Error: Unknown dataset: $DATASET"
+    log "Usage: ./pipelinePermute.sh --dataset [dummy|gtp|mesa]"
+    exit 1
+fi
+
+log "============================================================"
+log "Starting tecpg Permute Pipeline"
+log "Dataset: $DATASET"
+log "Mapping: $MAPPING"
+log "Start Stage: $START_STAGE"
+log "============================================================"
+
+# Warnings
+for arg in "${PERMUTE_ARGS[@]}"; do
+    if [[ "$arg" == "--subsample-mt-count" || "$arg" == "--subsample-g-count" ]]; then
+        log "NOTE: --subsample-mt-count/--subsample-g-count subsample the NULL population only."
+        log "      The reported set is always the full M x G cross product; these flags do NOT"
+        log "      reduce output size. To get a tractable reported set, physically subset"
+        log "      data_${DATASET}/M.csv and data_${DATASET}/G.csv into a smaller data_<ds> first."
+        log "      Subsample LOCI, never SAMPLES -- dropping samples changes DF."
+        break
+    fi
+done
+
+if [ "$DATASET" == "dummy" ]; then
+    log "NOTE: dummy is a WIRING SMOKE TEST ONLY. Disbelieve its numbers."
+    log "      Dummy annotations are chrom=randrange(1,23) over random data, so cis and trans"
+    log "      are exchangeable BY CONSTRUCTION and the stratify arm will return"
+    log "      'single_global_null_adequate' trivially. It says nothing about real data."
+fi
+
+
+OUT_DIR="output_${DATASET}"
+DATA_DIR="data_${DATASET}"
+ANNOT_DIR="annot_${DATASET}"
+mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
+
+for f in M.csv G.csv C.csv; do
+    [ -s "$DATA_DIR/$f" ] || { log "Error: $DATA_DIR/$f missing or empty. Run ./pipelinePre.sh --dataset $DATASET first."; exit 1; }
+done
+
+for f in G.bed6 M.bed6; do
+    [ -s "$ANNOT_DIR/$f" ] || { log "Error: $ANNOT_DIR/$f missing or empty. Run ./pipelinePre.sh --dataset $DATASET first."; exit 1; }
+done
+
+# DF Block Lifted from pipeline.sh
+# We calculate DF inside the block that needs it unconditionally since the file exists
+# SAMPLES - COVARIATES - 1 (M) - 1 (Intercept)
+# Here we just parse the C.csv lines dynamically
+SAMPLES=$(wc -l < "$DATA_DIR/C.csv")
+SAMPLES=$((SAMPLES - 1)) # Header
+COVARS=$(head -n 1 "$DATA_DIR/C.csv" | awk -F, '{print NF-1}')
+
+# M7-DF: stage-boundary check. pipelinePre.sh records the exact (samples,
+# covars) shape the PCA merge produced in C.shape.meta. Validate that the
+# counts C.csv now carries still match before deriving DF, so a stray
+# trailing blank line (shifts SAMPLES) or an extra index column (shifts
+# COVARS) fails loudly instead of silently shifting DF and corrupting every
+# precise_mt_p / FDR downstream.
+SHAPE_META="$DATA_DIR/C.shape.meta"
+if [ -f "$SHAPE_META" ]; then
+    EXP_SAMPLES=$(grep -o 'samples=[0-9]*' "$SHAPE_META" | cut -d= -f2)
+    EXP_COVARS=$(grep -o 'covars=[0-9]*' "$SHAPE_META" | cut -d= -f2)
+    if [ -z "$EXP_SAMPLES" ] || [ -z "$EXP_COVARS" ]; then
+        log "Error: malformed $SHAPE_META (could not read expected samples/covars from the PCA merge)."
+        log "Re-run pipelinePre.sh to regenerate C.csv and its shape metadata."
+        exit 1
+    fi
+    if [ "$SAMPLES" != "$EXP_SAMPLES" ]; then
+        log "Error: sample count mismatch in $DATA_DIR/C.csv. Expected $EXP_SAMPLES (from PCA merge) but observed $SAMPLES."
+        log "C.csv may have a stray trailing blank line or have been regenerated inconsistently. Refusing to derive DF."
+        exit 1
+    fi
+    if [ "$COVARS" != "$EXP_COVARS" ]; then
+        log "Error: covariate count mismatch in $DATA_DIR/C.csv. Expected $EXP_COVARS (from PCA merge) but observed $COVARS."
+        log "C.csv may carry an extra index column or have been regenerated inconsistently. Refusing to derive DF."
+        exit 1
+    fi
+else
+    log "Error: $SHAPE_META not found. pipelinePre.sh failed to write it."
+    log "Cannot cross-check C.csv against the PCA merge. Aborting."
+    exit 1
+fi
+
+DF=$((SAMPLES - COVARS - 2))
+log "Calculated Degrees of Freedom (DF): $DF (SAMPLES=$SAMPLES, COVARS=$COVARS)"
+
+# Assert DF > 0 BEFORE recalculation, not only inside
+# recalculate_pvalues_parquet.py, so a non-positive DF aborts the pipeline.
+if [ "$DF" -le 0 ]; then
+    log "Error: Non-positive degrees of freedom (DF=$DF) from SAMPLES=$SAMPLES, COVARS=$COVARS."
+    log "Too few samples relative to covariates; p-value recalculation would be invalid."
+    exit 1
+fi
+
+EXECUTE=0
+if [ "$START_STAGE" == "all" ] || [ "$START_STAGE" == "permute" ]; then EXECUTE=1; fi
+
+PERM_OUTPUT="$OUT_DIR/permutation_results.parquet"
+
+# Stage 1: permute
+if [ $EXECUTE -eq 1 ]; then
+    log "[1/2] Running permute..."
+    set -o pipefail
+    python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" \
+        run mlr --mlr-method qr_permute --all \
+        --output-format parquet \
+        "${PERMUTE_ARGS[@]}" 2>&1 | tee "permute_run_${DATASET}.log"
+    set +o pipefail
+
+    [ -s "$PERM_OUTPUT" ] || { log "Error: $PERM_OUTPUT missing or empty after the permute run."; log "Check permute_run_${DATASET}.log."; exit 1; }
+fi
+
+if [ "$START_STAGE" == "eval" ]; then EXECUTE=1; fi
+
+# Stage 2: eval
+if [ $EXECUTE -eq 1 ]; then
+    log "[2/2] Running eval..."
+    [ -s "$PERM_OUTPUT" ] || { log "Error: $PERM_OUTPUT missing or empty. Run with --start-stage permute first."; exit 1; }
+
+    python3 tools/eval_permute.py \
+        --perm-output "$PERM_OUTPUT" \
+        --m-annot "$ANNOT_DIR/M.bed6" \
+        --g-annot "$ANNOT_DIR/G.bed6" \
+        --df "$DF" \
+        --out-dir "$OUT_DIR"
+
+    log "Finished eval_permute. Report at $OUT_DIR/eval_permute_report.json"
+fi

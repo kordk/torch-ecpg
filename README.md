@@ -548,6 +548,33 @@ these in the script's defaults block if you need different cutoffs.
 > recommended entry point. New work should use the Parquet variant
 > above, which is what `pipeline.sh` runs.
 
+## Permutation testing pipeline (`pipelinePermute.sh`)
+
+`pipelinePermute.sh` evaluates permutation testing for the eQTM mapping process using the `qr_permute` backend. It audits permutation runs and builds diagnostic reports. It operates independently of the main downstream `pipeline.sh` stages, as `qr_permute` calculates the null genome-wide. It requires `pipelinePre.sh` to have been run first to prepare the dataset.
+
+```bash
+./pipelinePermute.sh --help
+./pipelinePermute.sh --dataset dummy
+./pipelinePermute.sh --dataset gtp --permutations 100
+./pipelinePermute.sh --dataset mesa --start-stage eval
+```
+
+Options:
+
+* `-d, --dataset {dummy,gtp,mesa}` — which dataset to use. Must match the dataset already prepared by `pipelinePre.sh`.
+* `-m, --mapping {all}` — specifies the mapping method. The only supported method is `all`. `cis` is accepted by the parser but rejected at runtime because `qr_permute`'s null is trans-global.
+* `-s, --start-stage STAGE` — resume from one of `all` (default), `permute`, `eval`.
+* `--permutations`, `--subsample-mt-count`, `--subsample-g-count`, `--seed` — pass-through arguments to `tecpg run mlr`.
+
+> **NOTE:** `--subsample-mt-count` / `--subsample-g-count` subsample the NULL population only. The reported set is always the full M x G cross product; these flags do NOT reduce output size. To get a tractable reported set, physically subset `data_<ds>/M.csv` and `data_<ds>/G.csv` into a smaller `data_<ds>` first. Subsample LOCI, never SAMPLES -- dropping samples changes DF.
+
+> **NOTE:** The `dummy` dataset is a WIRING SMOKE TEST ONLY. Disbelieve its numbers. Dummy annotations are chrom=randrange(1,23) over random data, so cis and trans are exchangeable BY CONSTRUCTION and the stratify arm will return 'single_global_null_adequate' trivially. It says nothing about real data.
+
+The script runs in two stages, reusing the per-dataset working directories `data_<dataset>/`, `annot_<dataset>/`, and `output_<dataset>/`:
+
+1. **`permute` — Run permutations** *(stage `[1/2]`)*. Runs `tecpg ... run mlr --mlr-method qr_permute --all --output-format parquet`.
+2. **`eval` — Evaluate output** *(stage `[2/2]`)*. Runs `tools/eval_permute.py` to audit the generated parquet and produce a diagnostic report `eval_permute_report.json`.
+
 ## Selecting a GPU when multiple are available
 
 We have run into this issue when using a development system or a cluster (e.g., Sun Grid Engine) where the system has numerous GPUs and selection is necessary. 
