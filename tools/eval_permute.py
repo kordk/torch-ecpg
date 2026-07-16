@@ -96,12 +96,13 @@ def compute_calibration_stats(t_vals, p_perm, p_ana, is_bulk, is_tail):
 
 def _canon_chrom(arr, which):
     s = pd.Series(arr)
-    if s.isna().any():
-        raise ValueError(f"{which}: NaN chromosome in annotation")
+    isna = s.isna()                # BEFORE astype(str) — afterwards NaN is 'nan' and isna() is blind
     s = s.astype(str).str.strip()
-    s = s.str.replace(r'\.0$', '', regex=True)              # 1.0 -> 1
+    s = s.str.replace(r'\.0$', '', regex=True)              # 1.0 -> 1  (pandas NA inference -> float64)
     s = s.str.replace(r'^chr', '', regex=True, case=False)  # chr1 -> 1
-    return s.str.upper().to_numpy()                         # x -> X
+    s = s.str.upper()                                       # x -> X
+    s = s.mask(isna, other=pd.NA)                           # restore NaN; never the string 'nan'
+    return s.to_numpy(dtype=object)
 
 def label_strata(output, m_annot, g_annot):
     m_mapped = m_annot.index.astype(str).get_indexer(output['mt_id'].astype(str))
@@ -113,17 +114,55 @@ def label_strata(output, m_annot, g_annot):
     m_chrom = _canon_chrom(m_annot.iloc[m_mapped]['chrom'].to_numpy(), 'm_annot')
     g_chrom = _canon_chrom(g_annot.iloc[g_mapped]['chrom'].to_numpy(), 'g_annot')
 
+    keep = ~(pd.isna(m_chrom) | pd.isna(g_chrom))
+    n_dropped = int((~keep).sum())
 
-    is_cis = (m_chrom == g_chrom)
-    is_trans = ~is_cis
+    if not keep.any():
+        raise ValueError(
+            "All reported pairs dropped: every pair has an unmappable chromosome "
+            "on at least one axis. Check that --m-annot/--g-annot match the run."
+        )
 
-    return is_cis, is_trans, int(is_cis.sum()), int(is_trans.sum())
+    is_cis = np.zeros(len(output), dtype=bool)
+    is_cis[keep] = (m_chrom[keep] == g_chrom[keep])
+    is_trans = keep & ~is_cis
+
+    return keep, is_cis, is_trans, int(is_cis.sum()), int(is_trans.sum()), n_dropped
 
 def calculate_genomic_inflation(t_vals):
     """Arm A.c: Genomic Inflation Lambda"""
     median_t_sq = np.median(t_vals**2)
     expected_median_chi2 = scipy.stats.chi2.ppf(0.5, 1)
     return float(median_t_sq / expected_median_chi2)
+
+def _load_annotation(path, which):
+    # tecpg convention: sniff the separator. BED6 is TAB; fallbacks may differ.
+    annot = pd.read_csv(path, sep=None, engine='python')
+
+    if 'name' not in annot.columns:
+        raise ValueError(
+            "{0}: annotation at {1} has no 'name' column; found columns {2}. "
+            "Expected a BED6 with header (chrom chromStart chromEnd name score strand). "
+            "A single mashed column indicates a separator mismatch."
+            .format(which, path, list(annot.columns))
+        )
+    if 'chrom' not in annot.columns:
+        raise ValueError(
+            "{0}: annotation at {1} has no 'chrom' column; found columns {2}. "
+            "Expected a BED6 with header (chrom chromStart chromEnd name score strand). "
+            "A single mashed column indicates a separator mismatch."
+            .format(which, path, list(annot.columns))
+        )
+
+    annot = annot.set_index('name')
+
+    if not annot.index.is_unique:
+        n_dup = int(annot.index.duplicated().sum())
+        raise ValueError(
+            "{0}: annotation index is not unique ({1} duplicated names); "
+            "get_indexer requires a unique index.".format(which, n_dup)
+        )
+    return annot
 
 def main():
     parser = argparse.ArgumentParser(description="Phase 3 standalone read-only permutation-evaluation diagnostic")
@@ -157,14 +196,8 @@ def main():
         else:
             output = pd.read_csv(args.perm_output)
 
-        m_annot = pd.read_csv(args.m_annot)
-        g_annot = pd.read_csv(args.g_annot)
-
-        # Replicate annotated_fixture logic
-        if 'name' in m_annot.columns:
-            m_annot = m_annot.set_index('name')
-        if 'name' in g_annot.columns:
-            g_annot = g_annot.set_index('name')
+        m_annot = _load_annotation(args.m_annot, '--m-annot')
+        g_annot = _load_annotation(args.g_annot, '--g-annot')
 
     except Exception as e:
         print(f"Error loading inputs: {e}", file=sys.stderr)
@@ -179,12 +212,21 @@ def main():
         print(f"Error: Missing columns in permutation output. Requires {required_cols}", file=sys.stderr)
         sys.exit(1)
 
+    n_pairs_input = len(output)
 
     try:
-        is_cis, is_trans, n_cis, n_trans = label_strata(output, m_annot, g_annot)
+        keep, is_cis, is_trans, n_cis, n_trans, n_dropped = label_strata(output, m_annot, g_annot)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    if n_dropped:
+        print("Drop site eval_permute.label_strata[reported_pairs]: dropped pairs with "
+              "unmappable chromosome: {0} -> {1} ({2} dropped)"
+              .format(n_pairs_input, int(keep.sum()), n_dropped), file=sys.stderr)
+        output = output.loc[keep].reset_index(drop=True)
+        is_cis = is_cis[keep]
+        is_trans = is_trans[keep]
 
     # -------------------------------------------------------------------------
     # Core Data Extraction
@@ -203,7 +245,9 @@ def main():
 
     report = {
         "metadata": {
-            "n_pairs": len(t),
+            "n_pairs_input": n_pairs_input,
+            "n_pairs_dropped_unmappable_chrom": n_dropped,
+            "n_pairs_scored": len(t),
             "n_cis": n_cis,
             "n_trans": n_trans,
             "df": df_val,
