@@ -95,7 +95,7 @@ else
     if [ "$DATASET" == "dummy" ]; then
         # Generate small synthetic data for testing
         log "Generating synthetic dummy data..."
-        echo "10" | python3 -m tecpg data dummy -s 100 -m 1000 -g 1000
+        echo "10" | python3 -m tecpg data dummy -s 100 -m 20 -g 20
         mv data/* "$DATA_DIR/"
         mv annot/* "$ANNOT_DIR/"
         rmdir data annot
