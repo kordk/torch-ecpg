@@ -120,30 +120,43 @@ def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path):
     assert df['perm_mt_p'].max() <= 1
     assert df['perm_mt_p'].isna().sum() == 0
 
+def test_drop_and_trim_trans_mask_oracle(cli_shaped_annotated_fixture):
+    """Test decisive alignment assertion on stratum"""
+    from tecpg.permute import _compute_trans_mask
+    M, G, C, M_annot, G_annot = cli_shaped_annotated_fixture(10, 5, 5)
 
+    logger = Logger()
+    M_annot_n, G_annot_n, M_n, G_n = _normalize_annotations(M_annot, G_annot, M, G, logger)
 
+    m_idx = M_n.index.astype(str)
+    g_idx = G_n.index.astype(str)
 
+    reported_pairs = pd.MultiIndex.from_product([m_idx, g_idx], names=['mt_id', 'gt_id']).to_frame(index=False)
 
+    trans_mask = _compute_trans_mask(reported_pairs, M_annot_n, G_annot_n, 'trans', window_base=1000, downstream=1000, upstream=1000, logger=logger)
 
+    # Fixture M cycle: chr1 (i=0), chr2 (i=1), chrX (i=2), nan (i=3) [dropped], chr7 (i=4)
+    # Fixture G cycle: chr1 (i=0), chr7 (i=1), chrY (i=2), GL000220.1 (i=3) [dropped], chr2 (i=4)
+    # Both arrays dropped index 3.
+    # M remaining indices: cg001 (chr1), cg002 (chr2), cg003 (chrX), cg005 (chr7).
+    # G remaining indices: ILMN_001 (chr1), ILMN_002 (chr7), ILMN_003 (chrY), ILMN_005 (chr2).
+    # cg001_ILMN_001 -> cis (chr1 == chr1)
+    # cg002_ILMN_005 -> cis (chr2 == chr2)
+    # cg005_ILMN_002 -> cis (chr7 == chr7)
+    # All others are trans.
 
+    cis_pairs = set([
+        (m_idx[0], g_idx[0]),
+        (m_idx[1], g_idx[3]),
+        (m_idx[3], g_idx[1])
+    ])
 
+    expected_trans_mask = np.array([
+        (row['mt_id'], row['gt_id']) not in cis_pairs
+        for _, row in reported_pairs.iterrows()
+    ], dtype=bool)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    np.testing.assert_array_equal(trans_mask, expected_trans_mask)
 
 def test_cli_regression():
     """7. CLI REGRESSION - exact pass-through assertions matrix"""
@@ -214,3 +227,35 @@ def test_cli_regression():
             assert isinstance(mock_qr_permute.call_args.kwargs['M_annot'], pd.DataFrame)
             assert isinstance(mock_qr_permute.call_args.kwargs['G_annot'], pd.DataFrame)
             assert mock_qr_permute.call_args.kwargs['output_p_threshold'] == 0.05
+
+
+def test_end_to_end_permute_determinism(cli_shaped_annotated_fixture, tmp_path):
+    """8. DETERMINISM TEST"""
+    M, G, C, M_annot, G_annot = cli_shaped_annotated_fixture(10, 5, 5)
+    logger = Logger()
+
+    output_file1 = str(tmp_path / "output1.csv")
+    tecpg_mlr_qr_permute(
+        M=M, G=G, C=C,
+        M_annot=M_annot, G_annot=G_annot,
+        region='all',
+        permutations=10,
+        seed=42,
+        output_file=output_file1,
+        logger=logger
+    )
+    df1 = pd.read_csv(output_file1)
+
+    output_file2 = str(tmp_path / "output2.csv")
+    tecpg_mlr_qr_permute(
+        M=M, G=G, C=C,
+        M_annot=M_annot, G_annot=G_annot,
+        region='all',
+        permutations=10,
+        seed=42,
+        output_file=output_file2,
+        logger=logger
+    )
+    df2 = pd.read_csv(output_file2)
+
+    pd.testing.assert_series_equal(df1['perm_mt_p'], df2['perm_mt_p'])
