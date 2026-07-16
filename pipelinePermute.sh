@@ -210,7 +210,7 @@ if [ $EXECUTE -eq 1 ]; then
     set -o pipefail
     python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" \
         run mlr --mlr-method qr_permute --all \
-        --output-format parquet \
+        --output-format auto \
         "${PERMUTE_ARGS[@]}" 2>&1 | tee "permute_run_${DATASET}.log"
     set +o pipefail
 

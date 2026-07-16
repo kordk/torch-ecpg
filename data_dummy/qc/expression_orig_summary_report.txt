@@ -1,0 +1,39 @@
+expression_orig Data Summary Report
+================================================================================
+
+Data Dimensions:
+  Samples: 20
+  Features: 100
+
+Quality Control Metrics:
+  Overall missing rate: 0.0000
+  Average sample mean: 5.2109
+  Sample mean std dev: 0.1231
+  Average feature mean: 5.2109
+  Feature mean std dev: 0.0000
+
+Missing Data:
+  Avg missing per sample: 0.00
+  Avg missing per feature: 0.00
+
+Top 20 Most Variable Features:
+  1. s003: 1.772354
+  2. s033: 1.772354
+  3. s024: 1.772354
+  4. s044: 1.772354
+  5. s041: 1.772354
+  6. s066: 1.772354
+  7. s004: 1.772354
+  8. s007: 1.772354
+  9. s017: 1.772354
+  10. s002: 1.772354
+  11. s006: 1.772354
+  12. s009: 1.772354
+  13. s032: 1.772354
+  14. s029: 1.772354
+  15. s031: 1.772354
+  16. s030: 1.772354
+  17. s023: 1.772354
+  18. s020: 1.772354
+  19. s011: 1.772354
+  20. s013: 1.772354
