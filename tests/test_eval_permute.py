@@ -194,11 +194,188 @@ def test_label_strata_value_error():
 
 
 def test_label_strata_nan_chrom():
-    m_annot = pd.DataFrame({'name': ['m1'], 'chrom': [None]}).set_index('name')
-    g_annot = pd.DataFrame({'name': ['g1'], 'chrom': [1]}).set_index('name')
-    output = pd.DataFrame({'mt_id': ['m1'], 'gt_id': ['g1']})
-    with pytest.raises(ValueError, match="NaN chromosome in annotation"):
+    m_annot = pd.DataFrame({'name': ['m1', 'm2', 'm3', 'm4'], 'chrom': [1, 2, None, 4]}).set_index('name')
+    g_annot = pd.DataFrame({'name': ['g1', 'g2', 'g3', 'g4'], 'chrom': [1, 3, 3, None]}).set_index('name')
+    output = pd.DataFrame({'mt_id': ['m1', 'm2', 'm3', 'm4'], 'gt_id': ['g1', 'g2', 'g3', 'g4']})
+    keep, is_cis, is_trans, n_cis, n_trans, n_dropped = ep.label_strata(output, m_annot, g_annot)
+
+    assert n_dropped == 2
+    assert keep.tolist() == [True, True, False, False]
+    assert n_cis == 1
+    assert n_trans == 1
+
+def test_load_annotation_real_bed6_shape(tmp_path):
+    annot_path = tmp_path / "real_bed6.bed"
+    with open(annot_path, "w") as f:
+        f.write("chrom\tchromStart\tchromEnd\tname\tscore\tstrand\n")
+        f.write("chr1\t1\t100\tm1\t0\t+\n")
+        f.write("chr2\t101\t200\tm2\t0\t+\n")
+        f.write("chr3\t201\t300\tm3\t0\t+\n")
+        f.write("chr4\t301\t400\tm4\t0\t+\n")
+        f.write("chr5\t401\t500\tm5\t0\t+\n")
+        f.write("\t501\t600\tm6\t0\t+\n") # Empty chrom
+
+    annot = ep._load_annotation(str(annot_path), "test")
+    assert annot.shape == (6, 5)
+    assert list(annot.columns) == ['chrom', 'chromStart', 'chromEnd', 'score', 'strand']
+    assert annot.index.name == 'name'
+
+def test_load_annotation_bare_int_fallback(tmp_path):
+    annot_path = tmp_path / "bare_int.bed"
+    with open(annot_path, "w") as f:
+        f.write("chrom\tchromStart\tchromEnd\tname\tscore\tstrand\n")
+        f.write("1\t1\t100\tm1\t0\t+\n")
+        f.write("2\t101\t200\tm2\t0\t+\n")
+        f.write("3\t201\t300\tm3\t0\t+\n")
+        f.write("4\t301\t400\tm4\t0\t+\n")
+        f.write("5\t401\t500\tm5\t0\t+\n")
+        f.write("\t501\t600\tm6\t0\t+\n") # Empty chrom
+
+    annot = ep._load_annotation(str(annot_path), "test")
+    assert annot.shape == (6, 5)
+    assert list(annot.columns) == ['chrom', 'chromStart', 'chromEnd', 'score', 'strand']
+    assert annot.index.name == 'name'
+
+def test_load_annotation_missing_name_column_fails_closed(tmp_path):
+    annot_path = tmp_path / "bad.csv"
+    with open(annot_path, "w") as f:
+        f.write("chrom,chromStart,chromEnd,score,strand\n")
+        f.write("chr1,1,100,0,+\n")
+
+    with pytest.raises(ValueError, match="has no 'name' column") as excinfo:
+        ep._load_annotation(str(annot_path), "test")
+    assert "separator mismatch" in str(excinfo.value)
+
+def test_load_annotation_duplicate_names_fails_closed(tmp_path):
+    annot_path = tmp_path / "dup.bed"
+    with open(annot_path, "w") as f:
+        f.write("chrom\tchromStart\tchromEnd\tname\tscore\tstrand\n")
+        f.write("chr1\t1\t100\tm1\t0\t+\n")
+        f.write("chr2\t101\t200\tm1\t0\t+\n")
+
+    with pytest.raises(ValueError, match="is not unique") as excinfo:
+        ep._load_annotation(str(annot_path), "test")
+    assert "(1 duplicated names)" in str(excinfo.value)
+
+def test_canon_chrom_preserves_nan():
+    res = ep._canon_chrom(['chr1', np.nan, '2.0', 'X'], "test")
+    res_list = res.tolist()
+    assert res_list[0] == '1'
+    assert pd.isna(res_list[1])
+    assert res_list[2] == '2'
+    assert res_list[3] == 'X'
+    # pd.NA != 'nan' evaluates to pd.NA, which raises TypeError when asserted.
+    # We just want to ensure it is not the string 'nan'.
+    assert not (isinstance(res[1], str) and res[1] == 'nan')
+
+def test_label_strata_all_dropped_fails_closed():
+    m_annot = pd.DataFrame({'name': ['m1', 'm2'], 'chrom': [None, 1]}).set_index('name')
+    g_annot = pd.DataFrame({'name': ['g1', 'g2'], 'chrom': [1, None]}).set_index('name')
+    output = pd.DataFrame({'mt_id': ['m1', 'm2'], 'gt_id': ['g1', 'g2']})
+    with pytest.raises(ValueError, match="All reported pairs dropped"):
         ep.label_strata(output, m_annot, g_annot)
+
+def test_main_alignment_after_drop(tmp_path):
+    df_val = 50
+    m_annot = pd.DataFrame({'name': ['m1', 'm2', 'm3', 'm4'], 'chrom': [1, 2, None, 4]})
+    g_annot = pd.DataFrame({'name': ['g1', 'g2', 'g3', 'g4'], 'chrom': [1, 3, 3, None]})
+
+    m_annot_path = tmp_path / "m_annot.bed"
+    g_annot_path = tmp_path / "g_annot.bed"
+    m_annot.to_csv(m_annot_path, sep="\t", index=False)
+    g_annot.to_csv(g_annot_path, sep="\t", index=False)
+
+    t_vals = [2.0, -1.5, 999.0, 999.0]
+    p_perm = [0.05, 0.15, 0.0, 0.0]
+
+    output = pd.DataFrame({
+        'mt_id': ['m1', 'm2', 'm3', 'm4'],
+        'gt_id': ['g1', 'g2', 'g3', 'g4'],
+        'mt_t': t_vals,
+        'perm_mt_p': p_perm
+    })
+
+    out_path = tmp_path / "out.parquet"
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    pq.write_table(pa.Table.from_pandas(output), out_path)
+
+    out_dir = tmp_path / "dir"
+    script_path = os.path.join(os.path.dirname(__file__), "../tools/eval_permute.py")
+
+    subprocess.run([
+        "python", script_path,
+        "--perm-output", str(out_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir)
+    ], check=True)
+
+    with open(out_dir / "eval_permute_report.json") as f:
+        rep = json.load(f)
+
+    assert rep['metadata']['n_pairs_input'] == 4
+    assert rep['metadata']['n_pairs_dropped_unmappable_chrom'] == 2
+    assert rep['metadata']['n_pairs_scored'] == 2
+    assert rep['metadata']['n_pairs_scored'] == rep['metadata']['n_cis'] + rep['metadata']['n_trans']
+
+    import scipy.stats
+    expected_p_ana = 2.0 * scipy.stats.t.sf(np.abs([2.0, -1.5]), df_val)
+    expected_neg_log = -np.log10(expected_p_ana)
+    actual_neg_log = rep['arms']['calibration']['qq_data']['neg_log10_p_ana']
+
+    assert np.allclose(actual_neg_log[:2], expected_neg_log[:2])
+
+def test_report_carries_drop_counts(tmp_path):
+    df_val = 50
+    m_annot = pd.DataFrame({'name': ['m1', 'm2'], 'chrom': [1, 2]})
+    g_annot = pd.DataFrame({'name': ['g1', 'g2'], 'chrom': [1, 3]})
+
+    m_annot_path = tmp_path / "m_annot.bed"
+    g_annot_path = tmp_path / "g_annot.bed"
+    m_annot.to_csv(m_annot_path, sep="\t", index=False)
+    g_annot.to_csv(g_annot_path, sep="\t", index=False)
+
+    t_vals = [2.0, -1.5]
+    p_perm = [0.05, 0.15]
+
+    output = pd.DataFrame({
+        'mt_id': ['m1', 'm2'],
+        'gt_id': ['g1', 'g2'],
+        'mt_t': t_vals,
+        'perm_mt_p': p_perm
+    })
+
+    out_path = tmp_path / "out.parquet"
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    pq.write_table(pa.Table.from_pandas(output), out_path)
+
+    out_dir = tmp_path / "dir"
+    script_path = os.path.join(os.path.dirname(__file__), "../tools/eval_permute.py")
+
+    subprocess.run([
+        "python", script_path,
+        "--perm-output", str(out_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir)
+    ], check=True)
+
+    with open(out_dir / "eval_permute_report.json") as f:
+        rep = json.load(f)
+
+    assert 'n_pairs_input' in rep['metadata']
+    assert 'n_pairs_dropped_unmappable_chrom' in rep['metadata']
+    assert 'n_pairs_scored' in rep['metadata']
+    assert 'n_pairs' not in rep['metadata']
+
+    assert rep['metadata']['n_pairs_input'] == 2
+    assert rep['metadata']['n_pairs_dropped_unmappable_chrom'] == 0
+    assert rep['metadata']['n_pairs_scored'] == 2
+
 def test_stratify_decision_smoke(tmp_path):
     """
     Construct one synthetic case where cis == trans (expect "single_global_null_adequate")
