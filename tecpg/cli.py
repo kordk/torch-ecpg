@@ -1450,7 +1450,7 @@ def mlr_single(
 
     include = (not no_est, not no_err, not no_t, not no_p)
 
-    if region != 'all':
+    if region != 'all' or mlr_method == 'qr_permute':
         annot_path = os.path.join(data['root_path'], data['annot_dir'])
         M_annot = (
             pandas.read_csv(

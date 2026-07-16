@@ -24,9 +24,8 @@ def _normalize_annotations(M_annot, G_annot, M, G, logger):
         if pd.api.types.is_integer_dtype(s):
             return s
         s = s.astype('string').str.strip()
-        s = s
-        s = s.str.upper()
         s = s.str.replace(r'^chr', '', regex=True, case=False)
+        s = s.str.upper()
         num = pd.to_numeric(s, errors='coerce')
         spec = s.map({'X': -1, 'Y': -2, 'MT': -3, 'M': -3})
         return num.fillna(spec)
@@ -37,27 +36,28 @@ def _normalize_annotations(M_annot, G_annot, M, G, logger):
     M_annot_n['chrom'] = map_chrom(M_annot_n['chrom'])
     G_annot_n['chrom'] = map_chrom(G_annot_n['chrom'])
 
-    if hasattr(G_annot_n['strand'], "replace"):
-        G_annot_n['strand'] = pd.to_numeric(G_annot_n['strand'].replace({'+': 1, '-': -1}), errors='coerce')
+    G_annot_n['strand'] = pd.to_numeric(G_annot_n['strand'].replace({'+': 1, '-': -1}), errors='coerce')
 
     M_annot_n = M_annot_n[['chrom', 'chromStart']]
     G_annot_n = G_annot_n[['chrom', 'chromStart', 'strand']]
 
     M_loci_before = len(M.index)
     M_annot_n = M_annot_n.reindex(M.index).dropna()
-    logger.info(
-        'Drop site permute._normalize_annotations[M_annot]: dropped methylation loci with '
-        'missing/unmappable annotation: {0} -> {1} ({2} dropped)',
-        M_loci_before, len(M_annot_n), M_loci_before - len(M_annot_n)
-    )
+    if M_loci_before != len(M_annot_n):
+        logger.info(
+            'Drop site permute._normalize_annotations[M_annot]: dropped methylation loci with '
+            'missing/unmappable annotation: {0} -> {1} ({2} dropped)',
+            M_loci_before, len(M_annot_n), M_loci_before - len(M_annot_n)
+        )
 
     G_loci_before = len(G.index)
     G_annot_n = G_annot_n.reindex(G.index).dropna()
-    logger.info(
-        'Drop site permute._normalize_annotations[G_annot]: dropped gene expression loci with '
-        'missing/unmappable annotation: {0} -> {1} ({2} dropped)',
-        G_loci_before, len(G_annot_n), G_loci_before - len(G_annot_n)
-    )
+    if G_loci_before != len(G_annot_n):
+        logger.info(
+            'Drop site permute._normalize_annotations[G_annot]: dropped gene expression loci with '
+            'missing/unmappable annotation: {0} -> {1} ({2} dropped)',
+            G_loci_before, len(G_annot_n), G_loci_before - len(G_annot_n)
+        )
 
     if len(M_annot_n) == 0 or len(G_annot_n) == 0:
         raise ValueError("Normalization dropped all loci on one or both axes.")

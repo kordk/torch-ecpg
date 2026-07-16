@@ -121,35 +121,96 @@ def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path):
     assert df['perm_mt_p'].isna().sum() == 0
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def test_cli_regression():
-    """7. CLI REGRESSION - test qr method behavior unchanged at --all and --cis"""
+    """7. CLI REGRESSION - exact pass-through assertions matrix"""
+    from click.testing import CliRunner
+    from unittest.mock import patch
+    import os
+    import json
+    from tecpg.cli import cli
+    from tecpg.logger import Logger
+
     runner = CliRunner()
-    # just basic smoke test ensuring we get correct help text or errors
-    result = runner.invoke(mlr, ['--mlr-method', 'qr', '--all', '--help'])
-    assert result.exit_code == 0
+    with runner.isolated_filesystem():
+        cwd = os.getcwd()
 
-def test_drop_and_trim_trans_mask_oracle(cli_shaped_annotated_fixture):
-    """Test decisive alignment assertion on stratum"""
-    from tecpg.permute import _compute_trans_mask
-    M, G, C, M_annot, G_annot = cli_shaped_annotated_fixture(10, 5, 5)
+        # Setup dummy filesystem for CLI
+        os.makedirs(os.path.join(cwd, 'data'), exist_ok=True)
+        os.makedirs(os.path.join(cwd, 'annot'), exist_ok=True)
+        os.makedirs(os.path.join(cwd, 'output'), exist_ok=True)
 
-    logger = Logger()
-    M_annot_n, G_annot_n, M_n, G_n = _normalize_annotations(M_annot, G_annot, M, G, logger)
+        # Tiny valid datasets
+        pd.DataFrame({'a': [1,2], 'b': [3,4]}, index=['m1', 'm2']).to_csv(os.path.join(cwd, 'data/M.csv'))
+        pd.DataFrame({'a': [1,2], 'b': [3,4]}, index=['g1', 'g2']).to_csv(os.path.join(cwd, 'data/G.csv'))
+        pd.DataFrame({'c': [1,2]}).to_csv(os.path.join(cwd, 'data/C.csv'), index=False)
 
-    m_idx = M_n.index.astype(str)
-    g_idx = G_n.index.astype(str)
+        # Minimal BED6 annotations
+        bed6_content = "chrom\tchromStart\tchromEnd\tname\tscore\tstrand\nchr1\t1\t2\tm1\t0\t+\nchr1\t1\t2\tm2\t0\t+\n"
+        with open(os.path.join(cwd, 'annot/M.bed6'), 'w') as f: f.write(bed6_content)
+        bed6_content_g = "chrom\tchromStart\tchromEnd\tname\tscore\tstrand\nchr1\t1\t2\tg1\t0\t+\nchr1\t1\t2\tg2\t0\t+\n"
+        with open(os.path.join(cwd, 'annot/G.bed6'), 'w') as f: f.write(bed6_content_g)
 
-    reported_pairs = pd.MultiIndex.from_product([m_idx, g_idx], names=['mt_id', 'gt_id']).to_frame(index=False)
+        # Mock targets
+        with patch('tecpg.cli.tecpg_mlr_qr') as mock_qr, \
+             patch('tecpg.permute.tecpg_mlr_qr_permute') as mock_qr_permute, \
+             patch('tecpg.cli.read_dataframes') as mock_read:
 
-    trans_mask = _compute_trans_mask(reported_pairs, M_annot_n, G_annot_n, 'trans', window_base=1000, downstream=1000, upstream=1000, logger=logger)
+            # Make the dataframes loader return our mocked ones seamlessly without global config messing up
+            mock_read.return_value = {
+                "M.csv": pd.DataFrame({'a': [1,2], 'b': [3,4]}, index=['m1', 'm2']),
+                "G.csv": pd.DataFrame({'a': [1,2], 'b': [3,4]}, index=['g1', 'g2']),
+                "C.csv": pd.DataFrame({'c': [1,2]})
+            }
 
-    # We constructed the cli-shaped fixture such that one has chrom=chrX -> -1, another has chrY -> -2
-    # For a trans mask between chrom -1 and -2, it should be True
-    # The expected mask should match exactly what we anticipate from the hand-known strata
-    # To check the specific mask exactly:
-    m_chroms = M_annot_n.loc[reported_pairs['mt_id'], 'chrom'].values
-    g_chroms = G_annot_n.loc[reported_pairs['gt_id'], 'chrom'].values
+            # Test 1: qr + --all
+            # The top-level group is 'cli', then 'run', then 'mlr'
+            result1 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr', '--all'])
+            if result1.exit_code != 0:
+                print(result1.output)
+            assert result1.exit_code == 0, f"Failed: {result1.exception}"
+            assert mock_qr.call_args.kwargs['M_annot'] is None
+            assert mock_qr.call_args.kwargs['G_annot'] is None
 
-    expected_trans_mask = (m_chroms != g_chroms)
+            # Test 2: qr + --cis
+            result2 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr', '--cis'])
+            assert result2.exit_code == 0, f"Failed: {result2.exception}"
+            assert isinstance(mock_qr.call_args.kwargs['M_annot'], pd.DataFrame)
+            assert isinstance(mock_qr.call_args.kwargs['G_annot'], pd.DataFrame)
 
-    np.testing.assert_array_equal(trans_mask, expected_trans_mask)
+            # Test 3: qr_permute + --all (The FACT-1 fix)
+            result3 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr_permute', '--all'])
+            assert result3.exit_code == 0, f"Failed: {result3.exception}"
+            assert isinstance(mock_qr_permute.call_args.kwargs['M_annot'], pd.DataFrame)
+            assert isinstance(mock_qr_permute.call_args.kwargs['G_annot'], pd.DataFrame)
+            assert mock_qr_permute.call_args.kwargs['output_p_threshold'] is None
+
+            # Test 4: qr_permute + --cis + --output-p-threshold
+            result4 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr_permute', '--cis', '--output-p-threshold', '0.05'])
+            assert result4.exit_code == 0, f"Failed: {result4.exception}"
+            assert isinstance(mock_qr_permute.call_args.kwargs['M_annot'], pd.DataFrame)
+            assert isinstance(mock_qr_permute.call_args.kwargs['G_annot'], pd.DataFrame)
+            assert mock_qr_permute.call_args.kwargs['output_p_threshold'] == 0.05

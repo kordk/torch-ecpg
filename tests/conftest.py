@@ -24,12 +24,14 @@ def cli_shaped_annotated_fixture():
 
         # Simulating the raw format handed by the CLI parser:
         # strings with chr-prefix, extra columns, some missing/X/Y mappings
+        # M chroms: ['chr1', 'chr2', 'chrX', nan, 'chr7'] ... repeating if > 5
+        # G chroms: ['chr1', 'chr7', 'chrY', 'GL000220.1', 'chr2'] ... repeating if > 5
+
+        M_chroms_cycle = ['chr1', 'chr2', 'chrX', float('nan'), 'chr7']
+        G_chroms_cycle = ['chr1', 'chr7', 'chrY', 'GL000220.1', 'chr2']
+
         M_annot_raw = pd.DataFrame(index=M_annot['name'])
-        M_annot_raw['chrom'] = ['chr19'] * len(M_annot_raw)
-        if len(M_annot_raw) > 0:
-            M_annot_raw.loc[M_annot_raw.index[0], 'chrom'] = 'chrX'
-        if len(M_annot_raw) > 1:
-            M_annot_raw.loc[M_annot_raw.index[1], 'chrom'] = float('nan') # dropped
+        M_annot_raw['chrom'] = [M_chroms_cycle[i % 5] for i in range(len(M_annot_raw))]
 
         M_annot_raw['chromStart'] = range(len(M_annot_raw))
         M_annot_raw['chromEnd'] = range(len(M_annot_raw))
@@ -37,11 +39,7 @@ def cli_shaped_annotated_fixture():
         M_annot_raw['strand'] = '+'
 
         G_annot_raw = pd.DataFrame(index=G_annot['name'])
-        G_annot_raw['chrom'] = ['chr19'] * len(G_annot_raw)
-        if len(G_annot_raw) > 0:
-            G_annot_raw.loc[G_annot_raw.index[0], 'chrom'] = 'chrY'
-        if len(G_annot_raw) > 1:
-            G_annot_raw.loc[G_annot_raw.index[1], 'chrom'] = 'GL000220.1' # unmappable, dropped
+        G_annot_raw['chrom'] = [G_chroms_cycle[i % 5] for i in range(len(G_annot_raw))]
 
         G_annot_raw['chromStart'] = range(len(G_annot_raw))
         G_annot_raw['chromEnd'] = range(len(G_annot_raw))
