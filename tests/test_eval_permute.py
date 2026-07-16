@@ -264,7 +264,9 @@ def test_canon_chrom_preserves_nan():
     assert pd.isna(res_list[1])
     assert res_list[2] == '2'
     assert res_list[3] == 'X'
-    assert res[1] != 'nan'
+    # pd.NA != 'nan' evaluates to pd.NA, which raises TypeError when asserted.
+    # We just want to ensure it is not the string 'nan'.
+    assert not (isinstance(res[1], str) and res[1] == 'nan')
 
 def test_label_strata_all_dropped_fails_closed():
     m_annot = pd.DataFrame({'name': ['m1', 'm2'], 'chrom': [None, 1]}).set_index('name')
