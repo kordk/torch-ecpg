@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev25**.
+The current development version on the `dev` branch is **2.0.0b2.dev39**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -16,6 +16,134 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 2.0.0b2.dev39
+
+### Bug Fixes
+- Resolve `eval_permute` annotation-reader failures and `NaN`-chromosome
+  handling, and fix a `TypeError` from `pd.NA` boolean evaluation in the
+  `eval_permute` tests (PR #306).
+
+## 2.0.0b2.dev38
+
+### Features
+- Support running `qr_permute` from the CLI at `--all` with real BED6
+  annotations (PR #305).
+
+### Documentation
+- Revise the `qr_permute` status and output documentation.
+
+### Tests
+- Fix regression-test integrity for annotation load/pass at `--all`.
+
+## 2.0.0b2.dev37
+
+### Features
+- Add a standalone read-only `eval_permute` diagnostic and scaffold its
+  evaluation harness (PR #303).
+
+### Improvements / Performance
+- Add a minimal CI test gate that runs `pytest`, and allow the required Node
+  version for the checkout / setup-python actions (PR #304).
+
+### Bug Fixes
+- Address evaluation bugs in `eval_permute` and its tests, and fix test-suite
+  collisions and label-strata robustness.
+
+## 2.0.0b2.dev36
+
+### Features
+- Add permutation output finalization and thresholding (`qr_permute` chunk 9)
+  (PR #301).
+
+### Documentation
+- Update the `qr_permute` status and clarify its limitations.
+
+## 2.0.0b2.dev35
+
+### Features
+- Implement the GPD peaks-over-threshold tail for `qr_permute` chunk 8
+  (PR #300).
+
+### Tests
+- Test tail continuity against the epsilon handoff and clean up scripts.
+
+## 2.0.0b2.dev34
+
+### Features
+- Implement `_score_observed` to compute empirical permutation p-values
+  (PR #299).
+
+### Documentation
+- Document the permute / bootstrap tests and add run guidance (PR #298).
+
+## 2.0.0b2.dev33
+
+### Features
+- Build out the `qr_permute` null pipeline: real cis/trans masking via a shared
+  helper (chunk 3, PR #294), null-population subsampling (chunk 4, PR #295),
+  design-fixed Freedman–Lane permutation of the response (chunk 5, PR #296),
+  and streaming null accumulation with trans null stratification (chunk 6,
+  PR #297).
+
+### Bug Fixes
+- Remove a duplicate test and fix an overflow bound in chunk 6.
+
+### Documentation
+- Revise the `qr_permute` status and implementation details.
+
+## 2.0.0b2.dev32
+
+### Improvements / Performance
+- Make parquet the default output format for all MLR methods; `--output-format
+  auto` now resolves to `parquet` regardless of host profile (PR #293).
+
+## 2.0.0b2.dev31
+
+### Features
+- Implement the batched PyTorch QR solver for `_compute_observed_statistic`
+  and the observed-statistic path for `qr_permute` chunk 2 (PR #292).
+
+### Documentation
+- Create documentation for the `qr_permute` method.
+
+## 2.0.0b2.dev30
+
+### Features
+- Add the `qr_permute` walking skeleton (chunk 0 + chunk 1) (PR #291).
+
+### Improvements / Performance
+- Refactor the chunking logs in `tecpg_mlr_qr` to use the standard log
+  formatting (PR #289).
+
+### Documentation
+- Update the README dev version and note the PEP 440 versioning scheme
+  (PR #290).
+
+## 2.0.0b2.dev29
+
+### Bug Fixes
+- Fix the `tecpg run --help` output for the mlr commands (PR #288).
+
+## 2.0.0b2.dev28
+
+### Improvements / Performance
+- Update the MLR CLI descriptions and hide `mlr-single` from non-debug help
+  (PR #287).
+
+### Bug Fixes
+- Change the debug short flag from `-d` to `-D` to prevent collisions with
+  dataset flags in bash scripts (PR #286).
+
+## 2.0.0b2.dev27
+
+### Improvements / Performance
+- Change the `memory_check` log level to debug to reduce log noise (PR #285).
+
+## 2.0.0b2.dev26
+
+### Improvements / Performance
+- Add `diagnoseExpressionPCs.py` for GTP to `pipelinePre.sh`.
 
 ## 2.0.0b2.dev25
 
