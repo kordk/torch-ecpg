@@ -143,7 +143,7 @@ Each reported pair carries `mt_id`, `gt_id`, the observed statistic `mt_t`, the 
 
 `tecpg_perm_n_reported` records the **pre-threshold** universe size. This matters: scoring computes a p for every reported pair, but an optional `output_p_threshold` writes only pairs at or below a cutoff (genome scale cannot materialize `~2e10` rows). The default writes **all** reported pairs, preserving the full FDR universe on disk; when a threshold is used, `tecpg_perm_n_reported` is what keeps a downstream BH-FDR correction honest about the universe it was drawn from (Phase 4).
 
-> **Two current gaps.** (i) The metadata keys are written on the **parquet** path only — a CSV run keeps the `seed` and `n_perm` *columns* but loses `n_reported`, so a thresholded CSV artifact cannot reconstruct its FDR universe. Prefer parquet for permutation output. (ii) `output_p_threshold` is presently a function-level parameter and is **not exposed as a CLI flag**.
+> **One current gap.** (i) The metadata keys are written on the **parquet** path only — a CSV run keeps the `seed` and `n_perm` *columns* but loses `n_reported`, so a thresholded CSV artifact cannot reconstruct its FDR universe. Prefer parquet for permutation output.
 
 ---
 
@@ -213,6 +213,7 @@ Relevant options:
 - `--all` / `--cis` / `--distal` / `--trans` — coverage selection (the standard region flags); scoring stratum is derived per pair (§4).
 - `--subsample-mt-count` / `--subsample-g-count` — random loci selection for null estimation (§3.3).
 - `--seed` — permutation/subsample seed, recorded with the output.
+- `--output-p-threshold` — writes only pairs at or below this permutation p-value cutoff. Pre-threshold size is retained in metadata.
 
 **Annotations are required.** Because the null is chromosome-stratified (§3.4, §3.8), methylation and expression annotations must be supplied; running without them raises rather than silently producing an unstratified null.
 

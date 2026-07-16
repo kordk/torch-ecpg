@@ -962,6 +962,15 @@ def corr(
     default=False,
     help='Call torch.cuda.empty_cache() after every gene chunk. Default is to only empty the cache under memory pressure (> 75% allocated). Useful on memory-constrained GPUs.',
 )
+@click.option(
+    '--output-p-threshold',
+    type=click.FloatRange(0, 1, min_open=True),
+    default=None,
+    show_default=True,
+    help='Filters which pairs are written (not which are scored). '
+    'The tecpg_perm_n_reported metadata will preserve the '
+    'pre-threshold universe. For qr_permute.',
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -982,6 +991,7 @@ def mlr(
     permutations: int,
     subsample_mt_count: Optional[int],
     subsample_g_count: Optional[int],
+    output_p_threshold: Optional[float],
     seed: int,
     permute_label_test: bool,
     compute_ig: bool,
@@ -1125,7 +1135,10 @@ def mlr(
                 meth_loci_per_chunk, host_profile,
             )
 
-    if region != 'all':
+    M_annot = None
+    G_annot = None
+
+    if region != 'all' or mlr_method == 'qr_permute':
         annot_path = os.path.join(data['root_path'], data['annot_dir'])
         M_annot = pandas.read_csv(
             os.path.join(annot_path, data['meth_annot']), sep=None, engine='python'
@@ -1284,8 +1297,8 @@ def mlr(
             M=M,
             G=G,
             C=C,
-            M_annot=M_annot if region != 'all' else None,
-            G_annot=G_annot if region != 'all' else None,
+            M_annot=M_annot,
+            G_annot=G_annot,
             region=region,
             window_base=window_base,
             downstream=downstream,
@@ -1296,6 +1309,7 @@ def mlr(
             seed=seed,
             output_file=output_file_path,
             output_format=output_format,
+            output_p_threshold=output_p_threshold,
             thermal_threshold=thermal_threshold,
             thermal_wait=thermal_wait,
             logger=logger
