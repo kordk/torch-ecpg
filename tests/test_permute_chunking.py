@@ -27,7 +27,7 @@ def chunking_data():
     return M, G, C, pairs
 
 
-def test_chunking_exact_match_and_oracle(chunking_data):
+def test_chunking_exact_match_and_oracle(chunking_data, capsys):
     M, G, C, pairs = chunking_data
     logger = Logger()
 
@@ -37,14 +37,13 @@ def test_chunking_exact_match_and_oracle(chunking_data):
     # 2. Chunked run (P=84, chunk=5 -> 17 chunks, remainder 4)
     t_chunked = _compute_observed_statistic(M, G, C, pairs, logger, pair_chunk_size=5)
 
+    # Capture stdout to assert loop execution via Logger output
+    out = capsys.readouterr().out
+    assert 'chunks_executed=17' in out, f"expected 17 loop iterations, got:\n{out}"
+
     # Check shape & exact match
-    # Check length and equal slices
     assert len(t_single) == len(pairs)
     assert len(t_chunked) == len(pairs)
-
-    import math
-    assert math.ceil(len(pairs) / 5) >= 3, "Not enough chunks to prove coverage"
-
     assert np.allclose(t_single, t_chunked, atol=1e-6), "Chunked output differs from single-shot output"
 
     # Check equal length and elementwise equality within float limits

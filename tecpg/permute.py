@@ -203,8 +203,10 @@ def _compute_observed_statistic(M, G, C, reported_pairs, logger, *, pair_chunk_s
 
     out = torch.empty(P, device=device, dtype=dtype)
 
+    n_iters = 0
     S = nrows
     for start in range(0, P, chunk):
+        n_iters += 1
         end = min(start + chunk, P)
         mm = m_mapped[start:end]
         gm = g_mapped[start:end]
@@ -246,6 +248,8 @@ def _compute_observed_statistic(M, G, C, reported_pairs, logger, *, pair_chunk_s
 
         del M_sub, G_sub, ones, Mt, Ct, X, Y, Q, R, R_inv, QtY, B, T, XtXi_diag_sqrt, Y_norm_sq, QtY_norm_sq, RSS, Sigma, S_err
 
+    logger.info('permute observed: chunks_executed={0}', n_iters)
+    logger.info('permute observed: chunks_executed={0}', n_iters)
     return out.cpu().numpy()
 
 
