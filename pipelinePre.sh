@@ -187,7 +187,7 @@ if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
     log "C_post_cellTypes.csv already exists. Skipping cell proportion estimation."
 else
     log "Running EpiDISH to estimate cell proportions..."
-    if [ "$DATASET" == "dummy" ]; then
+    if [ "$DATASET" == "dummy" || [ "$DATASET" == "gtpsub" ]; then
         log "Skipping EpiDISH for dummy data (random noise causes singular fits)."
         cp "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv"
     else
