@@ -10,6 +10,11 @@ log() {
 
 # Default settings
 DATASET="dummy"
+
+# gtpsub-only: locus subsample targets (rows kept from full GTP M/G; samples untouched)
+GTPSUB_M_LOCI=10000
+GTPSUB_G_LOCI=5000
+GTPSUB_SEED=42
 START_STAGE="all"
 
 # Parse arguments
@@ -20,7 +25,7 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -h, --help               Show this help message and exit"
-            echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, mesa"
+            echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, gtpsub, mesa"
             echo "  -s, --start-stage STAGE  Specify the starting stage. Options: all, prep, cell_prop, pca. Default is 'all'."
             exit 0
             ;;
@@ -55,9 +60,9 @@ if [ $IS_VALID_STAGE -eq 0 ]; then
     exit 1
 fi
 
-if [ "$DATASET" != "gtp" ] && [ "$DATASET" != "mesa" ] && [ "$DATASET" != "dummy" ]; then
+if [ "$DATASET" != "gtp" ] && [ "$DATASET" != "gtpsub" ] && [ "$DATASET" != "mesa" ] && [ "$DATASET" != "dummy" ]; then
     log "Error: Unknown dataset: $DATASET"
-    log "Usage: ./pipelinePre.sh --dataset [dummy|gtp|mesa]"
+    log "Usage: ./pipelinePre.sh --dataset [dummy|gtp|gtpsub|mesa]"
     exit 1
 fi
 
@@ -102,10 +107,16 @@ else
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
         cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
         cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
-    elif [ "$DATASET" == "gtp" ]; then
+    elif [ "$DATASET" == "gtp" ] || [ "$DATASET" == "gtpsub" ]; then
         log "Downloading GTP data..."
         echo "y" | python3 -m tecpg data gtp --yes
         mv data/* "$DATA_DIR/"
+
+        if [ "$DATASET" == "gtpsub" ]; then
+            log "Subsampling gtpsub loci..."
+            python3 tools/subsample_loci.py "$DATA_DIR/M.csv" "$DATA_DIR/M.csv" "$GTPSUB_M_LOCI" --seed "$GTPSUB_SEED"
+            python3 tools/subsample_loci.py "$DATA_DIR/G.csv" "$DATA_DIR/G.csv" "$GTPSUB_G_LOCI" --seed "$GTPSUB_SEED"
+        fi
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
         cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
         cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
@@ -220,7 +231,7 @@ with open('$DATA_DIR/C.shape.meta', 'w') as fh:
 fi
 fi
 
-if [ $DATASET == "gtp" ]; then
+if [ "$DATASET" == "gtp" ] || [ "$DATASET" == "gtpsub" ]; then
     log "GTP - Diagnosing expression PCs..."
     python3 -u tools/diagnoseExpressionPCs.py     --expression "$DATA_DIR/G.csv"     --covariates "$DATA_DIR/C_post_cellTypes.csv"
 fi
