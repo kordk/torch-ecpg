@@ -134,9 +134,45 @@ def _compute_trans_mask(reported_pairs, M_annot, G_annot, region,
     return mask.cpu().numpy()
 
 
-def _compute_observed_statistic(M, G, C, reported_pairs, logger):
+
+WORKING_TENSOR_MULT = 8
+SAFETY_FRACTION = 0.5
+CPU_PAIR_BUDGET_BYTES = 500 * 1024 * 1024
+
+def _resolve_pair_chunk_size(P, S, K, device, override, logger):
+    if override is not None:
+        chunk = max(1, min(override, P))
+        logger.info('permute observed: P={0} chunk={1} override={2}', P, chunk, override)
+        return chunk
+
+    dtype = torch.float32 if 'float32' in str(DTYPE) else torch.float64
+    element_bytes = torch.tensor([], dtype=dtype).element_size()
+    per_pair_bytes = WORKING_TENSOR_MULT * S * K * element_bytes
+
+    if device.type == 'cuda':
+        try:
+            free, _ = torch.cuda.mem_get_info(device)
+            budget = free * SAFETY_FRACTION
+            branch = 'cuda'
+        except Exception:
+            budget = CPU_PAIR_BUDGET_BYTES
+            branch = 'cuda-fallback'
+    else:
+        budget = CPU_PAIR_BUDGET_BYTES
+        branch = 'cpu'
+
+    chunk = max(1, int(budget // per_pair_bytes))
+    chunk = min(chunk, P)
+    n_chunks = (P + chunk - 1) // chunk
+
+    logger.info('permute observed: P={0} chunk={1} n_chunks={2} per_pair_bytes={3} branch={4}', P, chunk, n_chunks, per_pair_bytes, branch)
+    return chunk
+
+
+def _compute_observed_statistic(M, G, C, reported_pairs, logger, *, pair_chunk_size=None, device=None):
     # CHUNK 2: pivotal t = B/S per reported pair (reuse qr solve primitives).
-    device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
+    if device is None:
+        device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
     dtype = DTYPE
 
     if len(reported_pairs) == 0:
@@ -162,57 +198,55 @@ def _compute_observed_statistic(M, G, C, reported_pairs, logger):
     M_tensor = torch.tensor(M.to_numpy(), device=device, dtype=dtype)
     G_tensor = torch.tensor(G.to_numpy(), device=device, dtype=dtype)
 
-    M_subset = M_tensor[m_mapped]  # (P, S)
-    G_subset = G_tensor[g_mapped]  # (P, S)
+    K = 2 + C.shape[1] # intercept + meth + covariates
+    chunk = _resolve_pair_chunk_size(P, S=nrows, K=K, device=device, override=pair_chunk_size, logger=logger)
+
+    out = torch.empty(P, device=device, dtype=dtype)
 
     S = nrows
+    for start in range(0, P, chunk):
+        end = min(start + chunk, P)
+        mm = m_mapped[start:end]
+        gm = g_mapped[start:end]
+        p = end - start
 
-    # 1. Intercept
-    ones = torch.ones((P, S, 1), device=device, dtype=dtype)
+        M_sub = M_tensor[mm]
+        G_sub = G_tensor[gm]
 
-    # 2. Methylation
-    Mt = M_subset.unsqueeze(2)  # (P, S, 1)
+        ones = torch.ones((p, S, 1), device=device, dtype=dtype)
+        Mt = M_sub.unsqueeze(2)
+        Ct = C_tensor.unsqueeze(0).expand(p, -1, -1)
+        X = torch.cat((ones, Mt, Ct), dim=2)
+        Y = G_sub.unsqueeze(2)
 
-    # 3. Covariates
-    Ct = C_tensor.unsqueeze(0).expand(P, -1, -1)  # (P, S, K_covars)
+        Q, R = torch.linalg.qr(X, mode='reduced')
 
-    # X design matrix: (P, S, K)
-    X = torch.cat((ones, Mt, Ct), dim=2)
+        K_dim = X.shape[2]
 
-    # Y response matrix: (P, S, 1)
-    Y = G_subset.unsqueeze(2)
+        R_inv = torch.linalg.solve_triangular(
+            R,
+            torch.eye(K_dim, device=device, dtype=dtype).expand(p, -1, -1),
+            upper=True
+        )
 
-    # QR solve
-    Q, R = torch.linalg.qr(X, mode='reduced')
+        XtXi_diag_sqrt = (R_inv.pow(2).sum(dim=2)).sqrt()
+        QtY = torch.einsum('psk,psg->pkg', Q, Y)
+        B = R_inv.matmul(QtY)
 
-    K_dim = X.shape[2]
+        Y_norm_sq = (Y * Y).sum(dim=1)
+        QtY_norm_sq = (QtY * QtY).sum(dim=1)
 
-    R_inv = torch.linalg.solve_triangular(
-        R,
-        torch.eye(K_dim, device=device, dtype=dtype).expand(P, -1, -1),
-        upper=True
-    )
+        RSS = (Y_norm_sq - QtY_norm_sq).clamp_min(0)
 
-    XtXi_diag_sqrt = (R_inv.pow(2).sum(dim=2)).sqrt()
+        Sigma = (RSS / df).sqrt().unsqueeze(1)
+        S_err = XtXi_diag_sqrt.unsqueeze(2) * Sigma
 
-    QtY = torch.einsum('psk,psg->pkg', Q, Y)
+        T = B / S_err
+        out[start:end] = T[:, 1, 0]
 
-    B = R_inv.matmul(QtY)
+        del M_sub, G_sub, ones, Mt, Ct, X, Y, Q, R, R_inv, QtY, B, T, XtXi_diag_sqrt, Y_norm_sq, QtY_norm_sq, RSS, Sigma, S_err
 
-    Y_norm_sq = (Y * Y).sum(dim=1)
-    QtY_norm_sq = (QtY * QtY).sum(dim=1)
-
-    RSS = (Y_norm_sq - QtY_norm_sq).clamp_min(0)
-
-    Sigma = (RSS / df).sqrt().unsqueeze(1)
-    S_err = XtXi_diag_sqrt.unsqueeze(2) * Sigma
-
-    T = B / S_err
-
-    # Slice methylation coefficient at index 1
-    t_meth = T[:, 1, 0]
-
-    return t_meth.cpu().numpy()
+    return out.cpu().numpy()
 
 
 def _residualize_and_permute(G, C, perm_vector, logger):
@@ -424,7 +458,9 @@ def tecpg_mlr_qr_permute(
 
     reported_pairs = reported_pairs[trans_mask].reset_index(drop=True)
 
-    observed_t = _compute_observed_statistic(M, G, C, reported_pairs, logger)
+    device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
+
+    observed_t = _compute_observed_statistic(M, G, C, reported_pairs, logger, device=device)
 
     accumulator = None
     rng = np.random.default_rng(seed)
@@ -442,7 +478,7 @@ def tecpg_mlr_qr_permute(
     for _ in range(permutations):
         perm_vector = rng.permutation(n_samples)
         G_perm = _residualize_and_permute(null_G, C, perm_vector, logger)
-        perm_stats = _compute_observed_statistic(null_M, G_perm, C, null_pairs, logger)
+        perm_stats = _compute_observed_statistic(null_M, G_perm, C, null_pairs, logger, device=device)
         accumulator = _accumulate_null(perm_stats, accumulator, logger)
 
     empirical_p = _score_observed(observed_t, accumulator, logger)
