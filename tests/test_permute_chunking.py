@@ -41,6 +41,12 @@ def test_chunking_exact_match_and_oracle(chunking_data, capsys):
     out = capsys.readouterr().out
     assert 'chunks_executed=17' in out, f"expected 17 loop iterations, got:\n{out}"
 
+    # 2.b. Progress logging run
+    t_prog = _compute_observed_statistic(M, G, C, pairs, logger, pair_chunk_size=5, progress_label='test')
+    out2 = capsys.readouterr().out
+    assert 'test: chunk' in out2, f"expected progress lines, got:\n{out2}"
+    assert 'chunks_executed=17' in out2, f"expected 17 loop iterations in progress run, got:\n{out2}"
+
     # Check shape & exact match
     assert len(t_single) == len(pairs)
     assert len(t_chunked) == len(pairs)

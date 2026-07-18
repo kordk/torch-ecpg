@@ -169,7 +169,7 @@ def _resolve_pair_chunk_size(P, S, K, device, override, logger):
     return chunk
 
 
-def _compute_observed_statistic(M, G, C, reported_pairs, logger, *, pair_chunk_size=None, device=None):
+def _compute_observed_statistic(M, G, C, reported_pairs, logger, *, pair_chunk_size=None, device=None, progress_label: str | None = None):
     # CHUNK 2: pivotal t = B/S per reported pair (reuse qr solve primitives).
     if device is None:
         device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
@@ -200,6 +200,7 @@ def _compute_observed_statistic(M, G, C, reported_pairs, logger, *, pair_chunk_s
 
     K = 2 + C.shape[1] # intercept + meth + covariates
     chunk = _resolve_pair_chunk_size(P, S=nrows, K=K, device=device, override=pair_chunk_size, logger=logger)
+    n_chunks = (P + chunk - 1) // chunk
 
     out = torch.empty(P, device=device, dtype=dtype)
 
@@ -207,6 +208,8 @@ def _compute_observed_statistic(M, G, C, reported_pairs, logger, *, pair_chunk_s
     S = nrows
     for start in range(0, P, chunk):
         n_iters += 1
+        if progress_label and (n_iters == 1 or n_iters == n_chunks or n_iters % max(1, n_chunks // 10) == 0):
+            logger.info('{0}: chunk {1}/{2}', progress_label, n_iters, n_chunks)
         end = min(start + chunk, P)
         mm = m_mapped[start:end]
         gm = g_mapped[start:end]
@@ -463,7 +466,7 @@ def tecpg_mlr_qr_permute(
 
     device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
 
-    observed_t = _compute_observed_statistic(M, G, C, reported_pairs, logger, device=device)
+    observed_t = _compute_observed_statistic(M, G, C, reported_pairs, logger, device=device, progress_label='qr_permute observed')
 
     accumulator = None
     rng = np.random.default_rng(seed)
@@ -478,11 +481,14 @@ def tecpg_mlr_qr_permute(
                                           window_base, downstream, upstream, logger)
     null_pairs = null_pairs[trans_mask_null].reset_index(drop=True)
 
-    for _ in range(permutations):
+    logger.info('qr_permute: {0} permutations over {1} null pairs', permutations, len(null_pairs))
+
+    for i in range(permutations):
         perm_vector = rng.permutation(n_samples)
         G_perm = _residualize_and_permute(null_G, C, perm_vector, logger)
         perm_stats = _compute_observed_statistic(null_M, G_perm, C, null_pairs, logger, device=device)
         accumulator = _accumulate_null(perm_stats, accumulator, logger)
+        logger.info('qr_permute: permutation {0}/{1} done', i + 1, permutations)
 
     empirical_p = _score_observed(observed_t, accumulator, logger)
     perm_mt_p = _fit_tail(empirical_p, observed_t, accumulator, logger)
