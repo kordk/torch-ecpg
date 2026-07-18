@@ -4,37 +4,71 @@ This directory contains validation, regression, performance, and smoke tests for
 
 ## Running the tests
 
-Most tests import `tecpg`, so install the package in editable mode first and
-run the tests from this `tests/` directory:
+Most tests import `tecpg`, so install the package in editable mode first, then
+install the test dependencies:
 
 ```bash
 # from the repository root
 pip install --editable .
-
-cd tests
+pip install -r requirements-dev.txt   # currently just pytest
 ```
 
 The suite is a mix of `pytest`-style tests, `unittest` modules, plain
 executable scripts, and shell scripts. The individual "How to run" lines below
 give the exact command for each file. The Python tests are all `pytest`
-compatible, so the quickest way to run the whole Python suite is:
+compatible, so the quickest way to run the whole Python suite is to invoke
+`pytest` **from the repository root** — the same command CI uses:
 
 ```bash
-# from the tests/ directory
+# from the repository root
 pytest
 ```
+
+The repository ships a [`pytest.ini`](../pytest.ini) at the root that pins
+`testpaths = tests`, so a bare `pytest` (or `pytest tests/`) discovers and runs
+the collectable tests in this directory regardless of your working directory.
+`pytest.ini` also excludes a handful of files from automatic collection because
+they are executable scripts or manual mock/smoke checks rather than
+`pytest`-collectable modules:
+
+- `test_accuracy.py`
+- `test_ucsc_integration.py`
+- `test_imports_smoke.py`
+- `test_imports_mocked.py`
+
+Run those directly with the commands given in their sections below.
 
 You can also run a single file or a single test:
 
 ```bash
-pytest test_permute_skeleton.py
-pytest test_permute_subsample.py::test_select_null_population_determinism
+pytest tests/test_permute_skeleton.py
+pytest tests/test_permute_subsample.py::test_select_null_population_determinism
 ```
 
 The tests are deterministic and run on CPU; a GPU is not required (GPU-specific
-behavior is mocked). Running `pytest` requires `pytest` to be installed
-(`pip install pytest`); the shell scripts (`*.sh`) are run directly and are not
+behavior is mocked). The shell scripts (`*.sh`) are run directly and are not
 collected by `pytest`.
+
+> **Note:** The per-file "How to run" commands in the sections below are written
+> to be run from **inside this `tests/` directory** (e.g. `pytest test_foo.py`,
+> `python -m unittest test_foo.py`, `./script.sh`). To run them from the
+> repository root instead, prefix the path with `tests/`.
+
+## Continuous integration
+
+Three GitHub Actions workflows (under
+[`.github/workflows/`](../.github/workflows/)) exercise this suite and guard the
+repository on every pull request; they are also the checks that GitHub Copilot's
+coding agent runs against its own changes:
+
+- **`tests.yml`** — installs `requirements.txt`, `requirements-dev.txt`, and the
+  package (`pip install -e .`), then runs `pytest tests/ --durations=0` on every
+  pull request and on pushes to `dev`. This is the authoritative command for the
+  Python test suite; keep local runs consistent with it.
+- **`codeql.yml`** — CodeQL security scan (Python) on pushes/PRs to `main` and a
+  weekly scheduled deep scan.
+- **`python-security.yml`** — Bandit security linter (`bandit -r . -ll -ii`,
+  medium/high severity) on every pull request.
 
 ## 1. Accuracy and Method Comparison
 
@@ -86,8 +120,14 @@ These tests ensure that standalone scripts and pipeline utilities correctly proc
   - **Purpose:** Tests the `runEnrichment.py` script to ensure functional enrichment mapping correctly summarizes pipeline results.
   - **Output:** Test pass/fail output from `unittest`.
   - **How to run:** `python -m unittest test_runEnrichment.py`
+- **`test_eval_permute.py`**
+  - **Purpose:** Whitebox and oracle tests for the `tools/eval_permute.py` post-processing script that evaluates permutation output. Covers analytic (Student-t) p-value computation, GPD tail-parameter recovery, uniformity of null p-values, chromosome/stratum labeling, BED6 annotation loading (including fail-closed handling of missing name columns, duplicate names, and all-dropped strata), row alignment after drops, and mixed-dtype stratum regressions.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_eval_permute.py`
 - **`validation_utils.py`**
   - **Purpose:** A utility file containing helper functions (like `run_statsmodels_ols`) used by the accuracy validation tests. *Not run directly.*
+- **`conftest.py`**
+  - **Purpose:** Shared `pytest` fixtures (`annotated_fixture` and `cli_shaped_annotated_fixture`) that build small synthetic `M`/`G`/`C` matrices with annotations via `tecpg.test_data.generate_data`, used mainly by the permutation tests. *Not run directly; collected automatically by `pytest`.*
 
 ## 3. Performance, Profiling, and Resources
 
@@ -182,6 +222,22 @@ and accumulating a null statistic distribution.
   - **Purpose:** Verifies `_compute_trans_mask` cis/trans classification semantics using chromosome and position annotations.
   - **Output:** Test pass/fail output from `pytest`.
   - **How to run:** `pytest test_permute_mask.py`
+- **`test_permute_annotations.py`**
+  - **Purpose:** Tests `_normalize_annotations` chromosome coding (chr-prefix stripping, X/Y mapping, NaN/unknown handling), QR-code parity, idempotence, row drop/trim behavior on CLI-shaped annotations, fail-closed errors, and end-to-end permutation determinism (including a `mlr` CLI regression).
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_annotations.py`
+- **`test_permute_score.py`**
+  - **Purpose:** Tests `_score_observed` empirical p-value scoring against the accumulated null: edge-aligned oracle values, monotonicity, the `1/(N+1)` floor and endpoint behavior, two-sided scoring, and fail-closed handling of empty nulls or missing annotations.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_score.py`
+- **`test_permute_tail.py`**
+  - **Purpose:** Tests the generalized-Pareto (GPD) tail model (`_fit_gpd` / `_fit_tail`): parameter recovery, continuity and monotonicity at the empirical/GPD handoff threshold, below-floor extension, bulk pass-through, and fail-safe behavior on degenerate inputs.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_tail.py`
+- **`test_permute_finalize.py`**
+  - **Purpose:** Tests `_finalize_output` column ordering/values, threshold filtering, and `mt_t` alignment, plus end-to-end parquet metadata round-trip and threshold/universe behavior of `tecpg_mlr_qr_permute`.
+  - **Output:** Test pass/fail output from `pytest`.
+  - **How to run:** `pytest test_permute_finalize.py`
 
 ## Troubleshooting
 
