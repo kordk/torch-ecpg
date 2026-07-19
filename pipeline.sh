@@ -28,7 +28,7 @@ START_STAGE="all"
 # intermediate files by >5GB each, so it defaults to 'none'.
 # Stage 9 (bootstrap) runs on the top 20k candidates. Adding per-feature IG here
 # costs only ~1MB, but enables full saliency fraction analysis, so it defaults to 'all'.
-MLR_IG_COVARIATES="none"
+MLR_IG_COVARIATES="all"
 BOOTSTRAP_IG_COVARIATES="all"
 
 # Chunk sizes for `tecpg run mlr` are intentionally NOT set here. As of
