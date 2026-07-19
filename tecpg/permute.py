@@ -521,6 +521,30 @@ def tecpg_mlr_qr_permute(
     else:
         universe = master_df
 
+    # Restrict the scored universe to loci that survived annotation normalization.
+    # The mapping produced the master over the full M x G (region='all' needs no
+    # annotations), but the null here is built over the normalized (chromosome-
+    # annotated) M/G, so master pairs referencing dropped loci cannot be scored
+    # or consistency-checked. Intersect before scoring and the guard.
+    valid = (universe['mt_id'].isin(M.index.astype(str))
+             & universe['gt_id'].isin(G.index.astype(str)))
+    n_invalid = int((~valid).sum())
+    if n_invalid and pairs_file is not None:
+        examples = universe.loc[~valid, ['mt_id', 'gt_id']].head(5).to_records(index=False).tolist()
+        raise ValueError(
+            "--pairs-file requests {0} pair(s) whose loci were dropped by annotation "
+            "normalization (missing/unmappable chromosome) and cannot be scored; "
+            "e.g. {1}".format(n_invalid, examples))
+    if n_invalid:
+        logger.info(
+            "qr_permute: excluding {0} master pairs whose loci were dropped by annotation "
+            "normalization (missing/unmappable chromosome).", n_invalid)
+        universe = universe[valid].reset_index(drop=True)
+    if len(universe) == 0:
+        raise ValueError(
+            "no master pairs remain after intersecting with the normalized M/G; "
+            "check the master was mapped from the same data.")
+
     reported_pairs = universe[['mt_id', 'gt_id']].reset_index(drop=True)
     observed_t = universe['mt_t'].to_numpy(dtype=np.float64)
 
