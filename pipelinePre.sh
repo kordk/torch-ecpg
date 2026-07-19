@@ -91,10 +91,6 @@ if ( [ -s "$DATA_DIR/M_orig.csv" ] || [ -s "$DATA_DIR/M.csv" ] ) && [ -s "$DATA_
         log "Found C.csv but not C_orig.csv. Renaming C.csv to C_orig.csv for backwards compatibility."
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
     fi
-    if [ -s "$DATA_DIR/M.csv" ] && [ ! -s "$DATA_DIR/M_orig.csv" ]; then
-        log "Found M.csv but not M_orig.csv. Renaming M.csv to M_orig.csv for backwards compatibility."
-        mv "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
-    fi
 else
     log "Data files not found or empty. Proceeding with data generation/download for $DATASET..."
     if [ "$DATASET" == "dummy" ]; then
