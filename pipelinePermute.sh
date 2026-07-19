@@ -12,6 +12,7 @@ log() {
 DATASET="dummy"
 MAPPING="all"
 START_STAGE="all"
+MASTER_PARQUET=""
 
 PERMUTE_ARGS=()
 
@@ -19,12 +20,22 @@ PERMUTE_ARGS=()
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         -h|--help)
-            echo "Usage: ./pipelinePermute.sh [OPTIONS]"
+            echo "Usage: ./pipelinePermute.sh --master-parquet PATH [OPTIONS]"
+            echo ""
+            echo "qr_permute is a POST-MAPPING CONSUMER: it reads the observed mt_t and the"
+            echo "(mt_id, gt_id) universe from an existing mapping output (the master parquet)"
+            echo "and scores that universe against the permutation null. This wrapper does NOT"
+            echo "run the mapping -- produce the master first (e.g. via pipeline.sh, whose merge"
+            echo "stage writes output_<ds>/merged.parquet) and pass it with --master-parquet."
             echo ""
             echo "Options:"
             echo "  -h, --help                     Show this help message and exit"
-            echo "  -d, --dataset DATASET          Specify the dataset to use. Options: dummy (default), gtp, mesa"
-            echo "  -m, --mapping MAPPING          Specify the mapping method. Options: all (default)."
+            echo "      --master-parquet PATH      REQUIRED. Existing mapping output parquet (carries mt_t)"
+            echo "                                 whose (mt_id, gt_id) universe is scored. Must have been"
+            echo "                                 mapped from the SAME data_<ds> (same covariate design);"
+            echo "                                 qr_permute fail-closes at runtime if the design mismatches."
+            echo "  -d, --dataset DATASET          Specify the dataset to use. Options: dummy (default), gtpsub, gtp, mesa"
+            echo "  -m, --mapping MAPPING          Region flag passed to qr_permute. Options: all (default)."
             echo "                                 'cis' is accepted by the parser but rejected at runtime:"
             echo "                                 qr_permute's null is trans-global and Phase 2 (cis Beta)"
             echo "                                 is not implemented."
@@ -41,6 +52,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         -d|--dataset)
             DATASET="$2"
+            shift 2
+            ;;
+        --master-parquet)
+            MASTER_PARQUET="$2"
             shift 2
             ;;
         -m|--mapping)
@@ -71,6 +86,25 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
+# qr_permute is a post-mapping consumer: the master parquet is required and
+# supplies the observed mt_t and the (mt_id, gt_id) universe. Running the
+# mapping is out of scope for this wrapper -- produce the master first (e.g.
+# pipeline.sh -> output_<ds>/merged.parquet) and pass it here.
+if [ -z "$MASTER_PARQUET" ]; then
+    log "Error: --master-parquet is required."
+    log "  qr_permute consumes an existing mapping output (the master parquet); it does not"
+    log "  recompute the observed statistic. Produce the master first (e.g. via pipeline.sh,"
+    log "  which writes output_<ds>/merged.parquet) and pass it with --master-parquet PATH."
+    exit 1
+fi
+
+if [ ! -s "$MASTER_PARQUET" ]; then
+    log "Error: master parquet not found or empty: $MASTER_PARQUET"
+    log "  Check the path. It should be an existing mapping output carrying an 'mt_t' column"
+    log "  (e.g. output_<ds>/merged.parquet from a prior pipeline.sh run)."
+    exit 1
+fi
+
 if [ "$MAPPING" != "all" ]; then
     log "Error: qr_permute supports --mapping all only."
     log "  --cis filters COVERAGE, but qr_permute's null is trans-global and Phase 2 (cis Beta)"
@@ -94,7 +128,7 @@ if [ $IS_VALID_STAGE -eq 0 ]; then
     exit 1
 fi
 
-VALID_DATASETS=("dummy" "gtp" "mesa")
+VALID_DATASETS=("dummy" "gtpsub" "gtp" "mesa")
 IS_VALID_DATASET=0
 for ds in "${VALID_DATASETS[@]}"; do
     if [ "$DATASET" == "$ds" ]; then
@@ -112,6 +146,7 @@ fi
 log "============================================================"
 log "Starting tecpg Permute Pipeline"
 log "Dataset: $DATASET"
+log "Master Parquet: $MASTER_PARQUET"
 log "Mapping: $MAPPING"
 log "Start Stage: $START_STAGE"
 log "============================================================"
@@ -120,9 +155,9 @@ log "============================================================"
 for arg in "${PERMUTE_ARGS[@]}"; do
     if [[ "$arg" == "--subsample-mt-count" || "$arg" == "--subsample-g-count" ]]; then
         log "NOTE: --subsample-mt-count/--subsample-g-count subsample the NULL population only."
-        log "      The reported set is always the full M x G cross product; these flags do NOT"
-        log "      reduce output size. To get a tractable reported set, physically subset"
-        log "      data_${DATASET}/M.csv and data_${DATASET}/G.csv into a smaller data_<ds> first."
+        log "      The reported set is the master parquet's (mt_id, gt_id) universe; these flags"
+        log "      do NOT reduce output size. To score a smaller set, narrow the master (map a"
+        log "      smaller universe) -- a --pairs-file subset is not exposed by this wrapper."
         log "      Subsample LOCI, never SAMPLES -- dropping samples changes DF."
         break
     fi
@@ -206,10 +241,14 @@ PERM_OUTPUT="$OUT_DIR/permutation_results.parquet"
 
 # Stage 1: permute
 if [ $EXECUTE -eq 1 ]; then
-    log "[1/2] Running permute..."
+    log "[1/2] Running permute (consuming master: $MASTER_PARQUET)..."
+    log "      qr_permute reads observed mt_t from the master and scores it against the null"
+    log "      built from $DATA_DIR (M/G/C). It fail-closes if the master's covariate design"
+    log "      does not match this C.csv (DF=$DF)."
     set -o pipefail
     python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" \
         run mlr --mlr-method qr_permute --all \
+        --master-parquet "$MASTER_PARQUET" \
         --output-format auto \
         "${PERMUTE_ARGS[@]}" 2>&1 | tee "permute_run_${DATASET}.log"
     set +o pipefail
