@@ -91,23 +91,23 @@ def test_accumulate_topk_correctness():
     np.testing.assert_allclose(actual_topk, expected_topk)
     assert len(actual_topk) <= TOPK_CAPACITY
 
-def test_accumulate_determinism(tmp_path, annotated_fixture):
-    M, G, C, M_annot, G_annot = annotated_fixture(sample_size=30, m_rows=10, g_rows=10)
+def test_accumulate_determinism(tmp_path, master_parquet_fixture):
+    master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(sample_size=30, m_rows=10, g_rows=10)
 
     # Run 1
     out1 = str(tmp_path / "out1.csv")
-    tecpg_mlr_qr_permute(M, G, C, M_annot=M_annot, G_annot=G_annot, permutations=10, seed=123, output_file=out1)
+    tecpg_mlr_qr_permute(master_parquet=master_parquet, M=M, G=G, C=C, M_annot=M_annot, G_annot=G_annot, permutations=10, seed=123, output_file=out1)
 
     # Run 2
     out2 = str(tmp_path / "out2.csv")
-    tecpg_mlr_qr_permute(M, G, C, M_annot=M_annot, G_annot=G_annot, permutations=10, seed=123, output_file=out2)
+    tecpg_mlr_qr_permute(master_parquet=master_parquet, M=M, G=G, C=C, M_annot=M_annot, G_annot=G_annot, permutations=10, seed=123, output_file=out2)
 
     df1 = pd.read_csv(out1)
     df2 = pd.read_csv(out2)
     pd.testing.assert_frame_equal(df1, df2)
 
-def test_accumulate_null_pair_stratification(tmp_path, monkeypatch, annotated_fixture):
-    M, G, C, M_annot, G_annot = annotated_fixture(sample_size=30, m_rows=15, g_rows=15, seed=42)
+def test_accumulate_null_pair_stratification(tmp_path, monkeypatch, master_parquet_fixture):
+    master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(sample_size=30, m_rows=15, g_rows=15, seed=42)
 
     # We will patch _accumulate_null to capture the final accumulator
     captured_acc = []
@@ -123,7 +123,7 @@ def test_accumulate_null_pair_stratification(tmp_path, monkeypatch, annotated_fi
     monkeypatch.setattr(permute, '_accumulate_null', mocked_accumulate_null)
 
     out = str(tmp_path / "out.csv")
-    tecpg_mlr_qr_permute(M, G, C, M_annot=M_annot, G_annot=G_annot, permutations=10, seed=123, output_file=out)
+    tecpg_mlr_qr_permute(master_parquet=master_parquet, M=M, G=G, C=C, M_annot=M_annot, G_annot=G_annot, permutations=10, seed=123, output_file=out)
 
     final_acc = captured_acc[-1]
 
@@ -142,8 +142,8 @@ def test_accumulate_null_pair_stratification(tmp_path, monkeypatch, annotated_fi
     expected_total_count = 10 * expected_trans_pairs
     assert final_acc['total_count'] == expected_total_count
 
-def test_accumulate_calibration_sanity(tmp_path, monkeypatch, annotated_fixture):
-    M, G, C, M_annot, G_annot = annotated_fixture(sample_size=120, m_rows=25, g_rows=25, seed=42)
+def test_accumulate_calibration_sanity(tmp_path, monkeypatch, master_parquet_fixture):
+    master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(sample_size=120, m_rows=25, g_rows=25, seed=42)
 
 
     captured_acc = []
@@ -158,7 +158,7 @@ def test_accumulate_calibration_sanity(tmp_path, monkeypatch, annotated_fixture)
     monkeypatch.setattr(permute, '_accumulate_null', mocked_accumulate_null)
 
     out = str(tmp_path / "out.csv")
-    tecpg_mlr_qr_permute(M, G, C, M_annot=M_annot, G_annot=G_annot, permutations=60, seed=123, output_file=out)
+    tecpg_mlr_qr_permute(master_parquet=master_parquet, M=M, G=G, C=C, M_annot=M_annot, G_annot=G_annot, permutations=60, seed=123, output_file=out)
 
     final_acc = captured_acc[-1]
 

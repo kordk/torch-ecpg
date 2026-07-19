@@ -79,14 +79,12 @@ def test_select_null_population_zero_count_raises():
         _select_null_population(M, G, C, None, None, 'all', None, None, None,
                                 subsample_mt_count=10, subsample_g_count=-5, seed=seed, logger=logger)
 
-def test_permute_with_subsample(tmp_path):
-    M, G, C, M_annot, G_annot = generate_data(sample_size=30, m_rows=10, g_rows=10, annotation=True)
-    M_annot = M_annot.set_index("name")[["chrom", "chromStart"]]
-    G_annot = G_annot.set_index("name")[["chrom", "chromStart", "strand"]]
-    G_annot["strand"] = G_annot["strand"].map({"+": 1, "-": -1})
+def test_permute_with_subsample(tmp_path, master_parquet_fixture):
+    master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(sample_size=30, m_rows=10, g_rows=10)
     output_file = str(tmp_path / "permutation_results.csv")
 
     tecpg_mlr_qr_permute(
+        master_parquet=master_parquet,
         M=M,
         G=G,
         M_annot=M_annot,
@@ -102,8 +100,9 @@ def test_permute_with_subsample(tmp_path):
     assert os.path.exists(output_file)
     df = pd.read_csv(output_file)
 
-    expected_cols = ['mt_id', 'gt_id', 'mt_t', 'perm_mt_p', 'seed', 'n_perm']
-    assert list(df.columns) == expected_cols
+    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
+    assert expected_cols.issubset(set(df.columns))
+    assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
 
     expected_rows = len(M) * len(G)
     assert len(df) == expected_rows
