@@ -53,7 +53,9 @@ def cli_shaped_annotated_fixture():
 @pytest.fixture
 def master_parquet_fixture(annotated_fixture, tmp_path):
     """Mapping output (a master parquet with mt_t) over the M×G universe,
-    for the realigned qr_permute consume path."""
+    for the realigned qr_permute consume path.
+    Note: Production uses `tecpg_mlr_qr` (QR), but this fixture uses `regression_full`
+    to avoid heavy plumbing. The tolerance is calibrated from real qr-mapped runs."""
     def _make(sample_size=20, m_rows=6, g_rows=5, seed=42, region='all'):
         from tecpg.regression_full import regression_full
         from tecpg.logger import Logger
