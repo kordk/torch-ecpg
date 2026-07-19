@@ -1568,7 +1568,7 @@ def dummy(
     annotation = not no_annotation
 
     dataframes = generate_data(
-        samples, meth_rows, gene_rows, annotation=annotation, seed=seed
+        samples, meth_rows, gene_rows, annotation=annotation, seed=seed, return_orig=True
     )
     file_names = [data['meth_file'], data['gene_file'], data['covar_file'], 'M_orig.csv', 'G_orig.csv']
     data_path = os.path.join(data['root_path'], data['input_dir'])
