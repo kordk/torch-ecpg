@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from tecpg.permute import _normalize_annotations, tecpg_mlr_qr_permute
+from tecpg.permute import _normalize_annotations, tecpg_mlr_qr_permute, _select_null_population
 from tecpg.logger import Logger
 from tecpg.cli import mlr
 from click.testing import CliRunner
@@ -90,16 +90,44 @@ def test_fail_closed():
     with pytest.raises(ValueError, match="Normalization dropped all loci on one or both axes."):
         _normalize_annotations(M_annot, G_annot, M, G, logger)
 
-def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path):
+def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path, master_parquet_fixture):
     """6. END-TO-END"""
+    # M/G generated here will have 5 rows.
+    # cli_shaped drops 1 row on each side -> 4 rows.
     M, G, C, M_annot, G_annot = cli_shaped_annotated_fixture(10, 5, 5)
+
+    # Re-home the NaN-dropping assertion to the null side, because
+    # the master parquet determines the *observed* universe size.
+    logger = Logger()
+    M_annot_n, G_annot_n, M_n, G_n = _normalize_annotations(M_annot, G_annot, M, G, logger)
+    null_M, null_G = _select_null_population(M_n, G_n, C, M_annot_n, G_annot_n, 'all', None, None, None,
+                                             None, None, 42, logger)
+    assert len(null_M) == 4, "NaN chrom dropping must apply to the null M universe."
+    assert len(null_G) == 4, "NaN chrom dropping must apply to the null G universe."
+
+    # Generate master parquet from the SAME cli_shaped M/G so the observed IDs match
+    # Since regression_full doesn't drop NaNs internally on the observed side,
+    # the master will have 5*5=25 rows. We filter out the NaN ones to align
+    # with the 4*4=16 universe for the end-to-end permute run, or else
+    # _verify_master_consistency will fail when it spot-checks a master pair
+    # whose ID was stripped from the M_annot-filtered M/G that it runs on.
+    from tecpg.regression_full import regression_full
+    out = regression_full(M, G, C, region='all', p_thresh=None,
+                              methylation_only=True, logger=Logger())
+    master = out.reset_index()
+
+    # Filter master to the 4x4 valid IDs
+    M_annot_n, G_annot_n, _, _ = _normalize_annotations(M_annot, G_annot, M, G, logger)
+    master = master[master['mt_id'].isin(M_annot_n.index) & master['gt_id'].isin(G_annot_n.index)].reset_index(drop=True)
+
+    master_parquet = str(tmp_path / 'master.parquet')
+    master.to_parquet(master_parquet)
 
     output_file = str(tmp_path / "output.csv")
 
-    logger = Logger()
-
     # Running permute
     tecpg_mlr_qr_permute(
+        master_parquet=master_parquet,
         M=M, G=G, C=C,
         M_annot=M_annot, G_annot=G_annot,
         region='all',
@@ -112,10 +140,13 @@ def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path):
     assert os.path.exists(output_file)
     df = pd.read_csv(output_file)
 
-    # Expected rows: 4 * 4 = 16 (since 1 dropped from each axis)
+    # Master has 16 rows. They should all be preserved and scored.
     assert len(df) == 16
 
-    assert set(df.columns) == {'mt_id', 'gt_id', 'mt_t', 'perm_mt_p', 'seed', 'n_perm'}
+    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
+    assert expected_cols.issubset(set(df.columns))
+    assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
+
     assert df['perm_mt_p'].min() > 0
     assert df['perm_mt_p'].max() <= 1
     assert df['perm_mt_p'].isna().sum() == 0
@@ -187,6 +218,10 @@ def test_cli_regression():
         bed6_content_g = "chrom\tchromStart\tchromEnd\tname\tscore\tstrand\nchr1\t1\t2\tg1\t0\t+\nchr1\t1\t2\tg2\t0\t+\n"
         with open(os.path.join(cwd, 'annot/G.bed6'), 'w') as f: f.write(bed6_content_g)
 
+        master_pq = os.path.join(cwd, 'dummy.parquet')
+        pd.DataFrame({'mt_id': ['m1'], 'gt_id': ['g1'], 'mt_t': [0.0]}).to_parquet(master_pq)
+        assert os.path.exists(master_pq)
+
         # Mock targets
         with patch('tecpg.cli.tecpg_mlr_qr') as mock_qr, \
              patch('tecpg.permute.tecpg_mlr_qr_permute') as mock_qr_permute, \
@@ -215,27 +250,40 @@ def test_cli_regression():
             assert isinstance(mock_qr.call_args.kwargs['G_annot'], pd.DataFrame)
 
             # Test 3: qr_permute + --all (The FACT-1 fix)
-            result3 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr_permute', '--all'])
+            result3 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr_permute', '--all', '--master-parquet', master_pq], catch_exceptions=False)
             assert result3.exit_code == 0, f"Failed: {result3.exception}"
             assert isinstance(mock_qr_permute.call_args.kwargs['M_annot'], pd.DataFrame)
             assert isinstance(mock_qr_permute.call_args.kwargs['G_annot'], pd.DataFrame)
             assert mock_qr_permute.call_args.kwargs['output_p_threshold'] is None
 
             # Test 4: qr_permute + --cis + --output-p-threshold
-            result4 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr_permute', '--cis', '--output-p-threshold', '0.05'])
+            result4 = runner.invoke(cli, ['--root-path', cwd, 'run', 'mlr', '--mlr-method', 'qr_permute', '--cis', '--output-p-threshold', '0.05', '--master-parquet', master_pq], catch_exceptions=False)
             assert result4.exit_code == 0, f"Failed: {result4.exception}"
             assert isinstance(mock_qr_permute.call_args.kwargs['M_annot'], pd.DataFrame)
             assert isinstance(mock_qr_permute.call_args.kwargs['G_annot'], pd.DataFrame)
             assert mock_qr_permute.call_args.kwargs['output_p_threshold'] == 0.05
 
 
-def test_end_to_end_permute_determinism(cli_shaped_annotated_fixture, tmp_path):
+def test_end_to_end_permute_determinism(cli_shaped_annotated_fixture, tmp_path, master_parquet_fixture):
     """8. DETERMINISM TEST"""
+    # M/G generated here will have 5 rows.
+    # cli_shaped drops 1 row on each side -> 4 rows.
     M, G, C, M_annot, G_annot = cli_shaped_annotated_fixture(10, 5, 5)
     logger = Logger()
 
+    # Generate master parquet aligned with the valid IDs
+    from tecpg.regression_full import regression_full
+    out = regression_full(M, G, C, region='all', p_thresh=None,
+                              methylation_only=True, logger=Logger())
+    master = out.reset_index()
+    M_annot_n, G_annot_n, _, _ = _normalize_annotations(M_annot, G_annot, M, G, logger)
+    master = master[master['mt_id'].isin(M_annot_n.index) & master['gt_id'].isin(G_annot_n.index)].reset_index(drop=True)
+    master_parquet = str(tmp_path / 'master.parquet')
+    master.to_parquet(master_parquet)
+
     output_file1 = str(tmp_path / "output1.csv")
     tecpg_mlr_qr_permute(
+        master_parquet=master_parquet,
         M=M, G=G, C=C,
         M_annot=M_annot, G_annot=G_annot,
         region='all',
@@ -248,6 +296,7 @@ def test_end_to_end_permute_determinism(cli_shaped_annotated_fixture, tmp_path):
 
     output_file2 = str(tmp_path / "output2.csv")
     tecpg_mlr_qr_permute(
+        master_parquet=master_parquet,
         M=M, G=G, C=C,
         M_annot=M_annot, G_annot=G_annot,
         region='all',

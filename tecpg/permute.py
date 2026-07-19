@@ -406,20 +406,63 @@ def _fit_tail(empirical_p, observed_stats, null_accumulator, logger):
     return perm_mt_p
 
 
-def _finalize_output(reported_pairs, observed_stats, perm_mt_p, seed, n_perm,
+def _verify_master_consistency(M, G, C, universe, device, logger,
+                               *, n_sample=256, rtol=1e-4, atol=1e-4, seed=42):
+    """Sampled equivalence spot-check. Recompute the observed t for a small
+    random sample of master pairs from the provided M/G/C and assert it matches
+    the stored mt_t. Fail-closed on divergence (covariate design / df mismatch)
+    or on a sampled pair absent from M/G (wrong input files). O(sample), not
+    O(universe). Constants are provisional; a design mismatch produces O(1)+
+    divergences in t, so atol=1e-4 catches the hazard while absorbing the
+    float32/float64 gap between regression_full and the recompute."""
+    mt_t = universe['mt_t'].to_numpy(dtype=np.float64)
+    finite = np.isfinite(mt_t)
+    n_finite = int(finite.sum())
+    if n_finite == 0:
+        raise ValueError("master parquet has no finite mt_t to validate against")
+    idx_finite = np.flatnonzero(finite)
+    k = min(n_sample, n_finite)
+    rng = np.random.default_rng(seed)
+    pick = rng.choice(idx_finite, size=k, replace=False)
+    sample_pairs = universe.iloc[pick][['mt_id', 'gt_id']].reset_index(drop=True)
+    stored = mt_t[pick]
+    try:
+        recomputed = np.asarray(
+            _compute_observed_statistic(M, G, C, sample_pairs, logger, device=device),
+            dtype=np.float64,
+        )
+    except ValueError as e:
+        raise ValueError("master consistency check failed: a sampled master pair is "
+                         "absent from the provided M/G (likely wrong input files). " + str(e))
+    if not np.allclose(recomputed, stored, rtol=rtol, atol=atol, equal_nan=True):
+        max_dev = float(np.nanmax(np.abs(recomputed - stored)))
+        raise ValueError("master mt_t is inconsistent with the provided M/G/C over "
+                         "{0} sampled pairs (max|Δt|={1:.3e}); the covariate design/df "
+                         "that produced the master must match the null design.".format(k, max_dev))
+    logger.info("master consistency OK: {0} sampled pairs, max|Δt|={1:.3e}",
+                k, float(np.nanmax(np.abs(recomputed - stored))))
+
+
+def _finalize_output(master_df, reported_pairs, perm_mt_p, seed, n_perm,
                      output_p_threshold, logger):
-    df = reported_pairs.copy()
-    df['mt_t'] = np.asarray(observed_stats, dtype=np.float64)
-    df['perm_mt_p'] = np.asarray(perm_mt_p, dtype=np.float64)
-    df['seed'] = seed
-    df['n_perm'] = n_perm
+    res = reported_pairs.copy()            # ['mt_id','gt_id'], already str-cast
+    res['perm_mt_p'] = np.asarray(perm_mt_p, dtype=np.float64)
     if output_p_threshold is not None:
-        df = df[df['perm_mt_p'] <= output_p_threshold].reset_index(drop=True)
-    return df
+        res = res[res['perm_mt_p'] <= output_p_threshold].reset_index(drop=True)
+    # Drop any pre-existing perm columns on master to avoid _x/_y suffixing
+    # (and make re-running permute on its own prior output idempotent).
+    drop = [c for c in ['perm_mt_p', 'seed', 'n_perm'] if c in master_df.columns]
+    if drop:
+        master_df = master_df.drop(columns=drop)
+    merged = master_df.merge(res, on=['mt_id', 'gt_id'], how='left')
+    merged['seed'] = seed        # run-level scalars on ALL rows (mirror bootstrap)
+    merged['n_perm'] = n_perm
+    return merged
 
 
 def tecpg_mlr_qr_permute(
-    M, G, C,
+    master_parquet=None, pairs_file=None,
+    M=None, G=None, C=None,
     M_annot=None, G_annot=None,
     region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
     window_base=None, downstream=None, upstream=None,
@@ -439,6 +482,12 @@ def tecpg_mlr_qr_permute(
             "chromosome-stratified (trans) null; none were provided."
         )
 
+    if master_parquet is None:
+        raise ValueError(
+            "qr_permute requires --master-parquet: the observed mt_t and the "
+            "(mt_id, gt_id) universe are read from the mapping output, not recomputed."
+        )
+
     if seed is None:
         seed = int(np.random.SeedSequence().generate_state(1)[0])
         logger.info("No seed provided; generated seed={0} (recorded with outputs).", seed)
@@ -452,21 +501,34 @@ def tecpg_mlr_qr_permute(
                                              window_base, downstream, upstream,
                                              subsample_mt_count, subsample_g_count, seed, logger)
 
-    # Cross product of M.index x G.index
-    # Explicitly casting indices to str to align with schema consistency
-    m_idx = M.index.astype(str)
-    g_idx = G.index.astype(str)
+    # --- Realigned observed leg: consume the mapping master (bootstrap-parallel) ---
+    master_df = pd.read_parquet(master_parquet)
+    if 'mt_t' not in master_df.columns:
+        raise ValueError("master parquet is missing required column 'mt_t'")
+    master_df['mt_id'] = master_df['mt_id'].astype(str)
+    master_df['gt_id'] = master_df['gt_id'].astype(str)
 
-    reported_pairs = pd.MultiIndex.from_product([m_idx, g_idx], names=['mt_id', 'gt_id']).to_frame(index=False)
+    if pairs_file is not None:
+        pairs_df = pd.read_csv(pairs_file)
+        pairs_df['mt_id'] = pairs_df['mt_id'].astype(str)
+        pairs_df['gt_id'] = pairs_df['gt_id'].astype(str)
+        if pairs_df.duplicated(['mt_id', 'gt_id']).any():
+            raise ValueError("--pairs-file contains duplicate (mt_id, gt_id) rows")
+        universe = master_df.merge(pairs_df[['mt_id', 'gt_id']], on=['mt_id', 'gt_id'], how='inner')
+        if len(universe) != len(pairs_df):
+            raise ValueError("--pairs-file contains pairs absent from --master-parquet "
+                             "(no stored mt_t to score)")
+    else:
+        universe = master_df
 
-    trans_mask = _compute_trans_mask(reported_pairs, M_annot, G_annot, region,
-                                     window_base, downstream, upstream, logger)
-
-    reported_pairs = reported_pairs[trans_mask].reset_index(drop=True)
+    reported_pairs = universe[['mt_id', 'gt_id']].reset_index(drop=True)
+    observed_t = universe['mt_t'].to_numpy(dtype=np.float64)
 
     device = get_device(**logger.opts) if hasattr(logger, 'opts') else get_device()
 
-    observed_t = _compute_observed_statistic(M, G, C, reported_pairs, logger, device=device, progress_label='qr_permute observed')
+    # Consistency guard: fail-closed if the supplied M/G/C don't match the design
+    # behind the master's mt_t (sampled equivalence spot-check).
+    _verify_master_consistency(M, G, C, universe, device, logger)
 
     accumulator = None
     rng = np.random.default_rng(seed)
@@ -495,7 +557,7 @@ def tecpg_mlr_qr_permute(
 
     n_reported = len(reported_pairs)
 
-    final_df = _finalize_output(reported_pairs, observed_t, perm_mt_p, seed, permutations, output_p_threshold, logger)
+    final_df = _finalize_output(master_df, reported_pairs, perm_mt_p, seed, permutations, output_p_threshold, logger)
 
     # Honor output format
     if output_format == 'auto':

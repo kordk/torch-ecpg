@@ -5,9 +5,9 @@ from tecpg.permute import tecpg_mlr_qr_permute
 from tecpg.test_data import generate_data
 
 
-def test_permute_skeleton_end_to_end(tmp_path, annotated_fixture):
+def test_permute_skeleton_end_to_end(tmp_path, master_parquet_fixture):
     # Set up small fixture using annotated_fixture
-    M, G, C, M_annot, G_annot = annotated_fixture(
+    master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(
         sample_size=30,
         m_rows=10,
         g_rows=10,
@@ -17,6 +17,7 @@ def test_permute_skeleton_end_to_end(tmp_path, annotated_fixture):
 
     # Call the newly created permutation function directly
     tecpg_mlr_qr_permute(
+        master_parquet=master_parquet,
         M=M,
         G=G,
         C=C,
@@ -34,8 +35,9 @@ def test_permute_skeleton_end_to_end(tmp_path, annotated_fixture):
     df = pd.read_csv(output_file)
 
     # Assert correct columns (schema)
-    expected_cols = ['mt_id', 'gt_id', 'mt_t', 'perm_mt_p', 'seed', 'n_perm']
-    assert list(df.columns) == expected_cols
+    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
+    assert expected_cols.issubset(set(df.columns))
+    assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
 
     # Assert row count = |M| x |G|
     expected_rows = len(M) * len(G)

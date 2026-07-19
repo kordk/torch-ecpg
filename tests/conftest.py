@@ -48,3 +48,20 @@ def cli_shaped_annotated_fixture():
 
         return M, G, C, M_annot_raw, G_annot_raw
     return _make
+
+
+@pytest.fixture
+def master_parquet_fixture(annotated_fixture, tmp_path):
+    """Mapping output (a master parquet with mt_t) over the M×G universe,
+    for the realigned qr_permute consume path."""
+    def _make(sample_size=20, m_rows=6, g_rows=5, seed=42, region='all'):
+        from tecpg.regression_full import regression_full
+        from tecpg.logger import Logger
+        M, G, C, M_annot, G_annot = annotated_fixture(sample_size, m_rows, g_rows, seed)
+        out = regression_full(M, G, C, region=region, p_thresh=None,
+                              methylation_only=True, logger=Logger())
+        master = out.reset_index()  # -> columns mt_id, gt_id, mt_est, mt_err, mt_t, mt_p, ...
+        path = tmp_path / 'master.parquet'
+        master.to_parquet(path)
+        return str(path), M, G, C, M_annot, G_annot, master
+    return _make

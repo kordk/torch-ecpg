@@ -1279,6 +1279,11 @@ def mlr(
         return
 
     if mlr_method == 'qr_permute':
+        if not master_parquet:
+            error = '--master-parquet is required for qr_permute.'
+            logger.error(error)
+            raise click.UsageError(error)
+
         from .permute import tecpg_mlr_qr_permute
 
         # The merged permute output is named `permutation_results.<ext>` by
@@ -1294,6 +1299,8 @@ def mlr(
             output_file_path = os.path.join(output_path, output_file_path)
 
         tecpg_mlr_qr_permute(
+            master_parquet=master_parquet,
+            pairs_file=pairs_file,
             M=M,
             G=G,
             C=C,
