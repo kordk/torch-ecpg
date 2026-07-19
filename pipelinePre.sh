@@ -167,15 +167,6 @@ else
     log "Applying blacklist filter to M_orig.csv..."
     python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/epic_probes_blacklist.csv" "$DATA_DIR/M.csv"
 fi
-
-# Data Exploration
-log "Exploring Omics data..."
-python3 tools/exploreOmics.py \
-    --input-processed-methylation "$DATA_DIR/M.csv" \
-    --input-orig-methylation "$DATA_DIR/M_orig.csv" \
-    --input-processed-expression "$DATA_DIR/G.csv" \
-    --input-orig-expression "$DATA_DIR/G_orig.csv" \
-    --output-dir "$DATA_DIR/qc"
 fi
 
 if [ "$START_STAGE" == "cell_prop" ]; then EXECUTE=1; fi
@@ -187,7 +178,7 @@ if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
     log "C_post_cellTypes.csv already exists. Skipping cell proportion estimation."
 else
     log "Running EpiDISH to estimate cell proportions..."
-    if [ "$DATASET" == "dummy" || "$DATASET" == "gtpsub" ]; then
+    if [ "$DATASET" == "dummy" ] || [ "$DATASET" == "gtpsub" ]; then
         log "Skipping EpiDISH for dummy data (random noise causes singular fits)."
         cp "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv"
     else
@@ -235,6 +226,15 @@ if [ "$DATASET" == "gtp" ] || [ "$DATASET" == "gtpsub" ]; then
     log "GTP - Diagnosing expression PCs..."
     python3 -u tools/diagnoseExpressionPCs.py     --expression "$DATA_DIR/G.csv"     --covariates "$DATA_DIR/C_post_cellTypes.csv"
 fi
+
+# Data Exploration (moved to end to compare original to final processed state)
+log "Exploring Omics data..."
+python3 tools/exploreOmics.py \
+    --input-processed-methylation "$DATA_DIR/M.csv" \
+    --input-orig-methylation "$DATA_DIR/M_orig.csv" \
+    --input-processed-expression "$DATA_DIR/G.csv" \
+    --input-orig-expression "$DATA_DIR/G_orig.csv" \
+    --output-dir "$DATA_DIR/qc"
 
 log "======================================"
 log "Preprocessing completed successfully!"
