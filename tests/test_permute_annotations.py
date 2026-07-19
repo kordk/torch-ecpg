@@ -107,18 +107,13 @@ def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path, master_parqu
 
     # Generate master parquet from the SAME cli_shaped M/G so the observed IDs match
     # Since regression_full doesn't drop NaNs internally on the observed side,
-    # the master will have 5*5=25 rows. We filter out the NaN ones to align
-    # with the 4*4=16 universe for the end-to-end permute run, or else
-    # _verify_master_consistency will fail when it spot-checks a master pair
-    # whose ID was stripped from the M_annot-filtered M/G that it runs on.
+    # the master will have 5*5=25 rows.
     from tecpg.regression_full import regression_full
     out = regression_full(M, G, C, region='all', p_thresh=None,
                               methylation_only=True, logger=Logger())
     master = out.reset_index()
 
-    # Filter master to the 4x4 valid IDs
-    M_annot_n, G_annot_n, _, _ = _normalize_annotations(M_annot, G_annot, M, G, logger)
-    master = master[master['mt_id'].isin(M_annot_n.index) & master['gt_id'].isin(G_annot_n.index)].reset_index(drop=True)
+    assert len(master) == 25, "Master should have all 25 pairs before permute."
 
     master_parquet = str(tmp_path / 'master.parquet')
     master.to_parquet(master_parquet)
@@ -140,8 +135,22 @@ def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path, master_parqu
     assert os.path.exists(output_file)
     df = pd.read_csv(output_file)
 
-    # Master has 16 rows. They should all be preserved and scored.
-    assert len(df) == 16
+    # Master has 25 rows. They should all be preserved, but only 16 scored.
+    assert len(df) == 25
+
+    scored_count = len(df.dropna(subset=['perm_mt_p']))
+    assert scored_count == len(null_M) * len(null_G) == 16
+
+    nan_count = df['perm_mt_p'].isna().sum()
+    assert nan_count == 25 - 16 == 9
+
+    assert '_x' not in df.columns and '_y' not in df.columns
+    assert 'mt_p' in df.columns
+
+    # Verify that mt_p is strictly preserved from the master
+    merged_check = df.merge(master[['mt_id', 'gt_id', 'mt_p']], on=['mt_id', 'gt_id'], suffixes=('', '_master'))
+    import numpy as np
+    np.testing.assert_allclose(merged_check['mt_p'].values, merged_check['mt_p_master'].values, err_msg="mt_p values must remain unchanged")
 
     expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
     assert expected_cols.issubset(set(df.columns))
@@ -149,7 +158,7 @@ def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path, master_parqu
 
     assert df['perm_mt_p'].min() > 0
     assert df['perm_mt_p'].max() <= 1
-    assert df['perm_mt_p'].isna().sum() == 0
+    assert df['perm_mt_p'].isna().sum() == nan_count
 
 def test_drop_and_trim_trans_mask_oracle(cli_shaped_annotated_fixture):
     """Test decisive alignment assertion on stratum"""

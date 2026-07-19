@@ -186,3 +186,28 @@ def test_additive_merge(tmp_path, master_parquet_fixture):
 
     assert 'perm_mt_p' in df.columns
     assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
+
+
+def test_pairs_file_dropped_locus_raises(tmp_path, cli_shaped_annotated_fixture):
+    from tecpg.regression_full import regression_full
+    from tecpg.permute import _normalize_annotations
+    from tecpg.logger import Logger
+
+    M, G, C, M_annot, G_annot = cli_shaped_annotated_fixture(10, 5, 5)
+    master = regression_full(M, G, C, region='all', p_thresh=None,
+                             methylation_only=True, logger=Logger()).reset_index()
+    master_pq = str(tmp_path / 'master.parquet')
+    master.to_parquet(master_pq)
+
+    # A pair that IS in the master but whose locus normalization drops.
+    _, _, M_n, G_n = _normalize_annotations(M_annot, G_annot, M, G, Logger())
+    valid = (master['mt_id'].astype(str).isin(M_n.index.astype(str))
+             & master['gt_id'].astype(str).isin(G_n.index.astype(str)))
+    dropped = master.loc[~valid, ['mt_id', 'gt_id']]
+    assert len(dropped) > 0            # setup sanity: fixture must drop a locus
+    pairs_file = str(tmp_path / 'pairs.csv')
+    dropped.head(1).to_csv(pairs_file, index=False)
+
+    with pytest.raises(ValueError, match="dropped by annotation normalization"):
+        tecpg_mlr_qr_permute(M=M, G=G, C=C, M_annot=M_annot, G_annot=G_annot,
+                             master_parquet=master_pq, pairs_file=pairs_file)
