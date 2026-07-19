@@ -461,8 +461,8 @@ def _finalize_output(master_df, reported_pairs, perm_mt_p, seed, n_perm,
 
 
 def tecpg_mlr_qr_permute(
+    M, G, C,
     master_parquet=None, pairs_file=None,
-    M=None, G=None, C=None,
     M_annot=None, G_annot=None,
     region: Literal['all', 'cis', 'distal', 'trans'] = 'all',
     window_base=None, downstream=None, upstream=None,
