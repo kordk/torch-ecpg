@@ -19,7 +19,6 @@ BULK_LO = 0.05
 BULK_HI = 1.0  # mostly-null band for divergence
 TAIL_P_ANA = 1e-4  # tail band for arm (a)
 TOLERANCE_MEDIAN_LOG10_RATIO_DIFF = 0.5  # |Δ| below this => strata agree
-LAMBDA_EXCESS_CONFOUND_FLAG = 0.2  # (λ_cis − λ_trans) above this => cis signal-contaminated
 
 # Frozen Sidecar Contract: The sidecar .npz is expected to have these exactly.
 # Arrays: bin_edges, hist_counts, overflow_count, total_count, topk_values
@@ -341,13 +340,16 @@ def main():
         stratify['ks_stat'] = float(ks_stat2)
         stratify['ks_p'] = float(ks_p2)
 
+        # lambda_excess is reported as a DESCRIPTIVE diagnostic only. Genomic
+        # inflation (lambda_GC) presumes a mostly-null test space, which eQTM —
+        # and cis in particular — violates: high lambda_cis is expected biology,
+        # not miscalibration, so it must not gate the verdict. The stratify
+        # decision keys on the calibration-divergence effect size (delta) alone.
         lambda_excess = (lambda_cis - lambda_trans) if (lambda_cis is not None and lambda_trans is not None) else 0.0
         stratify['lambda_excess'] = float(lambda_excess)
 
         if abs(delta) < TOLERANCE_MEDIAN_LOG10_RATIO_DIFF:
             rec = "single_global_null_adequate"
-        elif lambda_excess > LAMBDA_EXCESS_CONFOUND_FLAG:
-            rec = "inconclusive_cis_signal_confound"
         else:
             rec = "stratification_warranted"
 
