@@ -483,7 +483,63 @@ def test_stratify_decision_smoke(tmp_path):
 
     with open(out_dir3 / "eval_permute_report.json") as f:
         rep3 = json.load(f)
-    assert rep3['arms']['stratify_decision']['recommendation'] == "inconclusive_cis_signal_confound"
+    # lambda_excess no longer gates the verdict; divergence causes a warrant.
+    assert rep3['arms']['stratify_decision']['recommendation'] == "stratification_warranted"
+
+def test_lambda_excess_does_not_gate(tmp_path):
+    """
+    Demonstrates the demotion of lambda_excess from gating factor.
+    We construct a case where lambda_excess > 0.2 and delta >= 0.5.
+    The verdict should be "stratification_warranted", not an inconclusive confound.
+    """
+    script_path = os.path.join(os.path.dirname(__file__), "..", "tools", "eval_permute.py")
+    df_val = 50
+    rng = np.random.default_rng(42)
+    n = 10000
+
+    m_annot = pd.DataFrame({'name': [f'm{i}' for i in range(n)], 'chrom': [1]*n})
+    g_annot = pd.DataFrame({'name': [f'g{i}' for i in range(n)], 'chrom': [1]*(n//2) + [2]*(n//2)})
+
+    m_annot_path = tmp_path / "m_annot.csv"
+    g_annot_path = tmp_path / "g_annot.csv"
+    m_annot.to_csv(m_annot_path, index=False)
+    g_annot.to_csv(g_annot_path, index=False)
+
+    t_vals = scipy.stats.t.rvs(df_val, size=n, random_state=rng)
+    p_ana = 2.0 * scipy.stats.t.sf(np.abs(t_vals), df_val)
+
+    p_perm = p_ana.copy()
+    p_perm[:n//2] = p_perm[:n//2] * 0.05
+    t_vals_inflated = t_vals.copy()
+    t_vals_inflated[:n//2] = t_vals_inflated[:n//2] * 2.0  # Inflate cis t-values substantially
+
+    output = pd.DataFrame({
+        'mt_id': [f'm{i}' for i in range(n)],
+        'gt_id': [f'g{i}' for i in range(n)],
+        'mt_t': t_vals_inflated,
+        'perm_mt_p': p_perm
+    })
+    out_path = tmp_path / "out.parquet"
+    pq.write_table(pa.Table.from_pandas(output), out_path)
+
+    out_dir = tmp_path / "dir_lambda_gate"
+    subprocess.run([
+        sys.executable, script_path,
+        "--perm-output", str(out_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir)
+    ], check=True)
+
+    with open(out_dir / "eval_permute_report.json") as f:
+        rep = json.load(f)
+
+    strat = rep['arms']['stratify_decision']
+    assert 'recommendation' in strat                         # block executed, not skipped
+    assert abs(strat['delta_median_log10_ratio']) >= 0.5     # divergence present
+    assert strat['lambda_excess'] > 0.2                      # λ still high AND still reported ...
+    assert strat['recommendation'] == "stratification_warranted"   # ... but no longer gates to inconclusive
 
 # ==============================================================================
 # ORACLE 6: SIDECAR-ABSENT SMOKE
