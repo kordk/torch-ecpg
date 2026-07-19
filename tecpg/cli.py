@@ -1575,16 +1575,16 @@ def dummy(
     annotation = not no_annotation
 
     dataframes = generate_data(
-        samples, meth_rows, gene_rows, annotation=annotation, seed=seed
+        samples, meth_rows, gene_rows, annotation=annotation, seed=seed, return_orig=True
     )
-    file_names = [data['meth_file'], data['gene_file'], data['covar_file']]
+    file_names = [data['meth_file'], data['gene_file'], data['covar_file'], 'M_orig.csv', 'G_orig.csv']
     data_path = os.path.join(data['root_path'], data['input_dir'])
-    save_dataframes(dataframes[:3], data_path, file_names, **logger)
+    save_dataframes(dataframes[:5], data_path, file_names, **logger)
     if annotation:
         file_names = [data['meth_annot'], data['gene_annot']]
         data_path = os.path.join(data['root_path'], data['annot_dir'])
         save_dataframes(
-            dataframes[3:],
+            dataframes[5:],
             data_path,
             file_names,
             sep='\t',

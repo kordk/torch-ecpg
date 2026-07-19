@@ -105,8 +105,6 @@ else
         mv annot/* "$ANNOT_DIR/"
         rmdir data annot
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
-        cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
-        cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
     elif [ "$DATASET" == "gtp" ] || [ "$DATASET" == "gtpsub" ]; then
         log "Downloading GTP data..."
         echo "y" | python3 -m tecpg data gtp --yes
@@ -116,10 +114,10 @@ else
             log "Subsampling gtpsub loci..."
             python3 tools/subsample_loci.py "$DATA_DIR/M.csv" "$DATA_DIR/M.csv" "$GTPSUB_M_LOCI" --seed "$GTPSUB_SEED"
             python3 tools/subsample_loci.py "$DATA_DIR/G.csv" "$DATA_DIR/G.csv" "$GTPSUB_G_LOCI" --seed "$GTPSUB_SEED"
+            python3 tools/subsample_loci.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/M_orig.csv" "$GTPSUB_M_LOCI" --seed "$GTPSUB_SEED"
+            python3 tools/subsample_loci.py "$DATA_DIR/G_orig.csv" "$DATA_DIR/G_orig.csv" "$GTPSUB_G_LOCI" --seed "$GTPSUB_SEED"
         fi
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
-        cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
-        cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
         # For GTP, assuming the demo annots are used
         if [ -f "demo/annoEPIC_comprehensive.hg19.bed6" ]; then
             cp demo/annoEPIC_comprehensive.hg19.bed6 "$ANNOT_DIR/M.bed6"
@@ -138,8 +136,6 @@ else
         echo "y" | python3 -m tecpg data mesa
         mv data/* "$DATA_DIR/"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
-        cp "$DATA_DIR/M.csv" "$DATA_DIR/M_orig.csv"
-        cp "$DATA_DIR/G.csv" "$DATA_DIR/G_orig.csv"
         # For MESA, assuming appropriate demo annots are used if available
         # Or fall back to EPIC/HT12 for now
         if [ -f "demo/annoEPIC_comprehensive.hg19.bed6" ]; then

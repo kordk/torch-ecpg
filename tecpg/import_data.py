@@ -15,15 +15,18 @@ data_path = os.path.join(data['root_path'], data['input_dir'])
 def save_dataframes(
     dataframes: List[pandas.DataFrame],
     output_dir: str = data_path,
-    file_names: List[str] = itertools.chain(
-        ('M.csv', 'G.csv', 'P.csv'), itertools.count(1)
-    ),
+    file_names: Optional[List[str]] = None,
     save_func: Callable = pandas.DataFrame.to_csv,
     *args,
     logger: Logger = Logger(),
     clear_dir: bool = True,
     **kwargs,
 ) -> None:
+    if file_names is None:
+        file_names = list(itertools.islice(
+            itertools.chain(('M.csv', 'G.csv', 'C.csv', 'M_orig.csv', 'G_orig.csv'), itertools.count(1)),
+            len(dataframes)
+        ))
     """
     Saves any number of dataframes to an output_dir, with file_names for
     each file. Default file names count up from one for as many files
@@ -38,8 +41,8 @@ def save_dataframes(
 
     logger.start_timer('info', 'Saving {0} dataframes...', len(dataframes))
     for df, file_name in zip(dataframes, file_names):
-        logger.time('Saving {i}/{0}: {1}', len(dataframes), file_name)
-        file_path = os.path.join(output_dir, file_name)
+        logger.time('Saving {i}/{0}: {1}', len(dataframes), str(file_name))
+        file_path = os.path.join(output_dir, str(file_name))
         save_func(
             df,
             file_path,

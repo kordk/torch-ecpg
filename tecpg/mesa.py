@@ -104,7 +104,7 @@ def process_mesa(
     drop_na: bool = True,
     *,
     logger: Logger = Logger(),
-) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
+) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     """
     Processes the mesa dataframes (Methylation Beta Values, Gene
     Expression Values, and Covariate Matrix). Drops unneeded columns (of
@@ -152,6 +152,10 @@ def process_mesa(
     logger.info(f'  Min: {G.min().min():.4f}, Max: {G.max().max():.4f}')
     logger.info('Data diagnostics for Methylation (M):')
     logger.info(f'  Min: {M.min().min():.4f}, Max: {M.max().max():.4f}')
+
+    # Make copies of the dataframes before modifying them for dropping NaNs and normalization
+    M_orig = M.copy()
+    G_orig = G.copy()
 
     if drop_na:
         G_start = len(G)
@@ -213,8 +217,10 @@ def process_mesa(
     M = M.reindex(sorted(M.columns, key=int), axis=1)
     G = G.reindex(sorted(G.columns, key=int), axis=1)
     C = C.reindex(sorted(C.index, key=int), axis=0)
+    M_orig = M_orig.reindex(sorted(M_orig.columns, key=int), axis=1)
+    G_orig = G_orig.reindex(sorted(G_orig.columns, key=int), axis=1)
 
-    return M, G, C
+    return M, G, C, M_orig, G_orig
 
 
 def get_covariates(
@@ -243,7 +249,7 @@ def generate_data(
     drop_na: bool = True,
     *,
     logger: Logger = Logger(),
-) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
+) -> Tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]:
     """
     Generates methylation beta values, gene expression values, and
     covariates pandas.DataFrames. Returns a tuple of these three
@@ -284,9 +290,9 @@ def save_mesa_data(
     data = generate_data(mesa_path, simplify_covar, drop_na, **logger)
     logger.info('Saving into {0}', data_path)
     if file_names is None:
-        save_dataframes(data, data_path, **logger)
+        save_dataframes(list(data), data_path, **logger)
     else:
-        save_dataframes(data, data_path, file_names, **logger)
+        save_dataframes(list(data), data_path, file_names, **logger)
 
     kennedy_filename = MESA_KENNEDY_URL[0]
     kennedy_src = os.path.join(mesa_path, kennedy_filename)
