@@ -97,8 +97,12 @@ def generate_data(
         pandas.DataFrame,
         pandas.DataFrame,
         pandas.DataFrame,
+        pandas.DataFrame,
+        pandas.DataFrame,
     ]
     | Tuple[
+        pandas.DataFrame,
+        pandas.DataFrame,
         pandas.DataFrame,
         pandas.DataFrame,
         pandas.DataFrame,
@@ -130,6 +134,9 @@ def generate_data(
         person_codes, g_row_codes, randrange(-1, 100, rng=rng)
     )
 
+    M_orig = M.copy()
+    G_orig = G.copy()
+
     import numpy as np
     G = G.clip(lower=0)
     G = np.log2(G + 1)
@@ -155,7 +162,7 @@ def generate_data(
     C = generate_from_template(person_codes, covariate_template)
 
     if not annotation:
-        return M, G, C
+        return M, G, C, M_orig, G_orig
 
     def annotation_template(codes: List[str]) -> Dict[str, Any]:
         return {
@@ -174,4 +181,4 @@ def generate_data(
         g_row_codes, annotation_template(g_row_codes), True
     )
 
-    return M, G, C, M_annot, G_annot
+    return M, G, C, M_orig, G_orig, M_annot, G_annot
