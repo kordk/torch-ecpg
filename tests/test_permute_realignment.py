@@ -87,15 +87,16 @@ def test_three_way_equivalence_oracle(tmp_path, master_parquet_fixture):
     np.testing.assert_allclose(t_read, t_recompute, rtol=1e-4, atol=1e-4)
     np.testing.assert_allclose(t_read, t_ols, rtol=1e-4, atol=1e-4)
 
-def test_consistency_guard_passes(master_parquet_fixture):
+def test_consistency_guard_passes(master_parquet_fixture, capsys):
     """6b. Consistency guard - pass."""
     master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(sample_size=30, m_rows=10, g_rows=10)
 
     logger = Logger()
-    # Should run cleanly without raising
+    # Should run cleanly without raising and without warnings
     _verify_master_consistency(M, G, C, master_df, None, logger, seed=42)
+    assert "MASTER CONSISTENCY WARNING" not in capsys.readouterr().out
 
-def test_consistency_guard_fail_design(master_parquet_fixture):
+def test_consistency_guard_fail_design(master_parquet_fixture, capsys):
     """6b. Consistency guard - fail-design."""
     master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(sample_size=30, m_rows=10, g_rows=10)
 
@@ -103,10 +104,10 @@ def test_consistency_guard_fail_design(master_parquet_fixture):
     C_perturbed = C.copy()
     C_perturbed['dummy'] = np.random.rand(len(C))
 
-    with pytest.raises(ValueError, match="master mt_t is inconsistent with the provided M/G/C"):
-        _verify_master_consistency(M, G, C_perturbed, master_df, None, Logger(), seed=42)
+    _verify_master_consistency(M, G, C_perturbed, master_df, None, Logger(), seed=42)
+    assert "MASTER CONSISTENCY WARNING" in capsys.readouterr().out
 
-def test_consistency_guard_fail_data(master_parquet_fixture):
+def test_consistency_guard_fail_data(master_parquet_fixture, capsys):
     """6b. Consistency guard - fail-data."""
     master_parquet, M, G, C, M_annot, G_annot, master_df = master_parquet_fixture(sample_size=30, m_rows=10, g_rows=10)
 
@@ -114,8 +115,8 @@ def test_consistency_guard_fail_data(master_parquet_fixture):
     M_disjoint = M.copy()
     M_disjoint.index = [f"disjoint_m{i}" for i in range(len(M))]
 
-    with pytest.raises(ValueError, match="master consistency check failed"):
-        _verify_master_consistency(M_disjoint, G, C, master_df, None, Logger(), seed=42)
+    _verify_master_consistency(M_disjoint, G, C, master_df, None, Logger(), seed=42)
+    assert "MASTER CONSISTENCY WARNING" in capsys.readouterr().out
 
 def test_pairs_file_subset(tmp_path, master_parquet_fixture):
     """6c. --pairs-file subset."""
