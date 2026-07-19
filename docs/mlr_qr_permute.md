@@ -6,6 +6,8 @@
 **Audience:** method reviewers, maintainers, and (eventually) users.
 **Related:** analytic p (`mt_p`), bootstrap diagnostic (`qr_bootstrap` / `p_boot`).
 
+> **Architecture note (transition in progress).** `qr_permute` is a **post-mapping consumer**: it reads the mapping's output parquet (`--master-parquet`) for the observed statistic and the pair universe, then merges `perm_mt_p` back onto it — mirroring `qr_bootstrap` (§4). This document describes that target design. The code is completing its transition from an earlier **self-contained** form (which generated its own universe and recomputed the observed statistic); a pre-merge checkout may still show the self-contained version (§5).
+
 ---
 
 ## In plain language
@@ -29,7 +31,7 @@
 - the **analytic** p-value (`mt_p`): a two-sided normal-approximation tail derived from the regression t-statistic; and
 - the **bootstrap** diagnostic (`qr_bootstrap`, `p_boot`): a resampling-based stability measure computed on a user-supplied candidate pair set.
 
-Unlike either, `qr_permute` estimates a **data-driven null** covering **all pairs** and can resolve very small p-values via parametric tail extrapolation. It is a genome-wide method (no `--pairs-file`) and is implemented as an isolated parallel method alongside the existing solvers.
+Unlike either, `qr_permute` estimates a **data-driven null** and can resolve very small p-values via parametric tail extrapolation. Like `qr_bootstrap`, it is a **post-mapping step**: the user runs the primary mapping first, and `qr_permute` consumes its output parquet (`--master-parquet`) — reading the observed statistic and the pair universe the mapping already produced, scoring that universe against the permutation null, and merging `perm_mt_p` back onto it. An optional `--pairs-file` narrows the scored set to a candidate subset; by default the universe is the entire master. It is implemented as an isolated parallel method alongside the existing solvers.
 
 ---
 
@@ -82,13 +84,13 @@ The pooled-null assumption (§3.8) — that the per-pair null is shared — also
 - **Trans / global:** a uniform random sample of loci (drawn independently on the M and G axes; the null pairs are their product) suffices to characterize the single global null.
 - **Cis (planned):** per gene, the null population is that gene's cis-window CpGs (the full local test space), not a random draw.
 
-The **observed** statistic is still computed for **every reported pair**; only the *null* is subsampled. Conflating the two — scoring against a null built from the same subsample that also defines the reported set — would silently forfeit the all-pairs property and is explicitly disallowed in the implementation. A non-positive subsample count fails closed rather than yielding an empty null.
+The **observed** statistic is **read from the master parquet for every reported pair** (the mapping already computed it); only the *null* is subsampled. Conflating the two — letting the null subsample also define the reported set — would silently forfeit the master's universe and is explicitly disallowed: the subsample flags feed only the null population, never the scored set. A non-positive subsample count fails closed rather than yielding an empty null.
 
 ### 3.4 Stratification — cis vs trans
 
 The two strata have different test geometry and are ultimately meant to take different null constructions, mirroring the cis/trans test-space asymmetry:
 
-- **Trans → pooled global null + generalized-Pareto (GPD) tail** *(implemented)*. Trans has no window over which a per-gene min-p is defined, so a single global null is the natural object. The scored null population is stratified by **chromosome** — a null pair is *trans* iff its CpG and gene lie on different chromosomes — using the shared region-mask helper, independent of the user's coverage flag (§4).
+- **Trans → pooled global null + generalized-Pareto (GPD) tail** *(implemented)*. Trans has no window over which a per-gene min-p is defined, so a single global null is the natural object. The scored null population is stratified by **chromosome** — a null pair is *trans* iff its CpG and gene lie on different chromosomes — using the shared region-mask helper, independent of which pairs happen to populate the master (§4).
 - **Cis → per-gene Beta-approximation** *(planned — Phase 2, not yet implemented)*: fit a Beta distribution to each gene's permutation min-p over its window, correcting local multiplicity and enabling smooth tail extrapolation. The Beta is fit in the **t-domain** (max `|t|` per permutation, converted at the end) so the `float32` analytic-p underflow cannot corrupt the significant tail.
 
 **Current behavior:** because the cis Beta is not yet built, **all reported pairs — cis and trans alike — are currently scored against the trans-global null.** Whether the cis stratum ultimately needs its own null (rather than sharing the global one) is the open *stratify-or-not* question, to be decided from the Phase-3 evaluation evidence (§5, §8).
@@ -136,10 +138,11 @@ On the observed/reported side, a computed p for every pair does not imply writin
 - **Exchangeability / constant df.** The pooled null requires `df = n − k` constant across all pairs and no per-pair missingness that varies `n`. In the current pipeline `df` is a single run-level scalar (`df = n_samples − covariates − 2`) and missingness is removed globally before the solve, so this holds. If per-pair `df` ever varied, both the pooled null and the subsampling shortcut would break.
 - **Pivotal statistic.** Pooling requires a scale-free statistic; the t-statistic qualifies, the raw coefficient does not (§3.1).
 - **Annotations required.** Because the scored null is stratified by chromosome (§3.4), the method requires methylation and expression annotations. Running without them **fails closed** (raises) rather than silently scoring against an unstratified null. The same principle extends to unusable annotations: a missing chromosome on a reported pair raises rather than defaulting to a stratum.
+- **Design consistency with the master.** Because the observed `mt_t` is read from the master while the null is built from the supplied `M`/`G`/`C`, the covariate design and `df` behind the master's statistic must match those of the null — otherwise the observed and null values reference two different models, and the p-values are confidently wrong with no error raised. The method enforces this **fail-closed** by a sampled equivalence check: it recomputes the observed t for a random subset of master pairs from the provided `M`/`G`/`C` and asserts it matches the stored `mt_t`; a divergence (a design/`df` mismatch), or a master pair absent from the supplied data, raises (§4, §6). This is the one correctness hazard the consumer architecture introduces, and the guard is deliberately stricter than `qr_bootstrap`, which merges on trust.
 
 ### 3.9 Output schema
 
-Each reported pair carries `mt_id`, `gt_id`, the observed statistic `mt_t`, the permutation p-value `perm_mt_p`, and the run's `seed` and `n_perm`. Provenance is additionally stamped into the **parquet** schema metadata as `tecpg_perm_seed`, `tecpg_perm_n_perm`, and `tecpg_perm_n_reported`.
+The output is the **master parquet with `perm_mt_p` merged on** — keyed on `(mt_id, gt_id)`, additive, and `mt_p` is never overwritten — mirroring how `qr_bootstrap` merges its columns. It therefore carries the master's columns (including the observed `mt_t`, **read not recomputed**) plus `perm_mt_p` and the run's `seed` and `n_perm`. Master rows that were not scored (e.g. outside a `--pairs-file` subset) carry `NaN perm_mt_p`. Provenance is additionally stamped into the **parquet** schema metadata as `tecpg_perm_seed`, `tecpg_perm_n_perm`, and `tecpg_perm_n_reported`.
 
 `tecpg_perm_n_reported` records the **pre-threshold** universe size. This matters: scoring computes a p for every reported pair, but an optional `output_p_threshold` writes only pairs at or below a cutoff (genome scale cannot materialize `~2e10` rows). The default writes **all** reported pairs, preserving the full FDR universe on disk; when a threshold is used, `tecpg_perm_n_reported` is what keeps a downstream BH-FDR correction honest about the universe it was drawn from (Phase 4).
 
@@ -152,9 +155,9 @@ Each reported pair carries `mt_id`, `gt_id`, the observed statistic `mt_t`, the 
 `qr_permute` is registered as a `--mlr-method` value and implemented in its own module, `tecpg/permute.py`, mirroring `qr_bootstrap`. Key architectural choices:
 
 - **Isolated parallel method.** During development it touches **no shared solver and no output-processing script**. Existing analyses (`legacy_normal_eq`, `qr`, `qr_bootstrap`, all `tools/`) run unaffected on the same checkout. Byte-for-byte identity of existing methods is the standing contract, enforced by the committed fingerprint (`tests/fingerprint_all_pipeline.json`), which is never modified to make a test pass.
-- **Coverage vs stratification are independent axes.** The user's region flag (`--all`/`--cis`/`--distal`/`--trans`) is a *coverage* filter selecting which pairs are reported; the *scoring* stratum is derived per pair from its own chromosomes (§3.4), so a pair receives the same p regardless of the coverage flag. Region-mask logic lives in a single shared helper (`helper.py:compute_region_mask`).
-- **Genome-wide data-flow.** Unlike `qr_bootstrap` (candidate `--pairs-file` + master-parquet merge), `qr_permute` scans genome-wide with subsampled null estimation. Its data-flow therefore resembles the `qr` full-scan path, not the bootstrap subset path.
-- **Self-contained solve.** The regression kernel is implemented within `permute.py` (as `bootstrap.py` does), replicating the qr path's formula, with an independent per-pair OLS oracle guaranteeing numerical equivalence.
+- **Coverage vs stratification are independent axes.** Coverage — which pairs are reported — is defined by the **master parquet** (optionally narrowed by `--pairs-file`), not by an internally generated product. The *scoring* stratum is derived per pair from its own chromosomes (§3.4), so a pair receives the same p regardless of which master it came from, as long as the design matches. Region-mask logic lives in a single shared helper (`helper.py:compute_region_mask`), used for the null stratification.
+- **Post-mapping data-flow.** `qr_permute` follows the **`qr_bootstrap` shape**: read the master parquet, compute a new per-pair quantity, merge it back on `(mt_id, gt_id)`. The observed statistic is not recomputed — it is read from the master. What is genome-wide is the *null estimation* (subsampled), not an observed scan; the reported universe is exactly the master's (optionally narrowed by `--pairs-file`).
+- **Solve is null-only, with a consistency guard.** The regression kernel implemented within `permute.py` (as `bootstrap.py` does) is used to build the **null** and to verify the master. The observed statistic comes from the master; a **sampled equivalence guard** recomputes the observed t for a random subset of master pairs from the supplied `M`/`G`/`C` and fails closed if it diverges from the stored `mt_t` (a design/`df` mismatch, §3.8). Numerical equivalence is guaranteed by a three-way oracle: consume-path (read) == recompute-path == independent per-pair OLS (numpy).
 - **Diagnostics are read-only and torch-free.** The evaluation script (§5, Phase 3) consumes permutation output only; it imports no torch and no `tecpg` runtime module, so it runs anywhere and is testable without a GPU environment.
 - **Deferred downstream integration.** Wiring `perm_mt_p` into the downstream significance selectors and the BH-FDR universe is a deliberate final phase, undertaken only after the method is validated, so that in-progress output can never affect existing pipelines.
 
@@ -164,7 +167,8 @@ Each reported pair carries `mt_id`, `gt_id`, the observed statistic `mt_t`, the 
 
 The build has **four phases**, delivered as a **walking skeleton**: the pipeline was first wired as trivial stubs (freezing interfaces and the output contract), then each stage replaced by real logic one **chunk** at a time, each guarded by an oracle and a **forced-fail proof** (green → red on a deliberately injected bug → green on revert).
 
-- **Phase 1 — trans-global null** *(complete, chunks 0–9)*. All-pairs coverage; design-fixed Freedman–Lane; streaming fixed-memory null; empirical p + GPD tail; finalized output. All stage functions are real, and the output schema is settled (§3.9): `mt_t`, `perm_mt_p`, `seed`, `n_perm`, parquet provenance metadata, and the optional output threshold. **Complete is not validated** — see Phase 3.
+- **Phase 1 — trans-global null** *(complete, chunks 0–9)*. Design-fixed Freedman–Lane; streaming fixed-memory null; empirical p + GPD tail; finalized output. All stage functions are real, and the null-side schema is settled (§3.9): `perm_mt_p`, `seed`, `n_perm`, parquet provenance metadata, and the optional output threshold. **Complete is not validated** — see Phase 3.
+- **Realignment to the post-mapping-consumer architecture** *(in progress)*. Phase 1 was first built as a **self-contained** method that generated its own universe and recomputed the observed statistic. This is being corrected to the `qr_bootstrap`-parallel form documented throughout: consume `--master-parquet` for the observed `mt_t` and the pair universe, add the optional `--pairs-file` subset, the sampled consistency guard (§3.8, §4), and the merge of `perm_mt_p` onto the master (§3.9). The null machinery, accumulator, GPD tail, and diagnostics are unchanged. Until it lands, a checkout may still show the self-contained form; the architecture above is the settled target.
 - **Phase 2 — cis Beta-approximation** *(pending)*. Per-gene min-p Beta null for the cis stratum (§3.4), fit in the t-domain, reusing Phase 1's residualize/refit primitives and the shared cis mask as each gene's local test set. Until it lands, cis pairs are scored against the trans-global null. **Gated on the Phase-3 stratify-or-not evidence** — the machinery is only built if the evidence says the cis null actually diverges from trans.
 - **Phase 3 — evaluation / diagnostics** *(partially delivered)*. A standalone read-only script. Its arms divide by what the persisted output can support (§3.7):
   - **3a — output-derivable** *(built)*: calibration of `perm_mt_p` against a `float64` analytic reference recomputed from `mt_t`; null sanity via genomic inflation and a uniformity test on the trans (mostly-null) bulk; and the **stratify-or-not decision** in its *calibration-divergence* form — comparing how cis and trans each depart from the analytic reference. The recommendation keys on **effect size**, with the two-sample test statistic reported but non-gating: at genome scale any such test's p-value collapses to zero from sample size alone and carries no information. Three outcomes: stratification warranted, single global null adequate, or inconclusive-because-cis-signal-confounds — the last being an honest verdict rather than a forced call, since real cis signal inflates the cis bulk and can masquerade as null divergence.
@@ -183,12 +187,14 @@ These are enforced for every chunk:
 
 - **Existing-method byte-identity.** `legacy_normal_eq`, `qr`, `qr_bootstrap`, and all `tools/` behave identically; the fingerprint JSON is never modified to make a test pass.
 - **Forced-fail proof.** Every guard and every real computation is verified by injecting a bug, observing the test fail, then reverting — a passing test that does not fail on injection is not accepted as verification. This applies to read-only diagnostics as well as to core code: a green suite is not evidence of coverage, and assertions that run under the wrong test name are worse than absent ones.
-- **Oracle / differential tests.** Correctness is checked against independent implementations (per-pair OLS via numpy `lstsq` for the observed t; a single-permutation numpy Freedman–Lane for the residualization; a direct null recount for the empirical p; GPD parameter recovery on simulated Pareto data for the tail) — not against stored golden outputs. Where a diagnostic re-implements a pipeline quantity, it must use the **same estimator** as the pipeline (e.g. the same GPD fitting method), or it measures something other than what it claims to.
+- **Oracle / differential tests.** Correctness is checked against independent implementations — for the observed statistic, a **three-way equivalence** that the value read from the master equals both an in-module recompute and an independent per-pair OLS (numpy `lstsq`); the read-vs-recompute leg proves the consume-path plumbing, and the numpy leg breaks the circularity of two internal paths sharing one solver. Also: a single-permutation numpy Freedman–Lane for the residualization; a direct null recount for the empirical p; GPD parameter recovery on simulated Pareto data for the tail — not against stored golden outputs. Where a diagnostic re-implements a pipeline quantity, it must use the **same estimator** as the pipeline (e.g. the same GPD fitting method), or it measures something other than what it claims to.
 - **Design-fixed Freedman–Lane.** The null permutes the reduced-model response residuals with the design held fixed (§3.2); permuting a predictor is a correctness *and* cost error.
 - **Pivotal statistic.** The pooled/scored statistic is the t-stat, never raw β (§3.1).
 - **Bounded-memory accumulation.** The null footprint is fixed and independent of permutation count (§3.7).
 - **Per-pair floor and positivity.** The empirical p is floored per pair at `1 / (N_null + 1)`; the GPD extension is clamped strictly positive.
-- **Fail-closed / fail-safe guards.** Missing annotations, unusable (missing-chromosome) annotations on reported pairs, and non-positive subsample counts fail closed (raise); a degenerate tail fit fails safe to the empirical p.
+- **Fail-closed / fail-safe guards.** Missing annotations, unusable (missing-chromosome) annotations on reported pairs, non-positive subsample counts, and `--pairs-file` pairs absent from the master fail closed (raise); a degenerate tail fit fails safe to the empirical p.
+- **Master-consistency guard.** The observed `mt_t` read from the master is validated against the supplied `M`/`G`/`C` by a sampled equivalence spot-check; a design/`df` mismatch, or a master pair absent from the data, fails closed (§3.8, §4).
+- **Additive merge.** `perm_mt_p` is merged onto the master on `(mt_id, gt_id)`; `mt_p` is never overwritten and unscored rows fall through to `NaN`.
 - **Seed / determinism.** Permutation draws follow a recorded seed (default 42); the same seed reproduces the null, and the seed is written to the output and its parquet metadata (§3.9).
 
 ---
@@ -197,27 +203,37 @@ These are enforced for every chunk:
 
 > The trans pipeline produces real p-values, but the method is **not yet validated** (see the status note at the top). Current output should not be used for inference.
 
+`qr_permute` is a **two-step** flow: map first to produce the master, then permute consuming it.
+
 ```
+# 1. Map — produce the master parquet (observed mt_t over your universe).
+tecpg run mlr --mlr-method qr --output-format parquet
+#    → e.g. <output_dir>/<mapping>.parquet
+
+# 2. Permute — consume that master; score its universe against the null.
 tecpg run mlr --mlr-method qr_permute \
+    --master-parquet <mapping>.parquet \
     --permutations 1000 \
-    --trans \
     --subsample-mt-count <N> --subsample-g-count <N> \
     --seed 42 \
     --output-format parquet
+    # optional: --pairs-file candidates.csv   (score only a subset)
 ```
 
 Relevant options:
 
-- `--mlr-method qr_permute` — select the permutation method (qr-family; no `--pairs-file`).
+- `--mlr-method qr_permute` — select the permutation method (qr-family, post-mapping consumer).
+- `--master-parquet` — **required.** The mapping output supplying the observed `mt_t` and the `(mt_id, gt_id)` universe. Its covariate design/`df` must match the supplied `M`/`G`/`C` (§3.8, checked fail-closed).
+- `--pairs-file` — **optional.** A candidate subset (`mt_id`, `gt_id` CSV); default universe = the entire master. A pair absent from the master fails closed.
 - `--permutations` — number of permutations (default 100). Governed by tail-shape convergence, not the target p (§3.6).
-- `--all` / `--cis` / `--distal` / `--trans` — coverage selection (the standard region flags); scoring stratum is derived per pair (§4).
+- `--all` / `--cis` / `--distal` / `--trans` — standard region flags; under the consumer model the reported set is the master (optionally narrowed by `--pairs-file`), not these flags. The scoring stratum is derived per pair (§4).
 - `--subsample-mt-count` / `--subsample-g-count` — random loci selection for null estimation (§3.3).
 - `--seed` — permutation/subsample seed, recorded with the output.
 - `--output-p-threshold` — writes only pairs at or below this permutation p-value cutoff. Pre-threshold size is retained in metadata.
 
 **Annotations are required.** Because the null is chromosome-stratified (§3.4, §3.8), methylation and expression annotations must be supplied; running without them raises rather than silently producing an unstratified null.
 
-**Output:** `permutation_results.{parquet,csv}` with columns `mt_id`, `gt_id`, `mt_t`, `perm_mt_p`, `seed`, `n_perm`, plus parquet provenance metadata (§3.9). An explicit `--output-file` is honored verbatim; the default writes `permutation_results.<ext>` into the output directory. **Parquet is recommended** — the CSV path does not carry the provenance metadata (§3.9).
+**Output:** the master with `perm_mt_p` (and the run's `seed`, `n_perm`) merged on — `permutation_results.{parquet,csv}` by default. It carries the master's columns (including the observed `mt_t`) plus `perm_mt_p`; unscored rows carry `NaN perm_mt_p`, and `mt_p` is left untouched. An explicit `--output-file` is honored verbatim; the default writes `permutation_results.<ext>` into the output directory. **Parquet is recommended** — the CSV path does not carry the provenance metadata (§3.9).
 
 ---
 
@@ -228,8 +244,9 @@ Relevant options:
 - **Extrapolation ceiling.** p-values are trustworthy to the resolution the test count demands (§3.6); beyond that they are reported as `< threshold`, since the tail model's assumptions become the dominant uncertainty.
 - **Resolved — cis/trans mask reuse.** The region-mask logic is factored into a shared helper (`helper.py:compute_region_mask`) — a single source of truth for both the qr path and `permute.py`.
 - **Resolved — null-pair stratification.** The accumulated null is stratified by chromosome to the trans stratum (§3.4); the earlier unmasked cross-product placeholder is gone.
+- **Resolved (design) — post-mapping architecture.** `qr_permute` consumes the mapping's master parquet and merges `perm_mt_p` back, mirroring `qr_bootstrap`, rather than recomputing a self-contained universe (§4). A sampled consistency guard enforces that the supplied `M`/`G`/`C` match the master's design (§3.8). The decision is settled; the code is completing the transition (§5).
 - **Resolved — output-thresholding policy.** Write-all by default, with an optional p-cutoff and a recorded pre-threshold universe size (§3.9).
-- **Open — stratify-or-not calibration.** Whether to fit separate cis/trans nulls or a single global null is an empirical question, answered by running the Phase-3a evaluation: does the cis null diverge enough from trans to warrant the per-gene Beta machinery? The design assumes two strata (statistically motivated, §3.4); **coverage is all-pairs regardless of how this resolves.**
+- **Open — stratify-or-not calibration.** Whether to fit separate cis/trans nulls or a single global null is an empirical question, answered by running the Phase-3a evaluation: does the cis null diverge enough from trans to warrant the per-gene Beta machinery? The design assumes two strata (statistically motivated, §3.4); **coverage is the master's universe regardless of how this resolves.**
 - **Open — GPD threshold selection.** The tail threshold is provisionally the smallest retained exceedance (all of the top-K buffer); a higher threshold may be warranted, to be informed by the ξ-convergence diagnostic — which is itself sidecar-gated (§5, Phase 3b), so this remains open longer than originally planned.
 - **Open — null-state persistence.** The accumulator and GPD fit are discarded at exit (§3.7), which is what gates the Phase-3b arms. Whether to persist them to a sidecar artifact is deliberately deferred until the 3a evidence shows the rigorous null-shape comparison is actually needed.
 - **Open — CSV provenance and CLI threshold exposure.** The parquet-only metadata and the unexposed `output_p_threshold` flag (§3.9) are both small gaps to close before Phase 4 relies on them.
