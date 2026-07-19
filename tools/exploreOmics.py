@@ -144,7 +144,9 @@ def plot_feature_distributions(df: pd.DataFrame, output_dir: Path,
     
     # Plot distribution of variances
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(np.log10(feature_var + 1e-10), bins=50, edgecolor='black', alpha=0.7)
+    log_vars = np.log10(feature_var + 1e-10)
+    bins = 50 if log_vars.max() - log_vars.min() > 1e-8 else 1
+    ax.hist(log_vars, bins=bins, edgecolor='black', alpha=0.7)
     ax.set_xlabel('log10(Variance)')
     ax.set_ylabel('Frequency')
     ax.set_title(f'{data_type} - Feature Variance Distribution')
