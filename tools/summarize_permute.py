@@ -16,36 +16,6 @@ import pyarrow.parquet as pq
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-def label_strata(output, m_annot, g_annot):
-    # Same as eval_permute.py
-    def norm_chrom(s):
-        isna = s.isna()
-        s = s.astype(str)
-        s = s.str.replace(r'^chr', '', regex=True, case=False)
-        s = s.str.upper()
-        s = s.mask(isna, other=pd.NA)
-        return s.to_numpy(dtype=object)
-
-    m_chrom = norm_chrom(m_annot['chrom'])
-    g_chrom = norm_chrom(g_annot['chrom'])
-
-    m_mapped = m_annot.index.astype(str).get_indexer(output['mt_id'].astype(str))
-    g_mapped = g_annot.index.astype(str).get_indexer(output['gt_id'].astype(str))
-
-    if (m_mapped == -1).any() or (g_mapped == -1).any():
-        raise ValueError("Reported mt_id/gt_id missing from annotations.")
-
-    is_cis = (m_chrom[m_mapped] == g_chrom[g_mapped]) & (~pd.isna(m_chrom[m_mapped]))
-
-    # Cis window is not re-derived here, using simple chrom match to replicate eval's fallback
-    strata = np.where(is_cis, 'cis', 'trans')
-
-    # Handle missing chromosomes
-    unmappable = pd.isna(m_chrom[m_mapped]) | pd.isna(g_chrom[g_mapped])
-    strata[unmappable] = 'dropped'
-
-    return strata
-
 def build_summary_text(report_dict: dict) -> str:
     lines = []
     lines.append("# Permutation vs Analytic p-value Summary\n")
@@ -153,9 +123,11 @@ def main():
 
     has_annot = args.m_annot and args.g_annot
     if has_annot:
-        m_annot = pd.read_csv(args.m_annot, sep=None, engine='python', index_col=3, header=None, names=['chrom', 'chromStart', 'chromEnd', 'name', 'score', 'strand'])
-        g_annot = pd.read_csv(args.g_annot, sep=None, engine='python', index_col=3, header=None, names=['chrom', 'chromStart', 'chromEnd', 'name', 'score', 'strand'])
-        df['stratum'] = label_strata(df, m_annot, g_annot)
+        from eval_permute import label_strata as eval_label_strata, _load_annotation
+        m_annot = _load_annotation(args.m_annot, 'M')
+        g_annot = _load_annotation(args.g_annot, 'G')
+        _keep, is_cis, is_trans, _nc, _nt, _nd = eval_label_strata(df, m_annot, g_annot)
+        df['stratum'] = np.where(is_cis, 'cis', np.where(is_trans, 'trans', 'dropped'))
         df = df[df['stratum'] != 'dropped'].copy()
     else:
         df['stratum'] = 'all'
