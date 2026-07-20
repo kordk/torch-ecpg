@@ -19,6 +19,10 @@ BULK_LO = 0.05
 BULK_HI = 1.0  # mostly-null band for divergence
 TAIL_P_ANA = 1e-4  # tail band for arm (a)
 TOLERANCE_MEDIAN_LOG10_RATIO_DIFF = 0.5  # |Δ| below this => strata agree
+MIN_REGION_BULK_N = 100  # provisional: min bulk pairs for a region to be testable
+CANONICAL_REGIONS = ['TRANS', 'DISTAL5', 'CIS5', 'PROMOTER', 'GENEBODY', 'CIS3', 'DISTAL3']
+NEAR_GENE_REGIONS = ['CIS5', 'PROMOTER', 'GENEBODY', 'CIS3']
+REGION_REFERENCE = 'TRANS'
 
 # Frozen Sidecar Contract: The sidecar .npz is expected to have these exactly.
 # Arrays: bin_edges, hist_counts, overflow_count, total_count, topk_values
@@ -213,19 +217,54 @@ def main():
 
     n_pairs_input = len(output)
 
-    try:
-        keep, is_cis, is_trans, n_cis, n_trans, n_dropped = label_strata(output, m_annot, g_annot)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    has_region = 'region' in output.columns
+    if has_region:
+        region_col = output['region']
+        keep = ~region_col.isna()
+        n_dropped = int((~keep).sum())
 
-    if n_dropped:
-        print("Drop site eval_permute.label_strata[reported_pairs]: dropped pairs with "
-              "unmappable chromosome: {0} -> {1} ({2} dropped)"
-              .format(n_pairs_input, int(keep.sum()), n_dropped), file=sys.stderr)
+        if n_dropped:
+            print("Drop site eval_permute.region[reported_pairs]: dropped pairs with "
+                  "null region: {0} -> {1} ({2} dropped)"
+                  .format(n_pairs_input, int(keep.sum()), n_dropped), file=sys.stderr)
+
         output = output.loc[keep].reset_index(drop=True)
-        is_cis = is_cis[keep]
-        is_trans = is_trans[keep]
+
+        region_col = output['region']
+        invalid_regions = set(region_col.unique()) - set(CANONICAL_REGIONS)
+        if invalid_regions:
+            raise ValueError(f"eval_permute: unexpected region labels: {sorted(list(invalid_regions))}")
+
+        masks_R = {R: (region_col == R).to_numpy() for R in CANONICAL_REGIONS}
+
+        is_trans = masks_R['TRANS']
+        # Pooled near-gene replaces is_cis for bulk logic
+        is_cis = np.zeros(len(output), dtype=bool)
+        for R in NEAR_GENE_REGIONS:
+            is_cis |= masks_R[R]
+
+        n_by_region = {R: int(masks_R[R].sum()) for R in CANONICAL_REGIONS}
+        n_cis = int(is_cis.sum())
+        n_trans = int(is_trans.sum())
+        n_dropped_unmappable_chrom = 0
+        n_dropped_null_region = n_dropped
+    else:
+        try:
+            keep, is_cis, is_trans, n_cis, n_trans, n_dropped = label_strata(output, m_annot, g_annot)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if n_dropped:
+            print("Drop site eval_permute.label_strata[reported_pairs]: dropped pairs with "
+                  "unmappable chromosome: {0} -> {1} ({2} dropped)"
+                  .format(n_pairs_input, int(keep.sum()), n_dropped), file=sys.stderr)
+            output = output.loc[keep].reset_index(drop=True)
+            is_cis = is_cis[keep]
+            is_trans = is_trans[keep]
+
+        n_dropped_unmappable_chrom = n_dropped
+        n_dropped_null_region = 0
 
     # -------------------------------------------------------------------------
     # Core Data Extraction
@@ -245,7 +284,8 @@ def main():
     report = {
         "metadata": {
             "n_pairs_input": n_pairs_input,
-            "n_pairs_dropped_unmappable_chrom": n_dropped,
+            "n_pairs_dropped_unmappable_chrom": n_dropped_unmappable_chrom,
+            "n_pairs_dropped_null_region": n_dropped_null_region,
             "n_pairs_scored": len(t),
             "n_cis": n_cis,
             "n_trans": n_trans,
@@ -257,6 +297,9 @@ def main():
         "arms": {}
     }
 
+    if has_region:
+        report["metadata"]["n_by_region"] = n_by_region
+
     # -------------------------------------------------------------------------
     # Arm A.a: Calibration
     # -------------------------------------------------------------------------
@@ -264,10 +307,19 @@ def main():
 
     # all
     calib['all'] = compute_calibration_stats(t, p_perm, p_ana, is_bulk, is_tail)
-    # cis
-    calib['cis'] = compute_calibration_stats(t[is_cis], p_perm[is_cis], p_ana[is_cis], is_bulk[is_cis], is_tail[is_cis])
-    # trans
-    calib['trans'] = compute_calibration_stats(t[is_trans], p_perm[is_trans], p_ana[is_trans], is_bulk[is_trans], is_tail[is_trans])
+    if has_region:
+        for R in CANONICAL_REGIONS:
+            mask_R = masks_R[R]
+            if np.any(mask_R):
+                calib[R] = compute_calibration_stats(t[mask_R], p_perm[mask_R], p_ana[mask_R], is_bulk[mask_R], is_tail[mask_R])
+        # Keep legacy 'cis' / 'trans' for summarize_permute
+        calib['cis'] = compute_calibration_stats(t[is_cis], p_perm[is_cis], p_ana[is_cis], is_bulk[is_cis], is_tail[is_cis])
+        calib['trans'] = compute_calibration_stats(t[is_trans], p_perm[is_trans], p_ana[is_trans], is_bulk[is_trans], is_tail[is_trans])
+    else:
+        # cis
+        calib['cis'] = compute_calibration_stats(t[is_cis], p_perm[is_cis], p_ana[is_cis], is_bulk[is_cis], is_tail[is_cis])
+        # trans
+        calib['trans'] = compute_calibration_stats(t[is_trans], p_perm[is_trans], p_ana[is_trans], is_bulk[is_trans], is_tail[is_trans])
 
     # Downsampled QQ Data (All)
     n_qq = min(len(t), 5000)
@@ -310,52 +362,140 @@ def main():
     # -------------------------------------------------------------------------
     stratify = {}
 
-    cis_bulk_mask = is_cis & is_bulk
+    def bulk_log_ratios(mask):
+        mask_bulk = mask & is_bulk
+        if not np.any(mask_bulk):
+            return np.array([])
+        p_perm_safe = np.clip(p_perm[mask_bulk], a_min=1e-300, a_max=1.0)
+        p_ana_safe = np.clip(p_ana[mask_bulk], a_min=1e-300, a_max=1.0)
+        return np.log10(p_perm_safe / p_ana_safe)
 
-    if np.any(trans_bulk_mask) and np.any(cis_bulk_mask):
-        p_perm_trans_safe = np.clip(p_perm[trans_bulk_mask], a_min=1e-300, a_max=1.0)
-        p_ana_trans_safe = np.clip(p_ana[trans_bulk_mask], a_min=1e-300, a_max=1.0)
-
-        p_perm_cis_safe = np.clip(p_perm[cis_bulk_mask], a_min=1e-300, a_max=1.0)
-        p_ana_cis_safe = np.clip(p_ana[cis_bulk_mask], a_min=1e-300, a_max=1.0)
-
-        log_ratio_trans = np.log10(p_perm_trans_safe / p_ana_trans_safe)
-        log_ratio_cis = np.log10(p_perm_cis_safe / p_ana_cis_safe)
-
-        median_trans = float(np.median(log_ratio_trans))
-        median_cis = float(np.median(log_ratio_cis))
-
-        delta = median_cis - median_trans
-
-        mw_stat, mw_p = scipy.stats.mannwhitneyu(log_ratio_cis, log_ratio_trans, alternative='two-sided')
-        ks_stat2, ks_p2 = scipy.stats.kstest(log_ratio_cis, log_ratio_trans)
-
-        stratify['median_log10_ratio_trans'] = median_trans
-        stratify['median_log10_ratio_cis'] = median_cis
-        stratify['delta_median_log10_ratio'] = delta
-
-        stratify['test_name'] = "mann_whitney_u"
-        stratify['test_stat'] = float(mw_stat)
-        stratify['test_p'] = float(mw_p)
-        stratify['ks_stat'] = float(ks_stat2)
-        stratify['ks_p'] = float(ks_p2)
-
-        # lambda_excess is reported as a DESCRIPTIVE diagnostic only. Genomic
-        # inflation (lambda_GC) presumes a mostly-null test space, which eQTM —
-        # and cis in particular — violates: high lambda_cis is expected biology,
-        # not miscalibration, so it must not gate the verdict. The stratify
-        # decision keys on the calibration-divergence effect size (delta) alone.
+    if has_region:
+        trans_bulk = bulk_log_ratios(masks_R[REGION_REFERENCE])
         lambda_excess = (lambda_cis - lambda_trans) if (lambda_cis is not None and lambda_trans is not None) else 0.0
-        stratify['lambda_excess'] = float(lambda_excess)
 
-        if abs(delta) < TOLERANCE_MEDIAN_LOG10_RATIO_DIFF:
-            rec = "single_global_null_adequate"
+        if len(trans_bulk) < MIN_REGION_BULK_N:
+            stratify['status'] = "skipped_insufficient_data"
         else:
-            rec = "stratification_warranted"
+            median_trans = float(np.median(trans_bulk))
+            per_region = {}
+            divergent = []
 
-        stratify['recommendation'] = rec
+            per_region[REGION_REFERENCE] = {
+                'status': 'reference',
+                'n_bulk': len(trans_bulk),
+                'median_log10_ratio': median_trans,
+                'lambda': float(calculate_genomic_inflation(t[masks_R[REGION_REFERENCE]])) if np.any(masks_R[REGION_REFERENCE]) else None
+            }
+
+            for R in CANONICAL_REGIONS:
+                if R == REGION_REFERENCE:
+                    continue
+                rb = bulk_log_ratios(masks_R[R])
+                if len(rb) < MIN_REGION_BULK_N:
+                    per_region[R] = {'status': 'insufficient_data', 'n_bulk': len(rb)}
+                else:
+                    median_R = float(np.median(rb))
+                    delta = median_R - median_trans
+                    mw_stat, mw_p = scipy.stats.mannwhitneyu(rb, trans_bulk, alternative='two-sided')
+                    ks_stat2, ks_p2 = scipy.stats.kstest(rb, trans_bulk)
+                    lambda_R = calculate_genomic_inflation(t[masks_R[R]])
+                    per_region[R] = {
+                        'status': 'ok',
+                        'n_bulk': len(rb),
+                        'median_log10_ratio': median_R,
+                        'delta_vs_trans': delta,
+                        'mw_p': float(mw_p),
+                        'ks_p': float(ks_p2),
+                        'lambda': float(lambda_R)
+                    }
+                    if R in NEAR_GENE_REGIONS and abs(delta) >= TOLERANCE_MEDIAN_LOG10_RATIO_DIFF:
+                        divergent.append(R)
+
+            stratify['mode'] = 'per_region'
+            stratify['reference'] = REGION_REFERENCE
+            stratify['per_region'] = per_region
+            stratify['divergent_regions'] = divergent
+
+            pooled_near_gene = bulk_log_ratios(is_cis)
+
+            stratify['median_log10_ratio_trans'] = median_trans
+            stratify['lambda_excess'] = float(lambda_excess)
+            stratify['test_name'] = "mann_whitney_u"
+
+            if len(pooled_near_gene) < MIN_REGION_BULK_N:
+                stratify['median_log10_ratio_cis'] = None
+                stratify['delta_median_log10_ratio'] = None
+                stratify['test_stat'] = None
+                stratify['test_p'] = None
+                stratify['ks_stat'] = None
+                stratify['ks_p'] = None
+                stratify['recommendation'] = "insufficient_near_gene_coverage"
+            else:
+                median_cis = float(np.median(pooled_near_gene))
+                delta = median_cis - median_trans
+                mw_stat, mw_p = scipy.stats.mannwhitneyu(pooled_near_gene, trans_bulk, alternative='two-sided')
+                ks_stat2, ks_p2 = scipy.stats.kstest(pooled_near_gene, trans_bulk)
+
+                stratify['median_log10_ratio_cis'] = median_cis
+                stratify['delta_median_log10_ratio'] = delta
+                stratify['test_stat'] = float(mw_stat)
+                stratify['test_p'] = float(mw_p)
+                stratify['ks_stat'] = float(ks_stat2)
+                stratify['ks_p'] = float(ks_p2)
+
+                if not divergent:
+                    stratify['recommendation'] = "single_global_null_adequate"
+                else:
+                    stratify['recommendation'] = "stratification_warranted"
+
     else:
-        stratify['status'] = "skipped_insufficient_data"
+        cis_bulk_mask = is_cis & is_bulk
+
+        if np.any(trans_bulk_mask) and np.any(cis_bulk_mask):
+            p_perm_trans_safe = np.clip(p_perm[trans_bulk_mask], a_min=1e-300, a_max=1.0)
+            p_ana_trans_safe = np.clip(p_ana[trans_bulk_mask], a_min=1e-300, a_max=1.0)
+
+            p_perm_cis_safe = np.clip(p_perm[cis_bulk_mask], a_min=1e-300, a_max=1.0)
+            p_ana_cis_safe = np.clip(p_ana[cis_bulk_mask], a_min=1e-300, a_max=1.0)
+
+            log_ratio_trans = np.log10(p_perm_trans_safe / p_ana_trans_safe)
+            log_ratio_cis = np.log10(p_perm_cis_safe / p_ana_cis_safe)
+
+            median_trans = float(np.median(log_ratio_trans))
+            median_cis = float(np.median(log_ratio_cis))
+
+            delta = median_cis - median_trans
+
+            mw_stat, mw_p = scipy.stats.mannwhitneyu(log_ratio_cis, log_ratio_trans, alternative='two-sided')
+            ks_stat2, ks_p2 = scipy.stats.kstest(log_ratio_cis, log_ratio_trans)
+
+            stratify['median_log10_ratio_trans'] = median_trans
+            stratify['median_log10_ratio_cis'] = median_cis
+            stratify['delta_median_log10_ratio'] = delta
+
+            stratify['test_name'] = "mann_whitney_u"
+            stratify['test_stat'] = float(mw_stat)
+            stratify['test_p'] = float(mw_p)
+            stratify['ks_stat'] = float(ks_stat2)
+            stratify['ks_p'] = float(ks_p2)
+
+            # lambda_excess is reported as a DESCRIPTIVE diagnostic only. Genomic
+            # inflation (lambda_GC) presumes a mostly-null test space, which eQTM —
+            # and cis in particular — violates: high lambda_cis is expected biology,
+            # not miscalibration, so it must not gate the verdict. The stratify
+            # decision keys on the calibration-divergence effect size (delta) alone.
+            lambda_excess = (lambda_cis - lambda_trans) if (lambda_cis is not None and lambda_trans is not None) else 0.0
+            stratify['lambda_excess'] = float(lambda_excess)
+
+            if abs(delta) < TOLERANCE_MEDIAN_LOG10_RATIO_DIFF:
+                rec = "single_global_null_adequate"
+            else:
+                rec = "stratification_warranted"
+
+            stratify['recommendation'] = rec
+        else:
+            stratify['status'] = "skipped_insufficient_data"
 
     report["arms"]["stratify_decision"] = stratify
 

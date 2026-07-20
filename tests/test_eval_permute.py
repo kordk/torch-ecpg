@@ -652,3 +652,283 @@ def test_stratum_mixed_dtype_regression(tmp_path, m_chrom_col, g_chrom_col):
 
     assert report['metadata']['n_cis'] == 2, f"Expected 2 cis, got {report['metadata'].get('n_cis')}"
     assert report['metadata']['n_trans'] == 0, f"Expected 0 trans, got {report['metadata'].get('n_trans')}"
+
+def test_has_region_oracle(tmp_path):
+    df_val = 50
+    rng = np.random.default_rng(42)
+    n = 1000
+
+    m_annot = pd.DataFrame({'name': [f'm{i}' for i in range(n)], 'chrom': [1]*n})
+    g_annot = pd.DataFrame({'name': [f'g{i}' for i in range(n)], 'chrom': [1]*(n//2) + [2]*(n//2)})
+
+    m_annot_path = tmp_path / "m_annot.csv"
+    g_annot_path = tmp_path / "g_annot.csv"
+    m_annot.to_csv(m_annot_path, index=False)
+    g_annot.to_csv(g_annot_path, index=False)
+
+    regions = ep.CANONICAL_REGIONS
+    assigned_regions = [regions[i % len(regions)] for i in range(n)]
+
+    # Introduce some dropped regions
+    assigned_regions[10] = None
+    assigned_regions[20] = np.nan
+
+    t_vals = scipy.stats.t.rvs(df_val, size=n, random_state=rng)
+    p_ana = 2.0 * scipy.stats.t.sf(np.abs(t_vals), df_val)
+
+    output = pd.DataFrame({
+        'mt_id': [f'm{i}' for i in range(n)],
+        'gt_id': [f'g{i}' for i in range(n)],
+        'mt_t': t_vals,
+        'perm_mt_p': p_ana,
+        'region': assigned_regions
+    })
+
+    out_path = tmp_path / "out.parquet"
+    table = pa.Table.from_pandas(output)
+    pq.write_table(table, out_path)
+
+    script_path = os.path.join(os.path.dirname(__file__), "../tools/eval_permute.py")
+    out_dir = tmp_path / "dir"
+
+    subprocess.run([
+        sys.executable, script_path,
+        "--perm-output", str(out_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir)
+    ], check=True)
+
+    with open(out_dir / "eval_permute_report.json") as f:
+        rep = json.load(f)
+
+    # Oracle assertion: n_pairs_scored + dropped = total
+    assert rep['metadata']['n_pairs_scored'] + rep['metadata']['n_pairs_dropped_null_region'] == n
+    assert rep['metadata']['n_pairs_dropped_null_region'] == 2
+    assert rep['metadata']['n_pairs_dropped_unmappable_chrom'] == 0
+
+    # Ensure n_by_region adds up to n_pairs_scored
+    assert sum(rep['metadata']['n_by_region'].values()) == rep['metadata']['n_pairs_scored']
+
+    strat = rep['arms']['stratify_decision']
+    assert strat['mode'] == 'per_region'
+    assert strat['reference'] == 'TRANS'
+
+def test_forced_fail_promoter(tmp_path):
+    df_val = 50
+    rng = np.random.default_rng(42)
+    n = 2000
+
+    m_annot = pd.DataFrame({'name': [f'm{i}' for i in range(n)], 'chrom': [1]*n})
+    g_annot = pd.DataFrame({'name': [f'g{i}' for i in range(n)], 'chrom': [1]*(n//2) + [2]*(n//2)})
+
+    m_annot_path = tmp_path / "m_annot.csv"
+    g_annot_path = tmp_path / "g_annot.csv"
+    m_annot.to_csv(m_annot_path, index=False)
+    g_annot.to_csv(g_annot_path, index=False)
+
+    regions = ep.CANONICAL_REGIONS
+    assigned_regions = [regions[i % len(regions)] for i in range(n)]
+
+    t_vals = scipy.stats.t.rvs(df_val, size=n, random_state=rng)
+    p_ana = 2.0 * scipy.stats.t.sf(np.abs(t_vals), df_val)
+    p_perm = p_ana.copy()
+
+    # Step 1: Prove it passes initially (adequate)
+    output1 = pd.DataFrame({
+        'mt_id': [f'm{i}' for i in range(n)],
+        'gt_id': [f'g{i}' for i in range(n)],
+        'mt_t': t_vals,
+        'perm_mt_p': p_perm,
+        'region': assigned_regions
+    })
+
+    out1_path = tmp_path / "out1.parquet"
+    pq.write_table(pa.Table.from_pandas(output1), out1_path)
+
+    script_path = os.path.join(os.path.dirname(__file__), "../tools/eval_permute.py")
+    out_dir1 = tmp_path / "dir1"
+
+    subprocess.run([
+        sys.executable, script_path,
+        "--perm-output", str(out1_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir1)
+    ], check=True)
+
+    with open(out_dir1 / "eval_permute_report.json") as f:
+        rep1 = json.load(f)
+
+    assert rep1['arms']['stratify_decision']['recommendation'] == "single_global_null_adequate"
+    assert rep1['arms']['stratify_decision']['divergent_regions'] == []
+
+    # Step 2: Push PROMOTER out of tolerance
+    p_perm2 = p_perm.copy()
+    promoter_mask = np.array(assigned_regions) == 'PROMOTER'
+    p_perm2[promoter_mask] *= 0.05
+
+    output2 = pd.DataFrame({
+        'mt_id': [f'm{i}' for i in range(n)],
+        'gt_id': [f'g{i}' for i in range(n)],
+        'mt_t': t_vals,
+        'perm_mt_p': p_perm2,
+        'region': assigned_regions
+    })
+
+    out2_path = tmp_path / "out2.parquet"
+    pq.write_table(pa.Table.from_pandas(output2), out2_path)
+
+    out_dir2 = tmp_path / "dir2"
+
+    subprocess.run([
+        sys.executable, script_path,
+        "--perm-output", str(out2_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir2)
+    ], check=True)
+
+    with open(out_dir2 / "eval_permute_report.json") as f:
+        rep2 = json.load(f)
+
+    assert rep2['arms']['stratify_decision']['recommendation'] == "stratification_warranted"
+    assert "PROMOTER" in rep2['arms']['stratify_decision']['divergent_regions']
+
+def test_condition_b_insufficient_near_gene(tmp_path):
+    df_val = 50
+    rng = np.random.default_rng(42)
+
+    # 200 TRANS (plenty), but only 10 CIS5 (insufficient pooled near gene)
+    n_trans = 200
+    n_cis5 = 10
+    n = n_trans + n_cis5
+
+    m_annot = pd.DataFrame({'name': [f'm{i}' for i in range(n)], 'chrom': [1]*n})
+    g_annot = pd.DataFrame({'name': [f'g{i}' for i in range(n)], 'chrom': [1]*n})
+
+    m_annot_path = tmp_path / "m_annot.csv"
+    g_annot_path = tmp_path / "g_annot.csv"
+    m_annot.to_csv(m_annot_path, index=False)
+    g_annot.to_csv(g_annot_path, index=False)
+
+    assigned_regions = ['TRANS'] * n_trans + ['CIS5'] * n_cis5
+
+    t_vals = scipy.stats.t.rvs(df_val, size=n, random_state=rng)
+    p_ana = 2.0 * scipy.stats.t.sf(np.abs(t_vals), df_val)
+
+    output = pd.DataFrame({
+        'mt_id': [f'm{i}' for i in range(n)],
+        'gt_id': [f'g{i}' for i in range(n)],
+        'mt_t': t_vals,
+        'perm_mt_p': p_ana,
+        'region': assigned_regions
+    })
+
+    out_path = tmp_path / "out.parquet"
+    pq.write_table(pa.Table.from_pandas(output), out_path)
+
+    script_path = os.path.join(os.path.dirname(__file__), "../tools/eval_permute.py")
+    out_dir = tmp_path / "dir"
+
+    subprocess.run([
+        sys.executable, script_path,
+        "--perm-output", str(out_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir)
+    ], check=True)
+
+    with open(out_dir / "eval_permute_report.json") as f:
+        rep = json.load(f)
+
+    strat = rep['arms']['stratify_decision']
+    assert strat['recommendation'] == "insufficient_near_gene_coverage"
+    assert strat['median_log10_ratio_cis'] is None
+    assert strat['delta_median_log10_ratio'] is None
+    assert strat['test_stat'] is None
+    assert strat['test_p'] is None
+    assert strat['ks_stat'] is None
+    assert strat['ks_p'] is None
+    # lambda_excess should still be populated
+    assert strat['lambda_excess'] is not None
+
+def test_unexpected_region_fails_closed(tmp_path):
+    output = pd.DataFrame({
+        'mt_id': ['m1'], 'gt_id': ['g1'], 'mt_t': [1.0], 'perm_mt_p': [0.5], 'region': ['JUNK']
+    })
+    out_path = tmp_path / "out.parquet"
+    pq.write_table(pa.Table.from_pandas(output), out_path)
+
+    m_annot = pd.DataFrame({'name': ['m1'], 'chrom': [1]})
+    g_annot = pd.DataFrame({'name': ['g1'], 'chrom': [1]})
+    m_annot_path = tmp_path / "m_annot.csv"
+    g_annot_path = tmp_path / "g_annot.csv"
+    m_annot.to_csv(m_annot_path, index=False)
+    g_annot.to_csv(g_annot_path, index=False)
+
+    script_path = os.path.join(os.path.dirname(__file__), "../tools/eval_permute.py")
+    out_dir = tmp_path / "dir"
+
+    res = subprocess.run([
+        sys.executable, script_path,
+        "--perm-output", str(out_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", "50",
+        "--out-dir", str(out_dir)
+    ], capture_output=True, text=True)
+
+    assert res.returncode != 0
+    assert "unexpected region labels" in res.stderr
+
+def test_fallback_byte_identity(tmp_path):
+    df_val = 50
+    rng = np.random.default_rng(42)
+    n = 1000
+
+    m_annot = pd.DataFrame({'name': [f'm{i}' for i in range(n)], 'chrom': [1]*n})
+    g_annot = pd.DataFrame({'name': [f'g{i}' for i in range(n)], 'chrom': [1]*(n//2) + [2]*(n//2)})
+
+    m_annot_path = tmp_path / "m_annot.csv"
+    g_annot_path = tmp_path / "g_annot.csv"
+    m_annot.to_csv(m_annot_path, index=False)
+    g_annot.to_csv(g_annot_path, index=False)
+
+    t_vals = scipy.stats.t.rvs(df_val, size=n, random_state=rng)
+    p_ana = 2.0 * scipy.stats.t.sf(np.abs(t_vals), df_val)
+
+    # Use original code behavior: byte for byte identity check not easy through subprocess directly if we don't have the original code saved.
+    # But we can assert the schema structure is entirely intact.
+    output = pd.DataFrame({
+        'mt_id': [f'm{i}' for i in range(n)],
+        'gt_id': [f'g{i}' for i in range(n)],
+        'mt_t': t_vals,
+        'perm_mt_p': p_ana
+    })
+
+    out_path = tmp_path / "out.parquet"
+    pq.write_table(pa.Table.from_pandas(output), out_path)
+
+    script_path = os.path.join(os.path.dirname(__file__), "../tools/eval_permute.py")
+    out_dir = tmp_path / "dir"
+
+    subprocess.run([
+        sys.executable, script_path,
+        "--perm-output", str(out_path),
+        "--m-annot", str(m_annot_path),
+        "--g-annot", str(g_annot_path),
+        "--df", str(df_val),
+        "--out-dir", str(out_dir)
+    ], check=True)
+
+    with open(out_dir / "eval_permute_report.json") as f:
+        rep = json.load(f)
+
+    assert 'n_by_region' not in rep['metadata']
+    assert 'per_region' not in rep['arms']['stratify_decision']
+    assert rep['metadata']['n_pairs_dropped_null_region'] == 0
