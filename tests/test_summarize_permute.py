@@ -89,24 +89,24 @@ def test_smoke_summarize_permute(tmp_path):
     df.to_parquet(perm_path)
 
     m_annot = pd.DataFrame({
-        0: ["chr1", "chr2", "chr3"],
-        1: [1, 2, 3],
-        2: [10, 20, 30],
-        3: ["m1", "m2", "m3"],
-        4: [0, 0, 0],
-        5: ["+", "+", "+"]
+        'chrom': ["chr1", "chr2", "chr3"],
+        'chromStart': [1, 2, 3],
+        'chromEnd': [10, 20, 30],
+        'name': ["m1", "m2", "m3"],
+        'score': [0, 0, 0],
+        'strand': ["+", "+", "+"]
     })
-    m_annot.to_csv(m_annot_path, sep="\t", header=False, index=False)
+    m_annot.to_csv(m_annot_path, sep="\t", header=True, index=False)
 
     g_annot = pd.DataFrame({
-        0: ["chr1", "chr2", "chr4"],
-        1: [1, 2, 3],
-        2: [10, 20, 30],
-        3: ["g1", "g2", "g3"],
-        4: [0, 0, 0],
-        5: ["+", "+", "+"]
+        'chrom': ["chr1", "chr2", "chr4"],
+        'chromStart': [1, 2, 3],
+        'chromEnd': [10, 20, 30],
+        'name': ["g1", "g2", "g3"],
+        'score': [0, 0, 0],
+        'strand': ["+", "+", "+"]
     })
-    g_annot.to_csv(g_annot_path, sep="\t", header=False, index=False)
+    g_annot.to_csv(g_annot_path, sep="\t", header=True, index=False)
 
     cmd = [
         sys.executable, "tools/summarize_permute.py",
