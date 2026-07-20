@@ -13,6 +13,7 @@ DATASET="dummy"
 MAPPING="all"
 START_STAGE="all"
 MASTER_PARQUET=""
+USE_RESERVOIR=0
 
 PERMUTE_ARGS=()
 
@@ -30,7 +31,8 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -h, --help                     Show this help message and exit"
-            echo "      --master-parquet PATH      REQUIRED. Existing mapping output parquet (carries mt_t)"
+            echo "      --master-parquet PATH      REQUIRED (if no --reservoir). Existing mapping output parquet"
+            echo "      --reservoir                REQUIRED (if no --master-parquet). Convert and use sample_reservoir.csv"
             echo "                                 whose (mt_id, gt_id) universe is scored. Must have been"
             echo "                                 mapped from the SAME data_<ds> (same covariate design);"
             echo "                                 qr_permute fail-closes at runtime if the design mismatches."
@@ -57,6 +59,11 @@ while [[ "$#" -gt 0 ]]; do
         --master-parquet)
             MASTER_PARQUET="$2"
             shift 2
+            ;;
+
+        --reservoir)
+            USE_RESERVOIR=1
+            shift
             ;;
         -m|--mapping)
             MAPPING="$2"
@@ -86,22 +93,13 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
-# qr_permute is a post-mapping consumer: the master parquet is required and
-# supplies the observed mt_t and the (mt_id, gt_id) universe. Running the
-# mapping is out of scope for this wrapper -- produce the master first (e.g.
-# pipeline.sh -> output_<ds>/merged.parquet) and pass it here.
-if [ -z "$MASTER_PARQUET" ]; then
-    log "Error: --master-parquet is required."
-    log "  qr_permute consumes an existing mapping output (the master parquet); it does not"
-    log "  recompute the observed statistic. Produce the master first (e.g. via pipeline.sh,"
-    log "  which writes output_<ds>/merged.parquet) and pass it with --master-parquet PATH."
+# qr_permute is a post-mapping consumer: it requires an observed statistic master.
+if [ -z "$MASTER_PARQUET" ] && [ $USE_RESERVOIR -eq 0 ]; then
+    log "Error: Exactly one of --master-parquet or --reservoir is required."
     exit 1
 fi
-
-if [ ! -s "$MASTER_PARQUET" ]; then
-    log "Error: master parquet not found or empty: $MASTER_PARQUET"
-    log "  Check the path. It should be an existing mapping output carrying an 'mt_t' column"
-    log "  (e.g. output_<ds>/merged.parquet from a prior pipeline.sh run)."
+if [ -n "$MASTER_PARQUET" ] && [ $USE_RESERVOIR -eq 1 ]; then
+    log "Error: --master-parquet and --reservoir are mutually exclusive."
     exit 1
 fi
 
@@ -175,6 +173,26 @@ OUT_DIR="output_${DATASET}"
 DATA_DIR="data_${DATASET}"
 ANNOT_DIR="annot_${DATASET}"
 mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
+
+if [ $USE_RESERVOIR -eq 1 ]; then
+    RESERVOIR_CSV="${OUT_DIR}/sample_reservoir.csv"
+    if [ ! -s "$RESERVOIR_CSV" ]; then
+        log "Error: --reservoir passed but $RESERVOIR_CSV not found or empty."
+        log "  Check that mapping was run with --reservoir-count."
+        exit 1
+    fi
+    log "Converting $RESERVOIR_CSV to parquet..."
+    python3 tools/reservoir_to_parquet.py --in "$RESERVOIR_CSV" --out "${OUT_DIR}/reservoir_master.parquet"
+    MASTER_PARQUET="${OUT_DIR}/reservoir_master.parquet"
+fi
+
+if [ ! -s "$MASTER_PARQUET" ]; then
+    log "Error: master parquet not found or empty: $MASTER_PARQUET"
+    log "  Check the path. It should be an existing mapping output carrying an 'mt_t' column"
+    log "  (e.g. output_<ds>/merged.parquet from a prior pipeline.sh run)."
+    exit 1
+fi
+
 
 for f in M.csv G.csv C.csv; do
     [ -s "$DATA_DIR/$f" ] || { log "Error: $DATA_DIR/$f missing or empty. Run ./pipelinePre.sh --dataset $DATASET first."; exit 1; }
@@ -271,4 +289,17 @@ if [ $EXECUTE -eq 1 ]; then
         --out-dir "$OUT_DIR"
 
     log "Finished eval_permute. Report at $OUT_DIR/eval_permute_report.json"
+fi
+
+
+if [ $EXECUTE -eq 1 ]; then
+    log "[3/3] Running summary..."
+    python3 tools/summarize_permute.py \
+        --perm-output "$PERM_OUTPUT" \
+        --report "${OUT_DIR}/eval_permute_report.json" \
+        --df "$DF" \
+        --m-annot "$ANNOT_DIR/M.bed6" \
+        --g-annot "$ANNOT_DIR/G.bed6" \
+        --out-dir "$OUT_DIR"
+    log "Finished summarize_permute."
 fi
