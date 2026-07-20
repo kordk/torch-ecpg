@@ -51,7 +51,7 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -h, --help               Show this help message and exit"
-            echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, mesa"
+            echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, gtpsub,  mesa"
             echo "  -m, --mapping MAPPING    Specify the mapping method for tecpg. Options: all (default), cis"
             echo "  -s, --start-stage STAGE  Specify the starting stage. Options: all, map, merge, annotate, precise_p, summarize, boot_list, bootstrap. Default is 'all'."
             exit 0
@@ -78,7 +78,7 @@ done
 
 if [ "$MAPPING" != "all" ] && [ "$MAPPING" != "cis" ]; then
     log "Error: Unknown mapping: $MAPPING"
-    log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis] --start-stage [STAGE]"
+    log "Usage: ./pipeline.sh --dataset [dummy|gtp|gtpsub|mesa] --mapping [all|cis] --start-stage [STAGE]"
     exit 1
 fi
 
@@ -98,7 +98,7 @@ if [ $IS_VALID_STAGE -eq 0 ]; then
 fi
 
 case "$DATASET" in
-    gtp|mesa|dummy)
+    gtp|gtpsub|mesa|dummy)
         # No placeholder TOTAL_TESTS is set here on purpose: the FDR
         # denominator must be the real number of tests evaluated, which is
         # extracted from the mlr log below. A hardcoded size would silently
@@ -106,7 +106,7 @@ case "$DATASET" in
         ;;
     *)
         log "Error: Unknown dataset: $DATASET"
-        log "Usage: ./pipeline.sh --dataset [dummy|gtp|mesa] --mapping [all|cis]"
+        log "Usage: ./pipeline.sh --dataset [dummy|gtp|gtpsub|mesa] --mapping [all|cis]"
         exit 1
         ;;
 esac

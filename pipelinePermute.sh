@@ -31,7 +31,11 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -h, --help                     Show this help message and exit"
-            echo "      --master-parquet PATH      REQUIRED (if no --reservoir). Existing mapping output parquet"
+            echo "      --master-parquet PATH      REQUIRED (if no --reservoir). Existing mapping output parquet."
+            echo "                                 Also accepts the reservoir directly: a *.csv PATH (e.g."
+            echo "                                 sample_reservoir.csv) is converted to reservoir_master.parquet,"
+            echo "                                 and a not-yet-built reservoir_master.parquet is built from its"
+            echo "                                 sibling sample_reservoir.csv."
             echo "      --reservoir                REQUIRED (if no --master-parquet). Convert and use sample_reservoir.csv"
             echo "                                 whose (mt_id, gt_id) universe is scored. Must have been"
             echo "                                 mapped from the SAME data_<ds> (same covariate design);"
@@ -184,6 +188,44 @@ if [ $USE_RESERVOIR -eq 1 ]; then
     log "Converting $RESERVOIR_CSV to parquet..."
     python3 tools/reservoir_to_parquet.py --in "$RESERVOIR_CSV" --out "${OUT_DIR}/reservoir_master.parquet"
     MASTER_PARQUET="${OUT_DIR}/reservoir_master.parquet"
+fi
+
+# Convenience: accept the reservoir supplied via --master-parquet in either natural
+# form, so it doesn't reach pd.read_parquet() as a non-parquet and crash with the
+# opaque "Parquet magic bytes not found" error.
+#   (a) --master-parquet points at a *.csv (e.g. the reservoir CSV itself): convert
+#       it to output_<dir>/reservoir_master.parquet and use that. reservoir_to_parquet
+#       validates mt_id/gt_id/mt_t, so a CSV that isn't reservoir-shaped fails loudly
+#       with a clear column error instead of a cryptic parquet-reader crash.
+#   (b) --master-parquet names a reservoir_master.parquet that isn't built yet but has
+#       a sibling sample_reservoir.csv: build it in place. Scoped to that basename on
+#       purpose -- a mistyped path to a real mapping output (e.g. merged.parquet) must
+#       still fail loudly, not be silently swapped for the reservoir.
+if [ $USE_RESERVOIR -eq 0 ] && [ -n "$MASTER_PARQUET" ]; then
+    case "$MASTER_PARQUET" in
+        *.csv)
+            if [ ! -s "$MASTER_PARQUET" ]; then
+                log "Error: master CSV not found or empty: $MASTER_PARQUET"
+                exit 1
+            fi
+            CONVERTED="$(dirname "$MASTER_PARQUET")/reservoir_master.parquet"
+            log "Master given as CSV: $MASTER_PARQUET"
+            log "  Converting to $CONVERTED ..."
+            python3 tools/reservoir_to_parquet.py --in "$MASTER_PARQUET" --out "$CONVERTED"
+            MASTER_PARQUET="$CONVERTED"
+            ;;
+        *)
+            if [ ! -s "$MASTER_PARQUET" ] \
+               && [ "$(basename "$MASTER_PARQUET")" = "reservoir_master.parquet" ]; then
+                RESERVOIR_CSV="$(dirname "$MASTER_PARQUET")/sample_reservoir.csv"
+                if [ -s "$RESERVOIR_CSV" ]; then
+                    log "Master parquet not present: $MASTER_PARQUET"
+                    log "  Found sibling $RESERVOIR_CSV -- converting it to the reservoir master."
+                    python3 tools/reservoir_to_parquet.py --in "$RESERVOIR_CSV" --out "$MASTER_PARQUET"
+                fi
+            fi
+            ;;
+    esac
 fi
 
 if [ ! -s "$MASTER_PARQUET" ]; then
