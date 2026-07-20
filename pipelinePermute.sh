@@ -186,7 +186,7 @@ if [ $USE_RESERVOIR -eq 1 ]; then
         exit 1
     fi
     log "Converting $RESERVOIR_CSV to parquet..."
-    python3 tools/reservoir_to_parquet.py --in "$RESERVOIR_CSV" --out "${OUT_DIR}/reservoir_master.parquet"
+    python3 -u tools/reservoir_to_parquet.py --in "$RESERVOIR_CSV" --out "${OUT_DIR}/reservoir_master.parquet"
     MASTER_PARQUET="${OUT_DIR}/reservoir_master.parquet"
 fi
 
@@ -211,7 +211,7 @@ if [ $USE_RESERVOIR -eq 0 ] && [ -n "$MASTER_PARQUET" ]; then
             CONVERTED="$(dirname "$MASTER_PARQUET")/reservoir_master.parquet"
             log "Master given as CSV: $MASTER_PARQUET"
             log "  Converting to $CONVERTED ..."
-            python3 tools/reservoir_to_parquet.py --in "$MASTER_PARQUET" --out "$CONVERTED"
+            python3 -u tools/reservoir_to_parquet.py --in "$MASTER_PARQUET" --out "$CONVERTED"
             MASTER_PARQUET="$CONVERTED"
             ;;
         *)
@@ -221,7 +221,7 @@ if [ $USE_RESERVOIR -eq 0 ] && [ -n "$MASTER_PARQUET" ]; then
                 if [ -s "$RESERVOIR_CSV" ]; then
                     log "Master parquet not present: $MASTER_PARQUET"
                     log "  Found sibling $RESERVOIR_CSV -- converting it to the reservoir master."
-                    python3 tools/reservoir_to_parquet.py --in "$RESERVOIR_CSV" --out "$MASTER_PARQUET"
+                    python3 -u tools/reservoir_to_parquet.py --in "$RESERVOIR_CSV" --out "$MASTER_PARQUET"
                 fi
             fi
             ;;
@@ -306,7 +306,7 @@ if [ $EXECUTE -eq 1 ]; then
     log "      built from $DATA_DIR (M/G/C). It fail-closes if the master's covariate design"
     log "      does not match this C.csv (DF=$DF)."
     set -o pipefail
-    python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" \
+    python3 -u -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" \
         run mlr --mlr-method qr_permute --all \
         --master-parquet "$MASTER_PARQUET" \
         --output-format auto \
@@ -323,7 +323,7 @@ if [ $EXECUTE -eq 1 ]; then
     log "[2/2] Running eval..."
     [ -s "$PERM_OUTPUT" ] || { log "Error: $PERM_OUTPUT missing or empty. Run with --start-stage permute first."; exit 1; }
 
-    python3 tools/eval_permute.py \
+    python3 -u tools/eval_permute.py \
         --perm-output "$PERM_OUTPUT" \
         --m-annot "$ANNOT_DIR/M.bed6" \
         --g-annot "$ANNOT_DIR/G.bed6" \
@@ -336,7 +336,7 @@ fi
 
 if [ $EXECUTE -eq 1 ]; then
     log "[3/3] Running summary..."
-    python3 tools/summarize_permute.py \
+    python3 -u tools/summarize_permute.py \
         --perm-output "$PERM_OUTPUT" \
         --report "${OUT_DIR}/eval_permute_report.json" \
         --df "$DF" \
