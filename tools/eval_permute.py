@@ -285,7 +285,6 @@ def main():
         "metadata": {
             "n_pairs_input": n_pairs_input,
             "n_pairs_dropped_unmappable_chrom": n_dropped_unmappable_chrom,
-            "n_pairs_dropped_null_region": n_dropped_null_region,
             "n_pairs_scored": len(t),
             "n_cis": n_cis,
             "n_trans": n_trans,
@@ -299,6 +298,7 @@ def main():
 
     if has_region:
         report["metadata"]["n_by_region"] = n_by_region
+        report["metadata"]["n_pairs_dropped_null_region"] = n_dropped_null_region
 
     # -------------------------------------------------------------------------
     # Arm A.a: Calibration
@@ -372,7 +372,7 @@ def main():
 
     if has_region:
         trans_bulk = bulk_log_ratios(masks_R[REGION_REFERENCE])
-        lambda_excess = (lambda_cis - lambda_trans) if (lambda_cis is not None and lambda_trans is not None) else 0.0
+        lambda_excess = (lambda_cis - lambda_trans) if (lambda_cis is not None and lambda_trans is not None) else None
 
         if len(trans_bulk) < MIN_REGION_BULK_N:
             stratify['status'] = "skipped_insufficient_data"
@@ -420,7 +420,7 @@ def main():
             pooled_near_gene = bulk_log_ratios(is_cis)
 
             stratify['median_log10_ratio_trans'] = median_trans
-            stratify['lambda_excess'] = float(lambda_excess)
+            stratify['lambda_excess'] = float(lambda_excess) if lambda_excess is not None else None
             stratify['test_name'] = "mann_whitney_u"
 
             if len(pooled_near_gene) < MIN_REGION_BULK_N:
@@ -485,8 +485,8 @@ def main():
             # and cis in particular — violates: high lambda_cis is expected biology,
             # not miscalibration, so it must not gate the verdict. The stratify
             # decision keys on the calibration-divergence effect size (delta) alone.
-            lambda_excess = (lambda_cis - lambda_trans) if (lambda_cis is not None and lambda_trans is not None) else 0.0
-            stratify['lambda_excess'] = float(lambda_excess)
+            lambda_excess = (lambda_cis - lambda_trans) if (lambda_cis is not None and lambda_trans is not None) else None
+            stratify['lambda_excess'] = float(lambda_excess) if lambda_excess is not None else None
 
             if abs(delta) < TOLERANCE_MEDIAN_LOG10_RATIO_DIFF:
                 rec = "single_global_null_adequate"

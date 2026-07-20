@@ -887,6 +887,10 @@ def test_unexpected_region_fails_closed(tmp_path):
     assert "unexpected region labels" in res.stderr
 
 def test_fallback_byte_identity(tmp_path):
+    """
+    Oracle-based fallback-equivalence test: evaluates a region-less fixture whose numbers are analytically known.
+    Ensures that values have not drifted and schema shape remains byte-identical to the original legacy path.
+    """
     df_val = 50
     rng = np.random.default_rng(42)
     n = 1000
@@ -902,8 +906,6 @@ def test_fallback_byte_identity(tmp_path):
     t_vals = scipy.stats.t.rvs(df_val, size=n, random_state=rng)
     p_ana = 2.0 * scipy.stats.t.sf(np.abs(t_vals), df_val)
 
-    # Use original code behavior: byte for byte identity check not easy through subprocess directly if we don't have the original code saved.
-    # But we can assert the schema structure is entirely intact.
     output = pd.DataFrame({
         'mt_id': [f'm{i}' for i in range(n)],
         'gt_id': [f'g{i}' for i in range(n)],
@@ -929,6 +931,26 @@ def test_fallback_byte_identity(tmp_path):
     with open(out_dir / "eval_permute_report.json") as f:
         rep = json.load(f)
 
+    # Assert schema
     assert 'n_by_region' not in rep['metadata']
+    assert 'n_pairs_dropped_null_region' not in rep['metadata']
     assert 'per_region' not in rep['arms']['stratify_decision']
-    assert rep['metadata']['n_pairs_dropped_null_region'] == 0
+    assert 'mode' not in rep['arms']['stratify_decision']
+
+    # Assert labeling oracle
+    assert rep['metadata']['n_cis'] == n // 2
+    assert rep['metadata']['n_trans'] == n // 2
+    assert rep['metadata']['n_pairs_scored'] == n
+
+    # Assert value oracle (all should be ~0 as perm_mt_p == p_ana)
+    calib = rep['arms']['calibration']
+    stratify = rep['arms']['stratify_decision']
+
+    assert calib['cis']['bulk_median_abs_log_ratio'] == pytest.approx(0.0, abs=1e-9)
+    assert calib['trans']['bulk_median_abs_log_ratio'] == pytest.approx(0.0, abs=1e-9)
+    assert calib['all']['bulk_median_abs_log_ratio'] == pytest.approx(0.0, abs=1e-9)
+
+    assert stratify['median_log10_ratio_cis'] == pytest.approx(0.0, abs=1e-9)
+    assert stratify['median_log10_ratio_trans'] == pytest.approx(0.0, abs=1e-9)
+    assert stratify['delta_median_log10_ratio'] == pytest.approx(0.0, abs=1e-9)
+    assert stratify['recommendation'] == 'single_global_null_adequate'
