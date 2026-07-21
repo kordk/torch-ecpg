@@ -113,7 +113,7 @@ def test_assign_family_region_consumed_no_crash(monkeypatch):
     def raise_if_called(*args, **kwargs):
         raise AssertionError("label_strata must not be called on the region path")
 
-    monkeypatch.setattr("tools.summarize_permute.eval_label_strata", raise_if_called, raising=False)
+    monkeypatch.setattr("eval_permute.label_strata", raise_if_called)
 
     # Missing annotations doesn't matter because region is present
     df_out, strat_mode = assign_family(df, "dummy_m.bed6", "dummy_g.bed6")
