@@ -202,6 +202,7 @@ def _tecpg_mlr_qr_inner(
         logger.info('Initializing region filtration')
         G_loci_before = len(G.index)
         G_annot = G_annot.drop(columns=['chromEnd', 'score']).reindex(G.index)
+        import pandas as pd
         G_annot['chrom'] = canonicalize_chrom(G_annot['chrom'])
         G_annot['strand'] = pd.to_numeric(G_annot['strand'].replace({'+': 1, '-': -1}), errors='coerce')
         G_annot = G_annot.dropna()
