@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev39**.
+The current development version on the `dev` branch is **2.0.0b2.dev48**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -16,6 +16,109 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 2.0.0b2.dev48
+
+### Features
+- Add a region annotation stage to `pipelinePermute.sh` (PR #322).
+- Consume the canonical region column for the 7-way `eval_permute`
+  stratify (PR #321).
+
+### Improvements / Performance
+- Use unbuffered `python3` calls in `pipelinePermute.sh`.
+- Revise the `qr_permute` status and validation details.
+
+### Bug Fixes
+- Restore strict fallback byte-identity in `eval` and strengthen the
+  associated tests.
+- Fix a `pipelinePermute.sh` bug and add `gtpsub` to `pipeline.sh`.
+
+### Tests
+- Resolve a missing header in the `test_smoke_summarize_permute` mock
+  BED files.
+
+## 2.0.0b2.dev47
+
+### Features
+- Update `pipelinePermute.sh` to support the `--reservoir` flag and add a
+  summary step (PR #320).
+
+### Improvements / Performance
+- Demote `lambda_excess` from the stratify verdict gating (PR #319).
+- Set `MLR_IG_COVARIATES='all'` in `pipeline.sh`.
+- Revise architecture notes and chromosome handling.
+
+### Bug Fixes
+- Fix a bug in `tools/summarize_permute.py`.
+
+## 2.0.0b2.dev46
+
+### Bug Fixes
+- Output the true raw dataframes `M_orig.csv` and `G_orig.csv` (PR #318).
+
+## 2.0.0b2.dev45
+
+### Improvements / Performance
+- Make the master-consistency guard advisory and recalibrate its
+  tolerance (PR #317).
+- Update `pipelinePermute.sh`.
+
+## 2.0.0b2.dev44
+
+### Bug Fixes
+- Intersect the master universe with the normalized M/G in `qr_permute`
+  (PR #316).
+
+## 2.0.0b2.dev43
+
+### Bug Fixes
+- Fix the QC report comparison by properly saving and retaining the
+  original data (PR #315).
+
+## 2.0.0b2.dev42
+
+### Improvements / Performance
+- Refactor `qr_permute` as a consumer path with an additive master merge
+  (PR #314).
+
+### Documentation
+- Enhance the documentation for the `qr_permute` method.
+
+### Bug Fixes
+- Fix the `qr_permute` signature and update the realignment test suite.
+- Move `exploreOmics.py` to the end of `pipelinePre.sh` (PR #313).
+
+## 2.0.0b2.dev41
+
+### Improvements / Performance
+- Chunk the pair dimension in the observed-statistic path of `qr_permute`
+  (PR #311).
+- Add progress logging to the `qr_permute` path (PR #312).
+
+### Bug Fixes
+- Fix duplicate logging in the permute function.
+- Fix `pipelinePre.sh` so dummy data correctly skips EpiDISH.
+
+### Tests
+- Harden the chunk-coverage guard using real loop counts.
+
+## 2.0.0b2.dev40
+
+### Features
+- Add the `subsample_loci` tool and the `gtpsub` (subsampled genotype)
+  dataset to the pipeline (PR #310).
+- Add the `pipelinePermute.sh` script and documentation (PR #308).
+
+### Improvements / Performance
+- Exclude EpiDISH for the `gtpsub` dataset in `pipelinePre.sh`.
+
+### Documentation
+- Update the CHANGELOG for `2.0.0b2.dev26` through `dev39` (PR #307).
+- Update `tests/README.md` to the current standard (CI, `pytest.ini`,
+  undocumented tests).
+
+### Bug Fixes
+- Remove dummy output files that were erroneously committed (PR #309).
 
 ## 2.0.0b2.dev39
 
