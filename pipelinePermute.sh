@@ -15,6 +15,8 @@ START_STAGE="all"
 MASTER_PARQUET=""
 USE_RESERVOIR=0
 ASSIGN_REGIONS=1
+CIS_ENRICH=0
+CIS_WINDOW=1000000
 
 PERMUTE_ARGS=()
 
@@ -41,6 +43,14 @@ while [[ "$#" -gt 0 ]]; do
             echo "                                 whose (mt_id, gt_id) universe is scored. Must have been"
             echo "                                 mapped from the SAME data_<ds> (same covariate design);"
             echo "                                 qr_permute fail-closes at runtime if the design mismatches."
+            echo "      --cis-enrich               REQUIRED (if no --master-parquet/--reservoir). Cis-window enrichment"
+            echo "                                 analysis: runs a cis write-all map, assembles the near-gene pairs"
+            echo "                                 with the reservoir's trans/distal pairs (build_gene_anchored_master.py),"
+            echo "                                 and scores the assembled master. Needs output_<ds>/sample_reservoir.csv"
+            echo "                                 (from a prior --reservoir-count map). Produces the near-gene coverage"
+            echo "                                 the uniform reservoir lacks so the per-region eval can render a verdict."
+            echo "      --cis-window N             Cis map half-window in bp applied up/downstream (default: 1000000)."
+            echo "                                 Over-capture is intended; assignRegionToEcpg relabels canonically."
             echo "  -d, --dataset DATASET          Specify the dataset to use. Options: dummy (default), gtpsub, gtp, mesa"
             echo "  -m, --mapping MAPPING          Region flag passed to qr_permute. Options: all (default)."
             echo "                                 'cis' is accepted by the parser but rejected at runtime:"
@@ -75,6 +85,14 @@ while [[ "$#" -gt 0 ]]; do
             USE_RESERVOIR=1
             shift
             ;;
+        --cis-enrich)
+            CIS_ENRICH=1
+            shift
+            ;;
+        --cis-window)
+            CIS_WINDOW="$2"
+            shift 2
+            ;;
         -m|--mapping)
             MAPPING="$2"
             shift 2
@@ -104,12 +122,14 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 # qr_permute is a post-mapping consumer: it requires an observed statistic master.
-if [ -z "$MASTER_PARQUET" ] && [ $USE_RESERVOIR -eq 0 ]; then
-    log "Error: Exactly one of --master-parquet or --reservoir is required."
-    exit 1
-fi
-if [ -n "$MASTER_PARQUET" ] && [ $USE_RESERVOIR -eq 1 ]; then
-    log "Error: --master-parquet and --reservoir are mutually exclusive."
+# Exactly one master source: an existing --master-parquet, the --reservoir, or
+# --cis-enrich (which BUILDS the master from a cis map + the reservoir).
+MODE_COUNT=0
+[ -n "$MASTER_PARQUET" ] && MODE_COUNT=$((MODE_COUNT + 1))
+[ $USE_RESERVOIR -eq 1 ] && MODE_COUNT=$((MODE_COUNT + 1))
+[ $CIS_ENRICH -eq 1 ] && MODE_COUNT=$((MODE_COUNT + 1))
+if [ $MODE_COUNT -ne 1 ]; then
+    log "Error: Exactly one of --master-parquet, --reservoir, or --cis-enrich is required."
     exit 1
 fi
 
@@ -157,6 +177,7 @@ log "Dataset: $DATASET"
 log "Master Parquet: $MASTER_PARQUET"
 log "Mapping: $MAPPING"
 log "Start Stage: $START_STAGE"
+if [ $CIS_ENRICH -eq 1 ]; then log "Mode: cis-enrich (cis map + assemble; cis-window=+/-${CIS_WINDOW} bp)"; fi
 log "============================================================"
 
 # Warnings
@@ -183,6 +204,19 @@ OUT_DIR="output_${DATASET}"
 DATA_DIR="data_${DATASET}"
 ANNOT_DIR="annot_${DATASET}"
 mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
+
+# --cis-enrich builds the master internally (cis write-all map -> assemble with the
+# reservoir). Point MASTER_PARQUET at the assembled output now so the downstream
+# stages reference it; require the reservoir CSV the assemble step combines with.
+if [ $CIS_ENRICH -eq 1 ]; then
+    ENRICH_RESERVOIR_CSV="${OUT_DIR}/sample_reservoir.csv"
+    if [ ! -s "$ENRICH_RESERVOIR_CSV" ]; then
+        log "Error: --cis-enrich needs $ENRICH_RESERVOIR_CSV (the reservoir the cis map is assembled with)."
+        log "  Produce it with a prior --reservoir-count map (e.g. via pipeline.sh)."
+        exit 1
+    fi
+    MASTER_PARQUET="${OUT_DIR}/gene_anchored_master.parquet"
+fi
 
 if [ $USE_RESERVOIR -eq 1 ]; then
     RESERVOIR_CSV="${OUT_DIR}/sample_reservoir.csv"
@@ -234,7 +268,8 @@ if [ $USE_RESERVOIR -eq 0 ] && [ -n "$MASTER_PARQUET" ]; then
     esac
 fi
 
-if [ ! -s "$MASTER_PARQUET" ]; then
+# In --cis-enrich mode the master does not exist yet; the enrichment stage builds it below.
+if [ $CIS_ENRICH -eq 0 ] && [ ! -s "$MASTER_PARQUET" ]; then
     log "Error: master parquet not found or empty: $MASTER_PARQUET"
     log "  Check the path. It should be an existing mapping output carrying an 'mt_t' column"
     log "  (e.g. output_<ds>/merged.parquet from a prior pipeline.sh run)."
@@ -304,6 +339,42 @@ EXECUTE=0
 if [ "$START_STAGE" == "all" ] || [ "$START_STAGE" == "permute" ]; then EXECUTE=1; fi
 
 PERM_OUTPUT="$OUT_DIR/permutation_results.parquet"
+
+# Stage 0 (--cis-enrich only): cis write-all map -> assemble gene-anchored master.
+# Runs only on a fresh run (--start-stage all); --start-stage permute/eval reuses an
+# existing gene_anchored_master.parquet. Mirrors pipeline.sh's map->mergeOutputs flow:
+# the map auto-chunks, so per-chunk outputs land in a clean subdir and are merged to
+# one parquet before assembly.
+if [ $CIS_ENRICH -eq 1 ] && [ "$START_STAGE" == "all" ]; then
+    CIS_MAP_DIR="$OUT_DIR/cis_map"
+    CIS_MAP_PARQUET="$OUT_DIR/cis_map_write_all.parquet"
+
+    log "[cis-map] Cis write-all map (region=cis, +/-${CIS_WINDOW} bp, p-thresh 1.0)..."
+    log "          Per-chunk outputs -> $CIS_MAP_DIR, merged -> $CIS_MAP_PARQUET."
+    log "          Write-all (-p 1.0) is required: it keeps the mostly-null near-gene"
+    log "          bulk the calibration needs. Over-capture is intended; assignRegion"
+    log "          relabels canonically downstream."
+    rm -rf "$CIS_MAP_DIR"
+    mkdir -p "$CIS_MAP_DIR"
+    set -o pipefail
+    python3 -u -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$CIS_MAP_DIR" \
+        run mlr --mlr-method qr --cis \
+        -w 0 -u "$CIS_WINDOW" -d "$CIS_WINDOW" \
+        -p 1.0 --output-format parquet 2>&1 | tee "cis_map_run_${DATASET}.log"
+    set +o pipefail
+
+    python3 -u tools/mergeOutputs.py --format parquet --pattern "*.*" \
+        "$CIS_MAP_DIR" "$CIS_MAP_PARQUET"
+    [ -s "$CIS_MAP_PARQUET" ] || { log "Error: cis map produced no merged output at $CIS_MAP_PARQUET. Check cis_map_run_${DATASET}.log."; exit 1; }
+
+    log "[assemble] Assembling gene-anchored master (cis near-gene + reservoir trans/distal)..."
+    python3 -u tools/build_gene_anchored_master.py \
+        --cis-map "$CIS_MAP_PARQUET" \
+        --reservoir "$ENRICH_RESERVOIR_CSV" \
+        --out "$MASTER_PARQUET"
+    [ -s "$MASTER_PARQUET" ] || { log "Error: assembly produced no master at $MASTER_PARQUET."; exit 1; }
+    log "          Assembled master: $MASTER_PARQUET"
+fi
 
 # Stage 1: assign regions
 if [ $EXECUTE -eq 1 ]; then
