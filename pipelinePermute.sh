@@ -14,6 +14,7 @@ MAPPING="all"
 START_STAGE="all"
 MASTER_PARQUET=""
 USE_RESERVOIR=0
+ASSIGN_REGIONS=1
 
 PERMUTE_ARGS=()
 
@@ -46,6 +47,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "                                 qr_permute's null is trans-global and Phase 2 (cis Beta)"
             echo "                                 is not implemented."
             echo "  -s, --start-stage STAGE        Specify the starting stage. Options: all, permute, eval. Default is 'all'."
+            echo "      --no-assign-regions        Skip adding a 'region' column via assignRegionToEcpg_parquet.py"
             echo "      --permutations N           Passthrough to qr_permute."
             echo "      --subsample-mt-count N     Passthrough to qr_permute. NOTE: does NOT shrink output."
             echo "      --subsample-g-count N      Passthrough to qr_permute. NOTE: does NOT shrink output."
@@ -55,6 +57,10 @@ while [[ "$#" -gt 0 ]]; do
         -s|--start-stage)
             START_STAGE="$2"
             shift 2
+            ;;
+        --no-assign-regions)
+            ASSIGN_REGIONS=0
+            shift
             ;;
         -d|--dataset)
             DATASET="$2"
@@ -299,9 +305,33 @@ if [ "$START_STAGE" == "all" ] || [ "$START_STAGE" == "permute" ]; then EXECUTE=
 
 PERM_OUTPUT="$OUT_DIR/permutation_results.parquet"
 
-# Stage 1: permute
+# Stage 1: assign regions
 if [ $EXECUTE -eq 1 ]; then
-    log "[1/2] Running permute (consuming master: $MASTER_PARQUET)..."
+    if [ "$ASSIGN_REGIONS" -eq 1 ]; then
+        # Idempotency guard: assignRegionToEcpg_parquet.py appends a 'region' field and
+        # CRASHES if one already exists (KeyError: Column region does not exist in schema).
+        # Skip re-annotation when the master already carries 'region' (re-runs, or a master
+        # that is itself a prior *.region.parquet). Cheap schema read, no full load.
+        if python3 -c "import pyarrow.parquet as pq, sys; sys.exit(0 if 'region' in pq.read_schema('$MASTER_PARQUET').names else 1)"; then
+            log "[1/4] Master already carries a 'region' column; skipping annotation."
+        else
+            REGION_MASTER="${MASTER_PARQUET%.parquet}.region.parquet"
+            log "[1/4] Assigning canonical regions ($MASTER_PARQUET -> $REGION_MASTER)..."
+            python3 -u tools/assignRegionToEcpg_parquet.py \
+                -d "$MASTER_PARQUET" \
+                -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" \
+                -o "$REGION_MASTER"
+            MASTER_PARQUET="$REGION_MASTER"
+            log "      Read the 'eCpgs Counts by Region' line above: it is the coverage gate for the per-region eval."
+        fi
+    else
+        log "[1/4] Region annotation skipped (--no-assign-regions); eval falls back to 2-way strata."
+    fi
+fi
+
+# Stage 2: permute
+if [ $EXECUTE -eq 1 ]; then
+    log "[2/4] Running permute (consuming master: $MASTER_PARQUET)..."
     log "      qr_permute reads observed mt_t from the master and scores it against the null"
     log "      built from $DATA_DIR (M/G/C). It fail-closes if the master's covariate design"
     log "      does not match this C.csv (DF=$DF)."
@@ -318,9 +348,9 @@ fi
 
 if [ "$START_STAGE" == "eval" ]; then EXECUTE=1; fi
 
-# Stage 2: eval
+# Stage 3: eval
 if [ $EXECUTE -eq 1 ]; then
-    log "[2/2] Running eval..."
+    log "[3/4] Running eval..."
     [ -s "$PERM_OUTPUT" ] || { log "Error: $PERM_OUTPUT missing or empty. Run with --start-stage permute first."; exit 1; }
 
     python3 -u tools/eval_permute.py \
@@ -335,7 +365,7 @@ fi
 
 
 if [ $EXECUTE -eq 1 ]; then
-    log "[3/3] Running summary..."
+    log "[4/4] Running summary..."
     python3 -u tools/summarize_permute.py \
         --perm-output "$PERM_OUTPUT" \
         --report "${OUT_DIR}/eval_permute_report.json" \
