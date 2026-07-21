@@ -19,22 +19,13 @@ TOPK_CAPACITY = 10_000
 
 
 def _normalize_annotations(M_annot, G_annot, M, G, logger):
-    def map_chrom(s):
-        # Allow pass-through of integer columns
-        if pd.api.types.is_integer_dtype(s):
-            return s
-        s = s.astype('string').str.strip()
-        s = s.str.replace(r'^chr', '', regex=True, case=False)
-        s = s.str.upper()
-        num = pd.to_numeric(s, errors='coerce')
-        spec = s.map({'X': -1, 'Y': -2, 'MT': -3, 'M': -3})
-        return num.fillna(spec)
+    from .chrom import canonicalize_chrom
 
     M_annot_n = M_annot.copy()
     G_annot_n = G_annot.copy()
 
-    M_annot_n['chrom'] = map_chrom(M_annot_n['chrom'])
-    G_annot_n['chrom'] = map_chrom(G_annot_n['chrom'])
+    M_annot_n['chrom'] = canonicalize_chrom(M_annot_n['chrom'])
+    G_annot_n['chrom'] = canonicalize_chrom(G_annot_n['chrom'])
 
     G_annot_n['strand'] = pd.to_numeric(G_annot_n['strand'].replace({'+': 1, '-': -1}), errors='coerce')
 

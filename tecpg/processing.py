@@ -197,14 +197,15 @@ def _tecpg_mlr_qr_inner(
 
     # Prepare annotation tensors if region filtration is used
     if region != 'all':
+        from .chrom import canonicalize_chrom
+
         logger.info('Initializing region filtration')
         G_loci_before = len(G.index)
-        G_annot = (
-            G_annot.drop(columns=['chromEnd', 'score'])
-            .reindex(G.index)
-            .replace({'X': -1, 'Y': -2, '+': 1, '-': -1})
-            .dropna()
-        )
+        G_annot = G_annot.drop(columns=['chromEnd', 'score']).reindex(G.index)
+        import pandas as pd
+        G_annot['chrom'] = canonicalize_chrom(G_annot['chrom'])
+        G_annot['strand'] = pd.to_numeric(G_annot['strand'].replace({'+': 1, '-': -1}), errors='coerce')
+        G_annot = G_annot.dropna()
         logger.info(
             'Drop site processing.region_filtration[G_annot]: dropped gene '
             'expression loci with missing/unmappable annotation '
@@ -212,12 +213,9 @@ def _tecpg_mlr_qr_inner(
             G_loci_before, len(G_annot), G_loci_before - len(G_annot),
         )
         M_loci_before = len(M.index)
-        M_annot = (
-            M_annot.drop(columns=['chromEnd', 'score', 'strand'])
-            .reindex(M.index)
-            .replace({'X': -1, 'Y': -2})
-            .dropna()
-        )
+        M_annot = M_annot.drop(columns=['chromEnd', 'score', 'strand']).reindex(M.index)
+        M_annot['chrom'] = canonicalize_chrom(M_annot['chrom'])
+        M_annot = M_annot.dropna()
         logger.info(
             'Drop site processing.region_filtration[M_annot]: dropped '
             'methylation loci with missing/unmappable annotation '
