@@ -103,3 +103,57 @@ def test_empty_result_fails_closed():
             ValueError,
             match="Assembled master dataframe is empty"):
         assemble_master(empty_cis, empty_res, mt_t_atol=1e-3)
+
+
+def test_cis_map_named_index_promoted(tmp_path):
+    """Map outputs store (mt_id, gt_id) in a named MultiIndex and mergeOutputs'
+    parquet->parquet path is a raw Arrow passthrough that preserves it."""
+    pq = pytest.importorskip('pyarrow.parquet')
+    pa = pytest.importorskip('pyarrow')
+
+    chunk = pd.DataFrame({
+        'mt_id': ['mt1', 'mt2'],
+        'gt_id': ['gt1', 'gt2'],
+        'mt_t': [1.0, 2.0],
+        'mt_p': [0.1, 0.2]
+    }).set_index(['mt_id', 'gt_id'])
+
+    src = tmp_path / 'chunk.parquet'
+    merged = tmp_path / 'merged.parquet'
+    pq.write_table(pa.Table.from_pandas(chunk), src)
+    table = pq.read_table(src)
+    writer = pq.ParquetWriter(merged, table.schema)
+    writer.write_table(table)
+    writer.close()
+
+    cis_df = pd.read_parquet(merged)
+    assert cis_df.index.names == ['mt_id', 'gt_id']
+
+    res_df = pd.DataFrame({
+        'mt_id': ['mt3'], 'gt_id': ['gt3'],
+        'mt_t': [3.0], 'mt_p': [0.3]
+    })
+
+    assembled = assemble_master(cis_df, res_df, mt_t_atol=1e-3)
+    assert len(assembled) == 3
+    assert set(assembled['mt_id']) == {'mt1', 'mt2', 'mt3'}
+
+
+def test_indexed_and_column_inputs_agree():
+    cols = pd.DataFrame({
+        'mt_id': ['mt1', 'mt2'], 'gt_id': ['gt1', 'gt2'],
+        'mt_t': [1.0, 2.0], 'mt_p': [0.1, 0.2]
+    })
+    res_df = pd.DataFrame({
+        'mt_id': ['mt2'], 'gt_id': ['gt2'],
+        'mt_t': [2.0], 'mt_p': [0.2]
+    })
+
+    from_cols = assemble_master(cols, res_df, mt_t_atol=1e-3)
+    from_index = assemble_master(
+        cols.set_index(['mt_id', 'gt_id']), res_df, mt_t_atol=1e-3)
+
+    key = ['mt_id', 'gt_id']
+    pd.testing.assert_frame_equal(
+        from_cols.sort_values(key).reset_index(drop=True),
+        from_index.sort_values(key).reset_index(drop=True))
