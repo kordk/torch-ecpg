@@ -31,3 +31,17 @@ def test_trans_mask_unchanged():
         window_base=0, upstream=1_000_000, downstream=1_000_000,
     )
     assert [bool(x) for x in mask] == [False, False, False, True]
+
+def test_cis_window_negative_strand():
+    m_chrom, m_pos, g_chrom, g_pos, g_strand = _fixture()
+    mask = compute_region_mask(
+        'cis', m_chrom, m_pos, g_chrom, g_pos, g_strand,
+        window_base=0, upstream=1_000_000, downstream=1_000_000,
+    )
+    # A -strand CpG 100 kb from its gene is inside a symmetric +/-1 Mb window.
+    # With unordered bounds the interval was inverted (empty), so this was False.
+    assert bool(mask[1]) is True
+    # The +strand and exclusion cases are unchanged by the ordering fix.
+    assert bool(mask[0]) is True
+    assert bool(mask[2]) is False
+    assert bool(mask[3]) is False
