@@ -349,10 +349,19 @@ def compute_region_mask(region, m_chrom, m_pos, g_chrom, g_pos, g_strand, *,
         # g_strand is int8 at the call sites; window magnitudes (~1e6)
         # overflow int8, so widen before multiplying.
         gs = g_strand.to(torch.int64)
+        # Multiplying by strand flips the window orientation but also reverses
+        # the bounds, which makes a symmetric negative-strand window empty.
+        # Order them so the interval is always valid.
+        lower = torch.minimum(
+            gs * (window_base - upstream), gs * (window_base + downstream)
+        )
+        upper = torch.maximum(
+            gs * (window_base - upstream), gs * (window_base + downstream)
+        )
         return (
             (m_chrom == g_chrom)
-            & (gs * (window_base - upstream) < delta)
-            & (delta < gs * (window_base + downstream))
+            & (lower < delta)
+            & (delta < upper)
         )
     if region == 'trans':
         return m_chrom != g_chrom
