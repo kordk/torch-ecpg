@@ -435,8 +435,23 @@ from .tool import (
 )
 
 
+def _print_codename(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+    click.echo(f'tecpg version {__version__}\nCodename: Shikoku')
+    ctx.exit()
+
+
 @click.group()
 @click.version_option(version=__version__, message='tecpg version %(version)s')
+@click.option(
+    '--codename',
+    is_flag=True,
+    is_eager=True,
+    expose_value=False,
+    callback=_print_codename,
+    hidden=True,
+)
 @click.option(
     '-r',
     '--root-path',
