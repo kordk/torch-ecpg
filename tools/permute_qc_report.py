@@ -1,29 +1,4 @@
 #!/usr/bin/env python3
-import os
-import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from eval_permute import (  # noqa: E402
-    CANONICAL_REGIONS,
-    NEAR_GENE_REGIONS,
-    MIN_REGION_BULK_N,
-    TOLERANCE_MEDIAN_LOG10_RATIO_DIFF,
-)
-import pandas as pd  # noqa: E402
-
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import pandas as pd
-
-from eval_permute import (  # noqa: E402
-    CANONICAL_REGIONS,
-    NEAR_GENE_REGIONS,
-    MIN_REGION_BULK_N,
-    TOLERANCE_MEDIAN_LOG10_RATIO_DIFF,
-)
-import pandas as pd  # noqa: E402
-import matplotlib
-import matplotlib.pyplot as plt
 import argparse
 import base64
 import dataclasses
@@ -36,10 +11,17 @@ import os
 import sys
 
 import matplotlib
-import matplotlib.pyplot as plt
 matplotlib.use('Agg')
+import matplotlib.pyplot as plt  # noqa: E402
+import pandas as pd  # noqa: E402
 
-# Add tools directory to path to allow importing eval_permute
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from eval_permute import (  # noqa: E402
+    CANONICAL_REGIONS,
+    NEAR_GENE_REGIONS,
+    MIN_REGION_BULK_N,
+    TOLERANCE_MEDIAN_LOG10_RATIO_DIFF,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -107,24 +89,30 @@ def render_html(dataset: str, meta: dict, modules: list) -> str:
 
     css = """
     body { font-family: sans-serif; margin: 0; padding: 0; display: flex; color: #333; }
-    #qc-nav { width: 250px; background: #f5f5f5; padding: 20px; height: 100vh; position: fixed; overflow-y: auto; border-right: 1px solid #ddd; box-sizing: border-box; }
+    #qc-nav { width: 250px; background: #f5f5f5; padding: 20px; height: 100vh; position: fixed; \
+              overflow-y: auto; border-right: 1px solid #ddd; box-sizing: border-box; }
     #qc-nav h1 { font-size: 1.2em; margin-top: 0; }
-    #qc-nav .dataset { font-size: 0.9em; color: #666; margin-bottom: 20px; word-wrap: break-word; }
+    #qc-nav .dataset { font-size: 0.9em; color: #666; margin-bottom: 20px; \
+                       word-wrap: break-word; }
     #qc-nav ul { list-style: none; padding: 0; margin: 0; }
     #qc-nav li { margin-bottom: 10px; }
-    #qc-nav a { text-decoration: none; color: #333; display: flex; align-items: center; font-size: 0.9em; }
+    #qc-nav a { text-decoration: none; color: #333; display: flex; \
+                align-items: center; font-size: 0.9em; }
     #qc-nav a:hover { color: #000; text-decoration: underline; }
-    main { margin-left: 250px; padding: 40px; flex: 1; max-width: 1000px; box-sizing: border-box; }
+    main { margin-left: 250px; padding: 40px; flex: 1; \
+           max-width: 1000px; box-sizing: border-box; }
     section { margin-bottom: 60px; }
     h2 { border-bottom: 1px solid #ddd; padding-bottom: 10px; display: flex; align-items: center; }
 
-    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; color: white; font-size: 0.8em; font-weight: bold; margin-right: 10px; margin-left: 10px; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; color: white; \
+             font-size: 0.8em; font-weight: bold; margin-right: 10px; margin-left: 10px; }
     .pass { background-color: #2e7d32; }
     .warn { background-color: #ef6c00; }
     .fail { background-color: #c62828; }
     .info { background-color: #546e7a; }
 
-    .purpose, .interpretation { padding: 15px; margin: 20px 0; border-left: 5px solid #ccc; background-color: #f9f9f9; line-height: 1.5; }
+    .purpose, .interpretation { padding: 15px; margin: 20px 0; border-left: 5px solid #ccc; \
+                                background-color: #f9f9f9; line-height: 1.5; }
     .purpose { border-left-color: #0277bd; background-color: #e1f5fe; }
     .interpretation { border-left-color: #558b2f; background-color: #f1f8e9; }
 
@@ -132,7 +120,8 @@ def render_html(dataset: str, meta: dict, modules: list) -> str:
     th, td { border: 1px solid #ddd; padding: 8px 12px; }
     th { background-color: #f5f5f5; }
     img { max-width: 100%; height: auto; border: 1px solid #eee; margin: 20px 0; }
-    footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 0.8em; color: #777; text-align: center; }
+    footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid #ddd; \
+             font-size: 0.8em; color: #777; text-align: center; }
     """
 
     nav_items = []
@@ -438,6 +427,7 @@ def build_bulk_calibration_module(report: dict, df=None) -> QCModule:
         figure_alt="Scatter plot of permutation vs analytic p-values" if fig_b64 else ""
     )
 
+
 def build_stratification_module(report: dict, df=None) -> QCModule:
     purpose = (
         "Asks whether each region's null bulk behaves like the trans reference. If "
@@ -476,9 +466,9 @@ def build_stratification_module(report: dict, df=None) -> QCModule:
         n_bulk = r_data.get('n_bulk')
         median_log10 = r_data.get('median_log10_ratio')
         delta = r_data.get('delta_vs_trans')
-        mw_p = r_data.get('mann_whitney_p')
+        mw_p = r_data.get('mw_p')
         ks_p = r_data.get('ks_p')
-        lam = r_data.get('lambda_excess')
+        lam = r_data.get('lambda')
 
         n_bulk_str = f"{n_bulk:,}" if n_bulk is not None else "\u2014"
         med_str = f"{median_log10:.5f}" if median_log10 is not None else "\u2014"
@@ -526,9 +516,16 @@ def build_stratification_module(report: dict, df=None) -> QCModule:
 
     if near_deltas and max_delta_val > 0:
         margin = TOLERANCE_MEDIAN_LOG10_RATIO_DIFF / max_delta_val
-        margin_line = f"Largest near-gene |Δ vs TRANS| = {max_delta_val:.3e} ({max_delta_region}); applied tolerance = {TOLERANCE_MEDIAN_LOG10_RATIO_DIFF}; the verdict is unchanged for any tolerance above {max_delta_val:.3e}, a margin of {margin:,.0f}x."
+        margin_line = (
+            f"Largest near-gene |Δ vs TRANS| = {max_delta_val:.3e} ({max_delta_region}); "
+            f"applied tolerance = {TOLERANCE_MEDIAN_LOG10_RATIO_DIFF}; "
+            f"the verdict is unchanged for any tolerance above {max_delta_val:.3e}, a margin of {margin:,.0f}x."
+        )
         if len(near_deltas) < len(NEAR_GENE_REGIONS):
-            margin_line += f" Based on {len(near_deltas)} of {len(NEAR_GENE_REGIONS)} near-gene regions; the remainder lacked a reported delta."
+            margin_line += (
+                f" Based on {len(near_deltas)} of {len(NEAR_GENE_REGIONS)} "
+                "near-gene regions; the remainder lacked a reported delta."
+            )
         interpretation += f"<br>{margin_line}"
 
     return QCModule(
@@ -544,7 +541,9 @@ def build_stratification_module(report: dict, df=None) -> QCModule:
 def main():
     parser = argparse.ArgumentParser(description="Generate self-contained HTML QC report for qr_permute")
     parser.add_argument('--report', required=True, help="Path to eval_permute_report.json")
-    parser.add_argument('--perm-output', help="Path to permutation_results.parquet (optional)")
+    parser.add_argument(
+        '--perm-output', help="Path to permutation_results.parquet (optional)"
+    )
     parser.add_argument('--df', type=int, help="Degrees of freedom (optional)")
     parser.add_argument('--dataset', required=True, help="Dataset name for the report title")
     parser.add_argument('--out', required=True, help="Path to output HTML file")
@@ -583,14 +582,18 @@ def main():
         try:
             mod = build_func(report_data, df)
             modules.append(mod)
+
         except Exception as e:
             logger.error(f"Module builder {build_func.__name__} failed: {e}")
             # Do not raise as per instructions, but wait, the instructions say:
-            # "A builder that cannot evaluate its check returns status='INFO' with an explanatory interpretation; it must never raise."
-            # Our builders don't catch their own exceptions if missing keys fail hard, but we used .get() heavily.
+            # "A builder that cannot evaluate its check returns status='INFO' \
+            # with an explanatory interpretation; it must never raise."
+            # Our builders don't catch their own exceptions if missing keys fail hard, \
+            # but we used .get() heavily.
             # To be absolutely safe and meet "never raise":
             modules.append(QCModule(
-                anchor=build_func.__name__.replace('build_', '').replace('_module', '').replace('_', '-'),
+                anchor=build_func.__name__.replace('build_', '').replace('_module', '').replace(
+                    '_', '-'),
                 title="Error",
                 status="INFO",
                 purpose="Error occurred",

@@ -55,13 +55,19 @@ def sample_report():
                 "recommendation": "adequate",
                 "divergent_regions": [],
                 "per_region": {
-                    "TRANS": {"status": "adequate", "n_bulk": 1000, "median_log10_ratio": 0.0, "lambda_excess": 1.0},
-                    "DISTAL5": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0, "delta_vs_trans": 0.0, "mann_whitney_p": 0.9, "ks_p": 0.9, "lambda_excess": 1.0},
-                    "CIS5": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0, "delta_vs_trans": 0.01, "mann_whitney_p": 0.9, "ks_p": 0.9, "lambda_excess": 1.0},
-                    "PROMOTER": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0, "delta_vs_trans": 0.0, "mann_whitney_p": 0.9, "ks_p": 0.9, "lambda_excess": 1.0},
-                    "GENEBODY": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0, "delta_vs_trans": 0.0, "mann_whitney_p": 0.9, "ks_p": 0.9, "lambda_excess": 1.0},
-                    "CIS3": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0, "delta_vs_trans": 0.0, "mann_whitney_p": 0.9, "ks_p": 0.9, "lambda_excess": 1.0},
-                    "DISTAL3": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0, "delta_vs_trans": 0.0, "mann_whitney_p": 0.9, "ks_p": 0.9, "lambda_excess": 1.0},
+                    "TRANS": {"status": "adequate", "n_bulk": 1000, "median_log10_ratio": 0.0, "lambda": 1.0},
+                    "DISTAL5": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0,
+                                "delta_vs_trans": 0.0, "mw_p": 0.9, "ks_p": 0.9, "lambda": 1.0},
+                    "CIS5": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0,
+                             "delta_vs_trans": 0.01, "mw_p": 0.9, "ks_p": 0.9, "lambda": 1.0},
+                    "PROMOTER": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0,
+                                 "delta_vs_trans": 0.0, "mw_p": 0.9, "ks_p": 0.9, "lambda": 1.0},
+                    "GENEBODY": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0,
+                                 "delta_vs_trans": 0.0, "mw_p": 0.9, "ks_p": 0.9, "lambda": 1.0},
+                    "CIS3": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0,
+                             "delta_vs_trans": 0.0, "mw_p": 0.9, "ks_p": 0.9, "lambda": 1.0},
+                    "DISTAL3": {"status": "adequate", "n_bulk": 100, "median_log10_ratio": 0.0,
+                                "delta_vs_trans": 0.0, "mw_p": 0.9, "ks_p": 0.9, "lambda": 1.0},
                 }
             }
         }
@@ -155,7 +161,8 @@ def test_modules_never_raise_on_empty_report():
         mod = builder({})
         assert mod.status in STATUSES
         # Just verifying it doesn't raise, the status for composition is FAIL due to floor logic.
-        # But instructions said "A builder that cannot evaluate its check returns status='INFO' with an explanatory interpretation; it must never raise."
+        # But instructions said "A builder that cannot evaluate its check returns status='INFO' \
+        # with an explanatory interpretation; it must never raise."
         # Actually composition module without any near-gene gives 0 near_gene which < MIN_REGION_BULK_N (FAIL).
         # We test that it does not raise.
 
@@ -192,3 +199,26 @@ def test_end_to_end_writes_html(tmp_path, monkeypatch, sample_report):
     assert 'id="region-composition"' in content
     assert 'id="bulk-calibration"' in content
     assert 'id="stratification"' in content
+
+
+def test_schema_conformance_independent_oracle():
+    """
+    Ensure the keys we read from per_region match the actual keys that
+    eval_permute emits. This catches missing/wrong key silent omissions.
+    """
+    import os
+
+    # As an explicit independent oracle, we can parse eval_permute.py
+    eval_permute_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'eval_permute.py')
+    with open(eval_permute_path, 'r') as f:
+        eval_permute_src = f.read()
+
+    # We are testing that the keys our QC report reads exist in eval_permute output strings
+    # The eval_permute file emits these explicitly as strings in its return dictionaries.
+    assert "'lambda'" in eval_permute_src
+    assert "'mw_p'" in eval_permute_src
+    assert "'ks_p'" in eval_permute_src
+    assert "'delta_vs_trans'" in eval_permute_src
+    assert "'median_log10_ratio'" in eval_permute_src
+    assert "'n_bulk'" in eval_permute_src
+    assert "'status'" in eval_permute_src
