@@ -470,19 +470,18 @@ def _regression_full_inner(
                         # The None in the index of the G tensors makes
                         # the shape of the tensor suitable to broadcast
                         # to the shape of the M tensors
+                        # G_strand_t is int8; window magnitudes (~1e6)
+                        # overflow int8, so widen before multiplying.
+                        gs = G_strand_t[index - 1, None].to(torch.int64)
                         region_indices_mask = (
                             (G_chrom_t[index - 1, None] == M_chrom_t)
                             .logical_and(
-                                G_strand_t[index - 1, None]
-                                * (window_base - upstream)
+                                gs * (window_base - upstream)
                                 < G_pos_t[index - 1, None] - M_pos_t
                             )
                             .logical_and(
                                 G_pos_t[index - 1, None] - M_pos_t
-                                < (
-                                    G_strand_t[index - 1, None]
-                                    * (window_base + downstream)
-                                )
+                                < (gs * (window_base + downstream))
                             )
                         )
                     elif region == 'trans':

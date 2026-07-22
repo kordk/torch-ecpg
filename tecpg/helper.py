@@ -346,10 +346,13 @@ def compute_region_mask(region, m_chrom, m_pos, g_chrom, g_pos, g_strand, *,
     """
     if region in ('cis', 'distal'):
         delta = g_pos - m_pos
+        # g_strand is int8 at the call sites; window magnitudes (~1e6)
+        # overflow int8, so widen before multiplying.
+        gs = g_strand.to(torch.int64)
         return (
             (m_chrom == g_chrom)
-            & (g_strand * (window_base - upstream) < delta)
-            & (delta < g_strand * (window_base + downstream))
+            & (gs * (window_base - upstream) < delta)
+            & (delta < gs * (window_base + downstream))
         )
     if region == 'trans':
         return m_chrom != g_chrom
