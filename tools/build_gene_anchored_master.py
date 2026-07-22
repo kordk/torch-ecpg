@@ -7,10 +7,26 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _reset_if_indexed(df: pd.DataFrame) -> pd.DataFrame:
+    """Promote a named index to columns.
+
+    Map outputs store (mt_id, gt_id) in a named MultiIndex, and mergeOutputs'
+    parquet->parquet path is a raw Arrow passthrough that preserves it. CSV
+    inputs carry them as columns, which is why this only bites on parquet.
+    Same guard used by assignRegionToEcpg_parquet.py / mergeOutputs.py /
+    permute.py.
+    """
+    if df.index.names != [None]:
+        return df.reset_index()
+    return df
+
+
 def assemble_master(
         cis_map_df: pd.DataFrame,
         reservoir_df: pd.DataFrame,
         mt_t_atol: float) -> pd.DataFrame:
+    cis_map_df = _reset_if_indexed(cis_map_df)
+    reservoir_df = _reset_if_indexed(reservoir_df)
     required_cols = {'mt_id', 'gt_id', 'mt_t'}
 
     # Check for required columns
