@@ -203,22 +203,52 @@ def test_end_to_end_writes_html(tmp_path, monkeypatch, sample_report):
 
 def test_schema_conformance_independent_oracle():
     """
-    Ensure the keys we read from per_region match the actual keys that
-    eval_permute emits. This catches missing/wrong key silent omissions.
+    Ensure the keys we read from report dicts match the actual keys that eval_permute emits.
+    This uses AST to extract the string literal arguments passed to `.get(...)` calls
+    inside the permute_qc_report.py builders, and asserts they belong to the known
+    valid key set derived from the real eval_permute JSON output structure.
     """
+    import ast
     import os
 
-    # As an explicit independent oracle, we can parse eval_permute.py
-    eval_permute_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'eval_permute.py')
-    with open(eval_permute_path, 'r') as f:
-        eval_permute_src = f.read()
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'permute_qc_report.py')
+    with open(script_path, 'r') as f:
+        tree = ast.parse(f.read())
 
-    # We are testing that the keys our QC report reads exist in eval_permute output strings
-    # The eval_permute file emits these explicitly as strings in its return dictionaries.
-    assert "'lambda'" in eval_permute_src
-    assert "'mw_p'" in eval_permute_src
-    assert "'ks_p'" in eval_permute_src
-    assert "'delta_vs_trans'" in eval_permute_src
-    assert "'median_log10_ratio'" in eval_permute_src
-    assert "'n_bulk'" in eval_permute_src
-    assert "'status'" in eval_permute_src
+    requested_keys = set()
+
+    # We walk the AST looking for Call nodes where the function is an Attribute named 'get'
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':
+                if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                    requested_keys.add(node.args[0].value)
+
+    # Known valid keys from a full real GTP eval_permute_report.json excerpt
+    # This encompasses all keys used by the four modules built so far.
+    known_valid_keys = {
+        # metadata
+        'metadata', 'n_pairs_input', 'n_pairs_scored',
+        'n_pairs_dropped_unmappable_chrom', 'n_pairs_dropped_null_region',
+        'df', 'n_by_region',
+
+        # canonical regions (present in n_by_region and per_region)
+        'TRANS', 'DISTAL5', 'CIS5', 'PROMOTER', 'GENEBODY', 'CIS3', 'DISTAL3',
+
+        # arms -> calibration
+        'arms', 'calibration', 'bulk_lo', 'bulk_hi', 'tail_p_ana', 'qq_data',
+        'per_region', 'neg_log10_p_ana', 'neg_log10_p_perm',
+
+        # arms -> stratify_decision
+        'stratify_decision', 'recommendation', 'divergent_regions',
+
+        # inside per_region dicts (for both calibration and stratification)
+        'status', 'n_bulk', 'median_log10_ratio', 'n_perm_below_analytic',
+        'delta_vs_trans', 'mw_p', 'ks_p', 'lambda'
+    }
+
+    # Assert that every requested key via .get('key') is a known valid key
+    # (ignoring purely structural missing-check lookups if they aren't meant to be in the JSON,
+    # but in our script, all .get calls are for real keys).
+    for key in requested_keys:
+        assert key in known_valid_keys, f"Reader asks for missing/wrong key: {key}"
