@@ -33,6 +33,7 @@ STRAND_ASYMMETRY_WARN = 0.05     # |DISTAL5-DISTAL3| / mean above this warns
 DIRECTION_WARN = 0.01            # |median log10(p_perm/p_ana)| in the bulk
 DIRECTION_FAIL = 0.05
 DELTA_WARN_FRACTION = 0.10       # near-gene |delta| above tolerance*this warns
+TOLERANCE_SWEEP = (0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 1e-3, 1e-4, 1e-5)
 # -------------------------------------------------------------------------
 
 STATUSES = ('PASS', 'WARN', 'FAIL', 'INFO')
@@ -204,11 +205,11 @@ def build_run_provenance_module(report: dict, df=None) -> QCModule:
 
     # bulk band as [bulk_lo, bulk_hi]
     # tail band as p_ana < tail_p_ana
-    bulk_lo = report.get('arms', {}).get('calibration', {}).get('bulk_lo', 'N/A')
-    bulk_hi = report.get('arms', {}).get('calibration', {}).get('bulk_hi', 'N/A')
+    bulk_lo = report.get('metadata', {}).get('bulk_lo', 'N/A')
+    bulk_hi = report.get('metadata', {}).get('bulk_hi', 'N/A')
     bulk_band = f"[{bulk_lo}, {bulk_hi}]" if bulk_lo != 'N/A' and bulk_hi != 'N/A' else "N/A"
 
-    tail_p = report.get('arms', {}).get('calibration', {}).get('tail_p_ana', 'N/A')
+    tail_p = report.get('metadata', {}).get('tail_p_ana', 'N/A')
     tail_band = f"p_ana < {tail_p}" if tail_p != 'N/A' else "N/A"
 
     rows = [
@@ -428,6 +429,559 @@ def build_bulk_calibration_module(report: dict, df=None) -> QCModule:
     )
 
 
+def build_calibration_direction_module(report: dict, df=None) -> QCModule:
+    purpose = (
+        "Reports the direction and magnitude of disagreement between the permutation "
+        "and analytic p-values across the null bulk. The bulk calibration module shows "
+        "whether the two agree; this module shows which way they disagree when they do, "
+        "and how consistent that disagreement is across pairs."
+    )
+    interpretation = (
+        "A median ratio above one means the permutation p-value is larger than the "
+        "analytic p-value, i.e. the analytic p-value is anti-conservative and would "
+        "call marginally more pairs significant than the permutation null supports. A "
+        "ratio below one means the reverse. The direction matters even when the "
+        "magnitude is small, because it is systematic rather than random: a consistent "
+        "offset in one direction across millions of pairs is a property of the null "
+        "model, not sampling noise. Read the fraction of pairs with p_perm below p_ana "
+        "alongside the median - a median near zero combined with a fraction near fifty "
+        "percent indicates genuinely symmetric disagreement, whereas a median near zero "
+        "with a lopsided fraction indicates a small consistent shift. The Spearman "
+        "correlation reports rank agreement only and is insensitive to any systematic "
+        "scale offset, so a value of one is compatible with a substantial median ratio "
+        "and is not on its own evidence of agreement. The 90th percentile column shows "
+        "whether a tight median conceals a heavy shoulder."
+    )
+
+    calibration = report.get('arms', {}).get('calibration', {})
+    per_region = report.get('arms', {}).get('stratify_decision', {}).get('per_region', {})
+
+    headers = [
+        'Stratum', 'n_bulk', 'Median log10 ratio', 'Median ratio',
+        'Median |log10 ratio|', '90th pct |log10 ratio|', 'p_perm < p_ana %', 'Spearman ρ'
+    ]
+    aligns = ['left'] + ['right'] * 7
+    rows = []
+
+    def get_row(stratum, is_all=False):
+        c_data = calibration.get(stratum, {})
+        r_data = per_region.get(stratum, {}) if not is_all else {}
+
+        n_bulk = c_data.get('n_bulk') if is_all else r_data.get('n_bulk')
+        if n_bulk is None and not is_all:
+            # Fallback if per_region is missing it but it might be somewhere else;
+            # actually, if missing, skip. For 'all', n_bulk is sum.
+            pass
+
+        # For 'all', calculate n_bulk if not present explicitly
+        if is_all and n_bulk is None:
+            n_bulk = sum([per_region.get(r, {}).get('n_bulk', 0) for r in CANONICAL_REGIONS])
+            if n_bulk == 0:
+                n_bulk = None
+
+        if n_bulk is None:
+            return [stratum, "\u2014", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014"]
+
+        # Signed median
+        signed_med = r_data.get('median_log10_ratio') if not is_all else None
+
+        # Absolute median
+        abs_med = c_data.get('bulk_median_abs_log_ratio')
+
+        # 90th pct
+        pct_90 = c_data.get('bulk_90th_abs_log_ratio')
+
+        # p_perm < p_ana fraction
+        n_below = c_data.get('n_perm_below_analytic')
+        pct_below = (n_below / n_bulk) * 100 if n_below is not None and n_bulk > 0 else None
+
+        # Spearman
+        rho = c_data.get('bulk_spearman_corr')
+
+        row = [stratum, f"{n_bulk:,}"]
+
+        # Signed median and ratio
+        if signed_med is not None:
+            row.extend([f"{signed_med:.5f}", f"{10**signed_med:.5f}"])
+        else:
+            row.extend(["\u2014", "\u2014"])
+
+        # Abs median
+        if abs_med is not None:
+            row.append(f"{abs_med:.5f}")
+        else:
+            row.append("\u2014")
+
+        # 90th pct
+        if pct_90 is not None:
+            row.append(f"{pct_90:.5f}")
+        else:
+            row.append("\u2014")
+
+        # pct below
+        if pct_below is not None:
+            row.append(f"{pct_below:.2f}%")
+        else:
+            row.append("\u2014")
+
+        # Spearman
+        if rho is not None:
+            row.append(f"{rho:.4f}")
+        else:
+            row.append("\u2014")
+
+        return row
+
+    rows.append(get_row('all', is_all=True))
+    for r in CANONICAL_REGIONS:
+        rows.append(get_row(r))
+
+    table_html = render_table(headers, rows, aligns)
+
+    # Figure
+    fig_b64 = ""
+    y_pos = range(len(CANONICAL_REGIONS))
+    x_vals = []
+    labels_present = []
+    for r in CANONICAL_REGIONS:
+        med = per_region.get(r, {}).get('median_log10_ratio')
+        x_vals.append(med if med is not None else 0.0)
+        labels_present.append(med is not None)
+
+    if any(labels_present):
+        fig, ax = plt.subplots(figsize=(8, 4))
+        # Colors: matching composition
+        colors = ['#1f77b4' if r in NEAR_GENE_REGIONS else '#ff7f0e' for r in CANONICAL_REGIONS]
+
+        ax.barh(y_pos, x_vals, color=colors)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(CANONICAL_REGIONS)
+        ax.invert_yaxis()
+
+        ax.axvline(0, color='black', linewidth=1)
+        ax.axvline(DIRECTION_WARN, color='red', linestyle='--', alpha=0.7)
+        ax.axvline(-DIRECTION_WARN, color='red', linestyle='--', alpha=0.7)
+
+        ax.set_xlabel(r'median $\log_{10}(p_{perm} / p_{ana})$')
+        ax.set_title('Calibration Direction')
+
+        # Legend
+        import matplotlib.patches as mpatches
+        near_patch = mpatches.Patch(color='#1f77b4', label='Near-gene')
+        dist_patch = mpatches.Patch(color='#ff7f0e', label='Distal / Trans')
+        ax.legend(handles=[near_patch, dist_patch], loc='lower right')
+
+        fig.tight_layout()
+        fig_b64 = fig_to_base64(fig)
+
+    # Status gated on 'all' stratum magnitude
+    status = "PASS"
+    all_cal = calibration.get('all', {})
+    all_abs_med = all_cal.get('bulk_median_abs_log_ratio')
+
+    if all_abs_med is None:
+        status = "INFO"
+    elif all_abs_med >= DIRECTION_FAIL:
+        status = "FAIL"
+    elif all_abs_med >= DIRECTION_WARN:
+        status = "WARN"
+
+    return QCModule(
+        anchor="calibration-direction",
+        title="Calibration Direction",
+        status=status,
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=table_html,
+        figure_b64=fig_b64,
+        figure_alt="Horizontal bar chart of median log10 ratios for canonical regions" if fig_b64 else ""
+    )
+
+
+def build_verdict_robustness_module(report: dict, df=None) -> QCModule:
+    purpose = (
+        "Asks how far the applied tolerance would have to move before the "
+        "stratification verdict changed. A verdict that holds across several orders of "
+        "magnitude of tolerance is a materially stronger result than one that clears "
+        "the threshold narrowly, and the table makes the difference explicit rather "
+        "than leaving it implicit in a single pass or fail."
+    )
+    interpretation = (
+        "The applied tolerance is provisional and was set before this cohort was run. "
+        "Read the row at which the verdict first changes: if that row is many orders of "
+        "magnitude below the applied tolerance, the verdict does not depend on the "
+        "specific value chosen and the choice can be deferred. If the verdict changes "
+        "within about one order of magnitude of the applied value, the threshold is "
+        "doing real work and should be set deliberately from evidence before the "
+        "verdict is relied upon. This sweep re-applies the same rule the evaluation "
+        "uses and does not introduce a second decision procedure; it reports "
+        "sensitivity, and it does not change the verdict or the applied tolerance. "
+        "Note that a very wide margin can also mean the test is insensitive rather "
+        "than that the result is strong - a tolerance no realistic departure could "
+        "ever exceed would produce the same wide margin, so read this together with "
+        "the calibration direction module rather than on its own."
+    )
+
+    strat = report.get('arms', {}).get('stratify_decision', {})
+    per_region = strat.get('per_region', {})
+    actual_verdict = strat.get('recommendation', 'unknown')
+
+    near_deltas = {}
+    float_count = 0
+    for r in NEAR_GENE_REGIONS:
+        r_data = per_region.get(r, {})
+        d = r_data.get('delta_vs_trans')
+        if isinstance(d, (int, float)):
+            near_deltas[r] = abs(d)
+            float_count += 1
+
+    headers = ['Tolerance', 'Divergent near-gene regions', 'Resulting verdict', 'Applied']
+    aligns = ['left', 'right', 'left', 'center']
+    rows = []
+
+    applied_t = TOLERANCE_MEDIAN_LOG10_RATIO_DIFF
+
+    warn_triggered = False
+
+    for t in TOLERANCE_SWEEP:
+        div_count = sum(1 for val in near_deltas.values() if val >= t)
+        verdict = "single_global_null_adequate" if div_count == 0 else "stratification_warranted"
+
+        is_applied = abs(t - applied_t) < 1e-12
+        marker = "<- applied" if is_applied else ""
+
+        rows.append([
+            f"{t:g}",
+            str(div_count),
+            verdict,
+            marker
+        ])
+
+        # Check if the verdict differs from the applied tolerance verdict within one order of magnitude
+        # We need to know what the verdict at the applied tolerance is.
+        # But we can calculate what it should be.
+        applied_div_count = sum(1 for val in near_deltas.values() if val >= applied_t)
+        applied_verdict = "single_global_null_adequate" if applied_div_count == 0 else "stratification_warranted"
+
+        if verdict != applied_verdict and t >= applied_t / 10.0:
+            warn_triggered = True
+
+    table_html = render_table(headers, rows, aligns)
+
+    # Figure
+    fig_b64 = ""
+    if float_count > 0:
+        fig, ax = plt.subplots(figsize=(7, 4))
+
+        x_vals = []
+        y_vals = []
+        # Sort tolerances for plot (small to large)
+        for t in sorted(TOLERANCE_SWEEP):
+            div_count = sum(1 for val in near_deltas.values() if val >= t)
+            x_vals.append(t)
+            y_vals.append(div_count)
+
+        ax.step(x_vals, y_vals, where='post', color='#2e7d32', linewidth=2)
+        ax.set_xscale('log')
+
+        # Mark applied tolerance
+        ax.axvline(applied_t, color='black', linestyle='--', label=f'Applied ({applied_t:g})')
+        ax.axhline(0, color='gray', linestyle=':', alpha=0.5)
+
+        # Annotate largest observed |delta|
+        if near_deltas:
+            max_delta = max(near_deltas.values())
+            ax.axvline(max_delta, color='red', linestyle='-.', alpha=0.7,
+                       label=f'Max |Δ| ({max_delta:.2e})')
+
+        ax.set_xlabel('Candidate Tolerance')
+        ax.set_ylabel('Divergent near-gene regions')
+        ax.set_title('Verdict Robustness Sweep')
+
+        # reverse x axis so it goes large to small? No, log scale standard is small to large left to right.
+        # But wait, tolerances usually sweep from big to small in the table. Standard log x is fine.
+        ax.invert_xaxis()  # larger tolerances on the left to match the table visually
+        ax.legend()
+
+        fig.tight_layout()
+        fig_b64 = fig_to_base64(fig)
+
+    status = "PASS"
+    if float_count < 2 or actual_verdict == 'insufficient_near_gene_coverage':
+        status = "INFO"
+    elif warn_triggered:
+        status = "WARN"
+
+    return QCModule(
+        anchor="verdict-robustness",
+        title="Verdict Robustness",
+        status=status,
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=table_html,
+        figure_b64=fig_b64,
+        figure_alt="Step plot of candidate tolerance vs divergent regions" if fig_b64 else ""
+    )
+
+
+def build_permutation_resolution_module(report: dict, df=None) -> QCModule:
+    purpose = (
+        "Establishes the smallest p-value the permutation null in this run is capable "
+        "of resolving, and how much of the significant tail is sitting at that limit. "
+        "Every ratio reported in the tail behaviour module is bounded below by this "
+        "floor, so this module must be read before that one."
+    )
+    interpretation = (
+        "An empirical permutation p-value cannot fall below roughly the reciprocal of "
+        "the total number of null draws, so any pair whose true p-value is far past "
+        "that limit receives a floored permutation p-value rather than a resolved one. "
+        "Where that happens, the ratio of permutation to analytic p-value measures the "
+        "distance between the analytic p-value and the floor, and reports nothing "
+        "about whether the analytic p-value is correct. A large fraction of the tail "
+        "sitting at the floor therefore means the tail is unmeasured at this number of "
+        "permutations - it does not mean the analytic tail has been validated, and it "
+        "does not mean it has been contradicted. Raising the permutation count lowers "
+        "this floor roughly in proportion. The implied effective null draws figure is "
+        "derived by inverting the observed floor and depends on the empirical p-value "
+        "convention in use; treat it as an order-of-magnitude cross-check on the run "
+        "configuration rather than an exact count."
+    )
+
+    if df is None or 'perm_mt_p' not in df.columns or df['perm_mt_p'].isna().all():
+        return QCModule(
+            anchor="permutation-resolution",
+            title="Permutation Resolution",
+            status="INFO",
+            purpose=purpose,
+            interpretation="Not evaluated: --perm-output not supplied.",
+            table_html="",
+            figure_b64="",
+            figure_alt=""
+        )
+
+    # Compute stats
+    import numpy as np
+
+    perm_p = df['perm_mt_p']
+    positive_p = perm_p[perm_p > 0]
+
+    if len(positive_p) == 0:
+        return QCModule(
+            anchor="permutation-resolution",
+            title="Permutation Resolution",
+            status="INFO",
+            purpose=purpose,
+            interpretation="Not evaluated: no strictly positive permutation p-values found.",
+            table_html="",
+            figure_b64="",
+            figure_alt=""
+        )
+
+    floor = positive_p.min()
+    n_at_floor = (perm_p <= floor).sum()
+    n_zero = (perm_p == 0).sum()
+
+    n_perm_val = df['n_perm'].unique()[0] if 'n_perm' in df.columns and len(df['n_perm'].unique()) == 1 else None
+
+    # Tail stats
+    metadata = report.get('metadata', {})
+    tail_p_ana = metadata.get('tail_p_ana')
+    df_value = metadata.get('df')
+
+    n_tail = "\u2014"
+    n_tail_at_floor = "\u2014"
+    frac_tail_at_floor_str = "\u2014"
+    frac_tail_at_floor = None
+
+    if tail_p_ana is not None and df_value is not None and 'mt_t' in df.columns:
+        import scipy.stats
+        mt_t = df['mt_t']
+
+        # p_ana = 2 * scipy.stats.t.sf(abs(mt_t), df_value)
+        p_ana = 2 * scipy.stats.t.sf(np.abs(mt_t), df_value)
+
+        tail_mask = p_ana < tail_p_ana
+        n_tail_val = tail_mask.sum()
+
+        n_tail = f"{n_tail_val:,}"
+
+        if n_tail_val > 0:
+            tail_at_floor = ((perm_p <= floor) & tail_mask).sum()
+            n_tail_at_floor = f"{tail_at_floor:,}"
+            frac_tail_at_floor = tail_at_floor / n_tail_val
+            frac_tail_at_floor_str = f"{frac_tail_at_floor * 100:.2f}%"
+        else:
+            n_tail_at_floor = "0"
+            frac_tail_at_floor = 0.0
+            frac_tail_at_floor_str = "0.00%"
+
+    n_scored = len(df)
+    frac_scored = (n_at_floor / n_scored) * 100 if n_scored > 0 else 0
+
+    headers = ['Metric', 'Value']
+    rows = [
+        ['Smallest non-zero permutation p', f"{floor:.3g}"],
+        ['Pairs at floor', f"{n_at_floor:,} ({frac_scored:.2f}% of parquet rows)"],
+        ['Zeros', f"{n_zero:,}"],
+        ['Permutations performed', f"{n_perm_val:,}" if n_perm_val is not None else "\u2014"],
+        ['Pairs in tail band', n_tail],
+        ['Tail pairs at floor', f"{n_tail_at_floor} ({frac_tail_at_floor_str})"],
+        ['Implied effective null draws ≈ 1 / floor', f"{1/floor:.3g}" if floor > 0 else "\u2014"]
+    ]
+
+    table_html = render_table(headers, rows)
+
+    # Figure
+    fig_b64 = ""
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    neg_log10_p = -np.log10(positive_p)
+    ax.hist(neg_log10_p, bins=50, color='#607d8b', edgecolor='black', alpha=0.7)
+
+    floor_val = -np.log10(floor)
+    ax.axvline(floor_val, color='red', linestyle='--', linewidth=2, label='resolution floor')
+
+    ax.set_yscale('log')
+    ax.set_xlabel(r'$-\log_{10}(p_{perm})$')
+    ax.set_ylabel('Count')
+    ax.set_title('Permutation P-value Distribution (strictly positive)')
+    ax.legend()
+
+    fig.tight_layout()
+    fig_b64 = fig_to_base64(fig)
+
+    status = "PASS"
+    if frac_tail_at_floor is not None and frac_tail_at_floor >= 0.5:
+        status = "WARN"
+
+    return QCModule(
+        anchor="permutation-resolution",
+        title="Permutation Resolution",
+        status=status,
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=table_html,
+        figure_b64=fig_b64,
+        figure_alt="Histogram of strictly positive permutation p-values on a log scale"
+    )
+
+
+def build_tail_behaviour_module(report: dict, df=None) -> QCModule:
+    purpose = (
+        "Reports how the permutation and analytic p-values diverge in the significant "
+        "tail, which is the regime where a permutation null is expected to add the "
+        "most value over a parametric one. It is presented for inspection and is "
+        "deliberately not given a pass or fail status."
+    )
+    interpretation = (
+        "Read this table only after the permutation resolution module. Ratios here are "
+        "bounded below by the resolution floor, so where much of a region's tail sits "
+        "at that floor the ratio is an artefact of the permutation count rather than a "
+        "statement about the null. Ratios are also inflated by genuine signal: a region "
+        "carrying more true associations places more pairs deep in the tail and "
+        "therefore more pairs at the floor, which raises its ratio without any "
+        "miscalibration being present. For that reason an ordering across regions that "
+        "tracks where signal is expected is the expected result and is not evidence of "
+        "regional divergence; the stratification verdict is decided on the null bulk, "
+        "not here. This module cannot at present distinguish resolution limits from "
+        "model misspecification. Separating them requires a run with a substantially "
+        "larger permutation count, and until then no conclusion about the analytic "
+        "tail should be drawn from this table in either direction."
+    )
+
+    calibration = report.get('arms', {}).get('calibration', {})
+
+    headers = ['Region', 'Tail median log10 ratio', 'Median ratio',
+               '10th percentile', '90th percentile', 'Ratio at 90th']
+    aligns = ['left'] + ['right'] * 5
+    rows = []
+
+    any_tail_stats = False
+
+    for r in CANONICAL_REGIONS:
+        r_cal = calibration.get(r, {})
+
+        tail_med = r_cal.get('tail_median_log_ratio')
+        tail_10 = r_cal.get('tail_10th_log_ratio')
+        tail_90 = r_cal.get('tail_90th_log_ratio')
+
+        row = [r]
+        if tail_med is not None:
+            any_tail_stats = True
+            row.append(f"{tail_med:.3f}")
+            row.append(f"{10**tail_med:.2f}")
+        else:
+            row.extend(["\u2014", "\u2014"])
+
+        if tail_10 is not None:
+            row.append(f"{tail_10:.3f}")
+        else:
+            row.append("\u2014")
+
+        if tail_90 is not None:
+            row.append(f"{tail_90:.3f}")
+            row.append(f"{10**tail_90:.3g}")
+        else:
+            row.extend(["\u2014", "\u2014"])
+
+        rows.append(row)
+
+    if not any_tail_stats:
+        return QCModule(
+            anchor="tail-behaviour",
+            title="Tail Behaviour",
+            status="INFO",
+            purpose=purpose,
+            interpretation="Not evaluated: no tail statistics present in the report.",
+            table_html="",
+            figure_b64="",
+            figure_alt=""
+        )
+
+    table_html = render_table(headers, rows, aligns)
+
+    # Figure
+    fig_b64 = ""
+    y_pos = range(len(CANONICAL_REGIONS))
+    x_vals = []
+
+    for r in CANONICAL_REGIONS:
+        tail_med = calibration.get(r, {}).get('tail_median_log_ratio')
+        x_vals.append(tail_med if tail_med is not None else 0.0)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    colors = ['#1f77b4' if r in NEAR_GENE_REGIONS else '#ff7f0e' for r in CANONICAL_REGIONS]
+
+    ax.barh(y_pos, x_vals, color=colors)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(CANONICAL_REGIONS)
+    ax.invert_yaxis()
+
+    ax.axvline(0, color='black', linewidth=1)
+
+    ax.set_xlabel('Tail median log10 ratio')
+    ax.set_title('Tail Behaviour')
+
+    import matplotlib.patches as mpatches
+    near_patch = mpatches.Patch(color='#1f77b4', label='Near-gene')
+    dist_patch = mpatches.Patch(color='#ff7f0e', label='Distal / Trans')
+    ax.legend(handles=[near_patch, dist_patch], loc='lower right')
+
+    fig.tight_layout()
+    fig_b64 = fig_to_base64(fig)
+
+    return QCModule(
+        anchor="tail-behaviour",
+        title="Tail Behaviour",
+        status="INFO",
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=table_html,
+        figure_b64=fig_b64,
+        figure_alt="Horizontal bar chart of tail median log10 ratios per region"
+    )
+
+
 def build_stratification_module(report: dict, df=None) -> QCModule:
     purpose = (
         "Asks whether each region's null bulk behaves like the trans reference. If "
@@ -575,7 +1129,11 @@ def main():
         build_run_provenance_module,
         build_region_composition_module,
         build_bulk_calibration_module,
+        build_calibration_direction_module,
         build_stratification_module,
+        build_verdict_robustness_module,
+        build_permutation_resolution_module,
+        build_tail_behaviour_module,
     ]
 
     for build_func in builders:
