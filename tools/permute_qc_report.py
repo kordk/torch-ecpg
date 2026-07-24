@@ -34,6 +34,7 @@ DIRECTION_WARN = 0.01            # |median log10(p_perm/p_ana)| in the bulk
 DIRECTION_FAIL = 0.05
 DELTA_WARN_FRACTION = 0.10       # near-gene |delta| above tolerance*this warns
 TOLERANCE_SWEEP = (0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 1e-3, 1e-4, 1e-5)
+DISTANCE_SAMPLE_N = 2_000_000    # cap on pairs used for the TSS distance module
 # -------------------------------------------------------------------------
 
 STATUSES = ('PASS', 'WARN', 'FAIL', 'INFO')
@@ -50,6 +51,19 @@ class QCModule:
     table_html: str = ""     # pre-rendered <table>...</table>, or ""
     figure_b64: str = ""     # base64 PNG payload, or ""
     figure_alt: str = ""     # alt text for the figure
+
+
+def get_missing_inputs_msg(*missing_inputs):
+    """Generate the exact not-evaluated string for missing dependencies."""
+    missing = [x for x in missing_inputs if x]
+    if not missing:
+        return ""
+    if len(missing) == 1:
+        return f"Not evaluated: {missing[0]} not supplied."
+    elif len(missing) == 2:
+        return f"Not evaluated: {missing[0]} and {missing[1]} not supplied."
+    else:
+        return f"Not evaluated: {', '.join(missing[:-1])} and {missing[-1]} not supplied."
 
 
 def fig_to_base64(fig, dpi=110) -> str:
@@ -184,7 +198,7 @@ def render_html(dataset: str, meta: dict, modules: list) -> str:
     return html_doc
 
 
-def build_run_provenance_module(report: dict, df=None) -> QCModule:
+def build_run_provenance_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Records the inputs the rest of this report is computed from, so that any "
         "figure or table here can be traced back to a specific run. Every other "
@@ -234,7 +248,7 @@ def build_run_provenance_module(report: dict, df=None) -> QCModule:
     )
 
 
-def build_region_composition_module(report: dict, df=None) -> QCModule:
+def build_region_composition_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Confirms the cis-window enrichment produced the near-gene coverage the "
         "per-region calibration needs, and that the two distal strata are balanced. "
@@ -340,7 +354,7 @@ def build_region_composition_module(report: dict, df=None) -> QCModule:
     )
 
 
-def build_bulk_calibration_module(report: dict, df=None) -> QCModule:
+def build_bulk_calibration_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Compares the permutation p-value against the analytic p-value across the "
         "mostly-null bulk band, where the two should agree if the parametric null "
@@ -429,7 +443,7 @@ def build_bulk_calibration_module(report: dict, df=None) -> QCModule:
     )
 
 
-def build_calibration_direction_module(report: dict, df=None) -> QCModule:
+def build_calibration_direction_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Reports the direction and magnitude of disagreement between the permutation "
         "and analytic p-values across the null bulk. The bulk calibration module shows "
@@ -598,7 +612,7 @@ def build_calibration_direction_module(report: dict, df=None) -> QCModule:
     )
 
 
-def build_verdict_robustness_module(report: dict, df=None) -> QCModule:
+def build_verdict_robustness_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Asks how far the applied tolerance would have to move before the "
         "stratification verdict changed. A verdict that holds across several orders of "
@@ -724,7 +738,7 @@ def build_verdict_robustness_module(report: dict, df=None) -> QCModule:
     )
 
 
-def build_permutation_resolution_module(report: dict, df=None) -> QCModule:
+def build_permutation_resolution_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Establishes the smallest p-value the permutation null in this run is capable "
         "of resolving, and how much of the significant tail is sitting at that limit. "
@@ -866,7 +880,7 @@ def build_permutation_resolution_module(report: dict, df=None) -> QCModule:
     )
 
 
-def build_tail_behaviour_module(report: dict, df=None) -> QCModule:
+def build_tail_behaviour_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Reports how the permutation and analytic p-values diverge in the significant "
         "tail, which is the regime where a permutation null is expected to add the "
@@ -982,7 +996,7 @@ def build_tail_behaviour_module(report: dict, df=None) -> QCModule:
     )
 
 
-def build_stratification_module(report: dict, df=None) -> QCModule:
+def build_stratification_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
     purpose = (
         "Asks whether each region's null bulk behaves like the trans reference. If "
         "the near-gene regions calibrate the same way trans does, a single global "
@@ -1101,6 +1115,8 @@ def main():
     parser.add_argument('--df', type=int, help="Degrees of freedom (optional)")
     parser.add_argument('--dataset', required=True, help="Dataset name for the report title")
     parser.add_argument('--out', required=True, help="Path to output HTML file")
+    parser.add_argument('--gene-annotation', help="Path to gene BED6/GFF annotation")
+    parser.add_argument('--meth-annotation', help="Path to methylation BED6 annotation")
 
     args = parser.parse_args()
 
@@ -1134,11 +1150,30 @@ def main():
         build_verdict_robustness_module,
         build_permutation_resolution_module,
         build_tail_behaviour_module,
+        build_analytic_p_precision_module,
+        build_cis_pair_density_module,
+        build_gene_span_distribution_module,
+        build_tss_distance_module,
     ]
+
+    import assignRegionToEcpg_parquet as A
+    gene_annot = None
+    if getattr(args, 'gene_annotation', None):
+        try:
+            gene_annot = A.readAnnotationFileToDict(args.gene_annotation)
+        except Exception as e:
+            logger.warning(f"Failed to load gene annotation from {args.gene_annotation}: {e}")
+
+    meth_annot = None
+    if getattr(args, 'meth_annotation', None):
+        try:
+            meth_annot = A.readAnnotationFileToDict(args.meth_annotation)
+        except Exception as e:
+            logger.warning(f"Failed to load meth annotation from {args.meth_annotation}: {e}")
 
     for build_func in builders:
         try:
-            mod = build_func(report_data, df)
+            mod = build_func(report_data, df, gene_annot, meth_annot)
             modules.append(mod)
 
         except Exception as e:
@@ -1169,9 +1204,487 @@ def main():
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def build_analytic_p_precision_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
+    purpose = (
+        "Checks that the stored analytic p-value is a faithful representation of the "
+        "test statistic it was computed from, and that its distribution is continuous "
+        "where it should be. Every claim about the significant tail rests on these "
+        "values, so a storage or precision limit in them would propagate to the tail "
+        "comparison without being visible there."
+    )
+    interpretation = (
+        "The stored p-value is compared against a p-value recomputed in double "
+        "precision from the stored t-statistic and the reported degrees of freedom. A "
+        "large maximum ratio between the two means precision is being lost somewhere "
+        "between computation and storage, which matters most for the smallest "
+        "p-values, which are exactly the ones the tail analysis depends on. The decade "
+        "counts are reported because a p-value distribution with real signal should "
+        "thin out smoothly as it deepens: an empty decade sitting above a populated "
+        "one is not a shape any continuous distribution produces, and indicates a "
+        "storage floor, a clipping step, or a filter applied somewhere upstream. This "
+        "module reports the observation and deliberately does not diagnose the cause; "
+        "the smallest representable positive value in a 32-bit float is far below the "
+        "range where such a gap would ordinarily appear, so a gap here should be "
+        "traced rather than assumed to be a representation limit."
+    )
+
+    missing = []
+    if df is None or 'mt_p' not in df.columns or 'mt_t' not in df.columns:
+        missing.append('--perm-output')
+
+    if missing:
+        msg = get_missing_inputs_msg(*missing)
+        return QCModule(
+            anchor="analytic-p-precision", title="Analytic P Precision", status="INFO",
+            purpose=purpose, interpretation=msg
+        )
+
+    if not report.get('metadata', {}).get('df'):
+        return QCModule(
+            anchor="analytic-p-precision", title="Analytic P Precision", status="INFO",
+            purpose=purpose, interpretation="Not evaluated: report missing degrees of freedom."
+        )
+
+    import scipy.stats
+    import numpy as np
+
+    metadata_df = report['metadata']['df']
+    p_stored = df['mt_p'].dropna()
+    p_recomputed = 2 * scipy.stats.t.sf(abs(df['mt_t'].astype('float64')), metadata_df)
+
+    smallest_pos = p_stored[p_stored > 0].min() if (p_stored > 0).any() else None
+    smallest_pos_count = (p_stored == smallest_pos).sum() if smallest_pos is not None else 0
+    smallest_pos_pct = (smallest_pos_count / len(p_stored)) * 100 if len(p_stored) > 0 else 0
+    exact_zeros = (p_stored == 0).sum()
+
+    mask = (p_stored > 0) & (p_recomputed > 0)
+    excluded_rows = len(p_stored) - mask.sum()
+
+    max_abs_log_ratio = 0.0
+    if mask.any():
+        with np.errstate(divide='ignore', invalid='ignore'):
+            log_ratio = np.abs(np.log10(p_stored[mask] / p_recomputed[mask]))
+        log_ratio = log_ratio[np.isfinite(log_ratio)]
+        if len(log_ratio) > 0:
+            max_abs_log_ratio = log_ratio.max()
+
+    log_p = -np.log10(p_stored[p_stored > 0])
+    decades = log_p.astype(int)
+    decade_counts = [(decades == k).sum() for k in range(31)]
+
+    shallowest_gap = None
+    first_populated = -1
+    for k in range(31):
+        if decade_counts[k] > 0 and first_populated == -1:
+            first_populated = k
+
+    if first_populated != -1:
+        for k in range(first_populated + 1, 31):
+            if decade_counts[k] == 0:
+                if any(decade_counts[j] > 0 for j in range(k + 1, 31)):
+                    shallowest_gap = k
+                    break
+
+    status = 'PASS'
+    if shallowest_gap is not None or max_abs_log_ratio >= 0.1:
+        status = 'WARN'
+
+    table_rows = [
+        ["Smallest non-zero stored p", f"{smallest_pos:.2e}" if smallest_pos is not None else "None"],
+        ["Rows at smallest non-zero p", f"{smallest_pos_count:,} ({smallest_pos_pct:.4f}%)"],
+        ["Exact zeros in stored p", f"{exact_zeros:,}"],
+        ["Rows excluded from ratio (zeros)", f"{excluded_rows:,}"],
+        ["Max |log10(stored / recomputed)|", f"{max_abs_log_ratio:.4f}"],
+        ["Shallowest empty decade (with tail)", str(shallowest_gap) if shallowest_gap is not None else "None"],
+        ["Total rows compared", f"{len(p_stored):,}"]
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    log_p_recomp = -np.log10(p_recomputed[p_recomputed > 0])
+    bins = np.arange(32)
+
+    ax.hist(log_p, bins=bins, histtype='step', log=True, label='Stored', alpha=0.7)
+    ax.hist(log_p_recomp, bins=bins, histtype='step', log=True, label='Recomputed', alpha=0.7)
+    if shallowest_gap is not None:
+        ax.axvline(shallowest_gap, color='r', linestyle='--', label=f'Gap at {shallowest_gap}')
+
+    ax.set_xlim(0, 30)
+    ax.set_xlabel("-log10(p)")
+    ax.set_ylabel("Count")
+    ax.legend(loc='upper right')
+
+    return QCModule(
+        anchor="analytic-p-precision",
+        title="Analytic P Precision",
+        status=status,
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=render_table(["Metric", "Value"], table_rows),
+        figure_b64=fig_to_base64(fig),
+        figure_alt="Histograms of -log10(p) for stored vs recomputed values."
+    )
+
+
+def build_cis_pair_density_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
+    purpose = (
+        "Reports how many methylation pairs each gene actually contributed within the "
+        "mapped window. A window predicate that silently collapses, or that fails for "
+        "one strand, shows up here as a per-gene count far below what the requested "
+        "window size implies, long before it shows up in any calibration statistic."
+    )
+    interpretation = (
+        "Compare the median near-gene pairs per gene against what the window size and "
+        "array density would predict. A median below one means most genes contributed "
+        "no near-gene pair at all, which for any realistic window is not a biological "
+        "result but a mapping defect - a collapsed window, a coordinate mismatch, or a "
+        "strand handling error. A defect of this kind has occurred in this pipeline "
+        "before and produced roughly one pair per gene from a window that should have "
+        "produced thousands, so this check is deliberately blunt and cheap. A long "
+        "right tail is expected and is not a concern: gene-dense regions legitimately "
+        "produce many more pairs per gene than gene deserts."
+    )
+
+    missing = []
+    if df is None or 'gt_id' not in df.columns or 'region' not in df.columns:
+        missing.append('--perm-output')
+
+    if missing:
+        msg = get_missing_inputs_msg(*missing)
+        return QCModule(
+            anchor="cis-pair-density", title="Cis Pair Density", status="INFO",
+            purpose=purpose, interpretation=msg
+        )
+
+    import numpy as np
+
+    all_pairs_per_gene = df.groupby('gt_id').size()
+    near_gene_df = df[df['region'].isin(NEAR_GENE_REGIONS)]
+    near_gene_pairs_per_gene = near_gene_df.groupby('gt_id').size()
+
+    all_genes = set(all_pairs_per_gene.index)
+    near_genes = set(near_gene_pairs_per_gene.index)
+    zero_near_genes_count = len(all_genes - near_genes)
+
+    near_gene_pairs_per_gene = near_gene_pairs_per_gene.reindex(list(all_genes), fill_value=0)
+
+    def get_quantiles(series):
+        if len(series) == 0:
+            return [0, 0, 0, 0, 0, 0]
+        return [
+            series.min(),
+            series.quantile(0.25),
+            series.median(),
+            series.quantile(0.75),
+            series.quantile(0.90),
+            series.max()
+        ]
+
+    q_all = get_quantiles(all_pairs_per_gene)
+    q_near = get_quantiles(near_gene_pairs_per_gene)
+
+    median_near = q_near[2]
+    status = 'WARN' if median_near < 1 else 'PASS'
+
+    def fmt(q):
+        return [f"{int(x):,}" for x in q]
+
+    table_rows = [
+        ["<b>All Pairs</b>", ""],
+        ["Distinct genes with pairs", f"{len(all_pairs_per_gene):,}"],
+        ["Pairs per gene (min, 25, 50, 75, 90, max)", ", ".join(fmt(q_all))],
+        ["<b>Near-Gene Pairs</b>", ""],
+        ["Genes with zero near-gene pairs", f"{zero_near_genes_count:,}"],
+        ["Near-gene pairs per gene (min, 25, 50, 75, 90, max)", ", ".join(fmt(q_near))]
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    max_val = max(q_near[5], 1)
+    bins = np.logspace(0, np.log10(max_val + 1), 50)
+    positive_near = near_gene_pairs_per_gene[near_gene_pairs_per_gene > 0]
+    ax.hist(positive_near, bins=bins, color='steelblue', edgecolor='black')
+    ax.set_xscale('log')
+    ax.axvline(median_near, color='r', linestyle='--', label=f'Median: {median_near}')
+    ax.set_xlabel("Near-gene pairs per gene")
+    ax.set_ylabel("Count of genes")
+    ax.legend()
+
+    return QCModule(
+        anchor="cis-pair-density",
+        title="Cis Pair Density",
+        status=status,
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=render_table(["Metric", "Value"], table_rows),
+        figure_b64=fig_to_base64(fig),
+        figure_alt="Histogram of near-gene pairs per gene."
+    )
+
+
+def build_gene_span_distribution_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
+    purpose = (
+        "Reports the distribution of annotated gene spans, because the region taxonomy "
+        "can only assign a pair to the gene body when the annotated gene is long "
+        "enough for a gene-body interval to exist at all. This module establishes "
+        "whether the GENEBODY label is reachable for most genes in this cohort."
+    )
+    interpretation = (
+        "The gene-body branch of the region assignment requires a methylation position "
+        "strictly inside the annotated gene and beyond the promoter window, so an "
+        "annotated span at or below the promoter distance leaves no interval for that "
+        "branch to match and the pair is assigned to a neighbouring region instead. "
+        "Where a large fraction of entries fall below the threshold, a low GENEBODY "
+        "count in the region composition module is a property of the annotation rather "
+        "than of the biology, and pairs that a transcript-span annotation would have "
+        "labelled GENEBODY are being labelled PROMOTER or 3-prime cis instead. This "
+        "affects how the catalog should be described and does not affect the "
+        "calibration verdict: the receiving regions are themselves calibrated, and "
+        "moving pairs between calibrated strata cannot create divergence. Treat a "
+        "warning here as a question about the annotation source, not about the "
+        "permutation null."
+    )
+
+    if gene_annot is None:
+        msg = get_missing_inputs_msg("--gene-annotation")
+        return QCModule(
+            anchor="gene-span-distribution", title="Gene Span Distribution", status="INFO",
+            purpose=purpose, interpretation=msg
+        )
+
+    import sys
+    import numpy as np
+
+    spans = []
+    for g, data in gene_annot.items():
+        # span = chromEnd - chromStart
+        spans.append(data['chromEnd'] - data['chromStart'])
+
+    spans = pd.Series(spans)
+
+    if len(spans) == 0:
+        return QCModule(
+            anchor="gene-span-distribution", title="Gene Span Distribution", status="WARN",
+            purpose=purpose, interpretation="No genes found in annotation.",
+            table_html=render_table(["Metric", "Value"], [["Count", "0"]])
+        )
+
+    # Must be read dynamically here so monkeypatching works
+    import assignRegionToEcpg_parquet as A
+    PROMOTER_DOWNSTREAM_DISTANCE = getattr(A, 'PROMOTER_DOWNSTREAM_DISTANCE', 2500)
+
+    q = [
+        spans.min(),
+        spans.quantile(0.25),
+        spans.median(),
+        spans.quantile(0.75),
+        spans.quantile(0.90),
+        spans.max()
+    ]
+
+    short_spans = (spans <= PROMOTER_DOWNSTREAM_DISTANCE).sum()
+    short_spans_pct = (short_spans / len(spans)) * 100
+
+    status = 'WARN' if short_spans_pct > 50 else 'PASS'
+
+    def fmt(q):
+        return [f"{int(x):,}" for x in q]
+
+    table_rows = [
+        ["Total annotated genes", f"{len(spans):,}"],
+        ["Gene span (min, 25, 50, 75, 90, max)", ", ".join(fmt(q))],
+        [f"Genes with span ≤ {PROMOTER_DOWNSTREAM_DISTANCE:,}", f"{short_spans:,} ({short_spans_pct:.2f}%)"]
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    bins = np.logspace(0, np.log10(max(q[5], 1) + 1), 50)
+    ax.hist(spans, bins=bins, color='seagreen', edgecolor='black')
+    ax.set_xscale('log')
+    ax.axvline(PROMOTER_DOWNSTREAM_DISTANCE, color='r', linestyle='--',
+               label=f'Promoter downstream ({PROMOTER_DOWNSTREAM_DISTANCE})')
+    ax.set_xlabel("Gene span (bases)")
+    ax.set_ylabel("Count of genes")
+    ax.legend()
+
+    return QCModule(
+        anchor="gene-span-distribution",
+        title="Gene Span Distribution",
+        status=status,
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=render_table(["Metric", "Value"], table_rows),
+        figure_b64=fig_to_base64(fig),
+        figure_alt="Histogram of gene spans."
+    )
+
+
+def build_tss_distance_module(report: dict, df=None, gene_annot=None, meth_annot=None) -> QCModule:
+    purpose = (
+        "Verifies that pairs carrying a given region label actually sit where the "
+        "region taxonomy says they should, by measuring the strand-oriented distance "
+        "from each pair's methylation position to its gene's transcription start site "
+        "and comparing that against the label."
+    )
+    interpretation = (
+        "The three 5-prime regions have boundaries fixed relative to the transcription "
+        "start site and are therefore checkable directly: pairs falling outside their "
+        "band indicate a coordinate convention mismatch, a strand handling error, or "
+        "an annotation build that differs from the one used at assignment time. The "
+        "gene body and the two 3-prime regions are bounded by the gene end rather than "
+        "the start, so their distance from the start site varies with gene length and "
+        "no band check is applied to them; their distributions are shown for "
+        "inspection only. This module measures distances and reads the stored region "
+        "labels, and it does not re-derive them - region assignment has exactly one "
+        "implementation, and a second one here would be able to agree with a shared "
+        "error rather than detect it. A clean result here confirms the labels are "
+        "placed consistently with the coordinates; it does not confirm that the "
+        "annotation itself is the right one."
+    )
+
+    missing = []
+    if df is None or 'mt_id' not in df.columns or 'gt_id' not in df.columns or 'region' not in df.columns:
+        missing.append('--perm-output')
+    if gene_annot is None:
+        missing.append('--gene-annotation')
+    if meth_annot is None:
+        missing.append('--meth-annotation')
+
+    if missing:
+        msg = get_missing_inputs_msg(*missing)
+        return QCModule(
+            anchor="tss-distance-by-region", title="TSS Distance by Region", status="INFO",
+            purpose=purpose, interpretation=msg
+        )
+
+    import sys
+    import assignRegionToEcpg_parquet as A
+    import numpy as np
+
+    mod = sys.modules[__name__]
+    DISTANCE_SAMPLE_N = getattr(mod, 'DISTANCE_SAMPLE_N', 2_000_000)
+
+    PROMOTER_DOWNSTREAM_DISTANCE = getattr(A, 'PROMOTER_DOWNSTREAM_DISTANCE', 2500)
+    CIS_UPSTREAM_DISTANCE = getattr(A, 'CIS_UPSTREAM_DISTANCE', 50000)
+    DISTAL_OFFSET = getattr(A, 'DISTAL_OFFSET', 50000)
+
+    sampled_df = df
+    if len(df) > DISTANCE_SAMPLE_N:
+        sampled_df = df.sample(n=DISTANCE_SAMPLE_N, random_state=42)
+
+    distances = []
+    regions = []
+
+    for row in sampled_df.itertuples(index=False):
+        gt = row.gt_id
+        mt = row.mt_id
+        r = row.region
+
+        if r == 'TRANS':
+            continue
+
+        g_info = gene_annot.get(gt)
+        m_info = meth_annot.get(mt)
+
+        if not g_info or not m_info:
+            continue
+
+        if g_info['chrom'] != m_info['chrom']:
+            continue
+
+        strand = g_info['strand']
+        tss = g_info['chromStart'] if strand == '+' else g_info['chromEnd']
+        sign = 1 if strand == '+' else -1
+        mt_start = m_info['chromStart']
+
+        d = (mt_start - tss) * sign
+        distances.append(d)
+        regions.append(r)
+
+    d_df = pd.DataFrame({'d': distances, 'region': regions})
+
+    cis_regions = [r for r in CANONICAL_REGIONS if r != 'TRANS']
+
+    table_rows = []
+    any_warn = False
+    region_d_arrays = []
+
+    for r in cis_regions:
+        r_df = d_df[d_df['region'] == r]
+        d_vals = r_df['d']
+        count = len(d_vals)
+
+        if count == 0:
+            table_rows.append([r, "0", "N/A", "N/A", "N/A", "N/A"])
+            region_d_arrays.append([])
+            continue
+
+        median_d = d_vals.median()
+        p5 = d_vals.quantile(0.05)
+        p95 = d_vals.quantile(0.95)
+
+        region_d_arrays.append(d_vals.values)
+
+        out_of_band = 0
+        is_checkable = False
+        if r == 'PROMOTER':
+            is_checkable = True
+            out_of_band = (d_vals.abs() > PROMOTER_DOWNSTREAM_DISTANCE).sum()
+        elif r == 'CIS5':
+            is_checkable = True
+            out_of_band = ((d_vals < -CIS_UPSTREAM_DISTANCE) | (d_vals >= -PROMOTER_DOWNSTREAM_DISTANCE)).sum()
+        elif r == 'DISTAL5':
+            is_checkable = True
+            out_of_band = (d_vals >= -DISTAL_OFFSET).sum()
+
+        if is_checkable:
+            pct_out = (out_of_band / count) * 100
+            band_str = f"{out_of_band:,} ({pct_out:.2f}%)"
+            if pct_out > 1.0:
+                any_warn = True
+        else:
+            band_str = "—"
+
+        table_rows.append([
+            r, f"{count:,}", f"{median_d:.0f}", f"{p5:.0f}", f"{p95:.0f}", band_str
+        ])
+
+    status = 'WARN' if any_warn else 'PASS'
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    valid_data = [arr for arr in region_d_arrays if len(arr) > 0]
+    valid_labels = [r for r, arr in zip(cis_regions, region_d_arrays) if len(arr) > 0]
+
+    if valid_data:
+        ax.violinplot(valid_data, showmedians=True)
+        ax.set_xticks(np.arange(1, len(valid_labels) + 1))
+        ax.set_xticklabels(valid_labels)
+
+        ax.axhline(PROMOTER_DOWNSTREAM_DISTANCE, color='g', linestyle=':', alpha=0.5)
+        ax.axhline(-PROMOTER_DOWNSTREAM_DISTANCE, color='g', linestyle=':', alpha=0.5)
+        ax.axhline(-DISTAL_OFFSET, color='r', linestyle=':', alpha=0.5)
+        ax.axhline(DISTAL_OFFSET, color='r', linestyle=':', alpha=0.5)
+
+        ax.set_ylim(-200_000, 200_000)
+        ax.set_ylabel("Distance from TSS (bp)")
+
+    return QCModule(
+        anchor="tss-distance-by-region",
+        title="TSS Distance by Region",
+        status=status,
+        purpose=purpose,
+        interpretation=interpretation,
+        table_html=render_table(
+            ["Region", "Pairs Sampled", "Median d", "5th pctl", "95th pctl", "Out of Band"],
+            table_rows
+        ),
+        figure_b64=fig_to_base64(fig),
+        figure_alt="Violin plots of distance to TSS per region."
+    )
+
+
+if __name__ == '__main__':
     try:
         main()
     except Exception as e:
-        logger.error(f"Unhandled exception in permute_qc_report: {e}")
+        logger.error(f'Unhandled exception in permute_qc_report: {e}')
         sys.exit(1)
