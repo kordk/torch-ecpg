@@ -954,3 +954,172 @@ def test_fallback_byte_identity(tmp_path):
     assert stratify['median_log10_ratio_trans'] == pytest.approx(0.0, abs=1e-9)
     assert stratify['delta_median_log10_ratio'] == pytest.approx(0.0, abs=1e-9)
     assert stratify['recommendation'] == 'single_global_null_adequate'
+
+def test_eval_permute_metadata_floor_resolved(tmp_path, master_parquet_fixture, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import sys
+    sys.path.insert(0, 'tools')
+    from eval_permute import main
+
+    df = pd.DataFrame({
+        'mt_id': ['cg001'],
+        'gt_id': ['ILMN_001'],
+        'perm_mt_p': [0.5],
+        'mt_t': [2.0],
+        'n_perm': [100]
+    })
+    table = pa.Table.from_pandas(df)
+    meta = {
+        b'tecpg_perm_n_perm': b'100',
+        b'tecpg_perm_n_null_pairs': b'5000'
+    }
+    table = table.replace_schema_metadata(meta)
+
+    perm_file = tmp_path / "perm.parquet"
+    pq.write_table(table, str(perm_file))
+
+    m_annot = tmp_path / "m.csv"
+    g_annot = tmp_path / "g.csv"
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['cg001'], 'score': [0], 'strand': ['+']}).to_csv(m_annot, index=False, sep='\t')
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['ILMN_001'], 'score': [0], 'strand': ['+']}).to_csv(g_annot, index=False, sep='\t')
+
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr("sys.argv", ["eval_permute.py", "--perm-output", str(perm_file), "--m-annot", str(m_annot), "--g-annot", str(g_annot), "--out-dir", str(out_dir), "--df", "321"])
+
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+
+    import json
+    with open(out_dir / "eval_permute_report.json", "r") as f:
+        report = json.load(f)
+
+    assert report['metadata']['n_perm'] == 100
+    assert report['metadata']['n_null_pairs'] == 5000
+    assert report['metadata']['perm_resolution_floor'] == 1.0 / (100 * 5000)
+
+def test_eval_permute_metadata_missing_no_cli(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import sys
+    sys.path.insert(0, 'tools')
+    from eval_permute import main
+
+    df = pd.DataFrame({
+        'mt_id': ['cg001'],
+        'gt_id': ['ILMN_001'],
+        'perm_mt_p': [0.5],
+        'mt_t': [2.0]
+    })
+    table = pa.Table.from_pandas(df)
+
+    perm_file = tmp_path / "perm.parquet"
+    pq.write_table(table, str(perm_file))
+
+    m_annot = tmp_path / "m.csv"
+    g_annot = tmp_path / "g.csv"
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['cg001'], 'score': [0], 'strand': ['+']}).to_csv(m_annot, index=False, sep='\t')
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['ILMN_001'], 'score': [0], 'strand': ['+']}).to_csv(g_annot, index=False, sep='\t')
+
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr("sys.argv", ["eval_permute.py", "--perm-output", str(perm_file), "--m-annot", str(m_annot), "--g-annot", str(g_annot), "--out-dir", str(out_dir), "--df", "321"])
+
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+
+    import json
+    with open(out_dir / "eval_permute_report.json", "r") as f:
+        report = json.load(f)
+
+    assert 'n_perm' in report['metadata']
+    assert report['metadata']['n_perm'] is None
+    assert 'n_null_pairs' in report['metadata']
+    assert report['metadata']['n_null_pairs'] is None
+    assert 'perm_resolution_floor' in report['metadata']
+    assert report['metadata']['perm_resolution_floor'] is None
+
+def test_eval_permute_cli_flag_wins(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import sys
+    sys.path.insert(0, 'tools')
+    from eval_permute import main
+
+    df = pd.DataFrame({
+        'mt_id': ['cg001'],
+        'gt_id': ['ILMN_001'],
+        'perm_mt_p': [0.5],
+        'mt_t': [2.0]
+    })
+    table = pa.Table.from_pandas(df)
+    meta = {
+        b'tecpg_perm_n_perm': b'100',
+        b'tecpg_perm_n_null_pairs': b'5000'
+    }
+    table = table.replace_schema_metadata(meta)
+
+    perm_file = tmp_path / "perm.parquet"
+    pq.write_table(table, str(perm_file))
+
+    m_annot = tmp_path / "m.csv"
+    g_annot = tmp_path / "g.csv"
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['cg001'], 'score': [0], 'strand': ['+']}).to_csv(m_annot, index=False, sep='\t')
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['ILMN_001'], 'score': [0], 'strand': ['+']}).to_csv(g_annot, index=False, sep='\t')
+
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr("sys.argv", ["eval_permute.py", "--perm-output", str(perm_file), "--m-annot", str(m_annot), "--g-annot", str(g_annot), "--out-dir", str(out_dir), "--n-null-pairs", "2000", "--df", "321"])
+
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+
+    import json
+    with open(out_dir / "eval_permute_report.json", "r") as f:
+        report = json.load(f)
+
+    assert report['metadata']['n_perm'] == 100
+    assert report['metadata']['n_null_pairs'] == 2000
+    assert report['metadata']['perm_resolution_floor'] == 1.0 / (100 * 2000)
+
+def test_eval_permute_n_perm_fallback(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import sys
+    sys.path.insert(0, 'tools')
+    from eval_permute import main
+
+    df = pd.DataFrame({
+        'mt_id': ['cg001'],
+        'gt_id': ['ILMN_001'],
+        'perm_mt_p': [0.5],
+        'mt_t': [2.0],
+        'n_perm': [100]
+    })
+    table = pa.Table.from_pandas(df)
+
+    perm_file = tmp_path / "perm.parquet"
+    pq.write_table(table, str(perm_file))
+
+    m_annot = tmp_path / "m.csv"
+    g_annot = tmp_path / "g.csv"
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['cg001'], 'score': [0], 'strand': ['+']}).to_csv(m_annot, index=False, sep='\t')
+    pd.DataFrame({'chrom': ['chr1'], 'chromStart': [0], 'chromEnd': [1], 'name': ['ILMN_001'], 'score': [0], 'strand': ['+']}).to_csv(g_annot, index=False, sep='\t')
+
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr("sys.argv", ["eval_permute.py", "--perm-output", str(perm_file), "--m-annot", str(m_annot), "--g-annot", str(g_annot), "--out-dir", str(out_dir), "--n-null-pairs", "2000", "--df", "321"])
+
+    try:
+        main()
+    except SystemExit as e:
+        assert e.code == 0
+
+    import json
+    with open(out_dir / "eval_permute_report.json", "r") as f:
+        report = json.load(f)
+
+    assert report['metadata']['n_perm'] == 100
