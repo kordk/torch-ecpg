@@ -605,8 +605,6 @@ def tecpg_mlr_qr_permute(
             b'tecpg_perm_n_perm': str(permutations).encode(),
             b'tecpg_perm_n_reported': str(n_reported).encode(),
             b'tecpg_perm_n_null_pairs': str(len(null_pairs)).encode(),
-            b'tecpg_perm_n_null_pairs': str(len(null_pairs)).encode(),
-            b'tecpg_perm_n_null_pairs': str(len(null_pairs)).encode(),
         }
         table = table.replace_schema_metadata(new_meta)
         pq.write_table(table, output_file, compression='snappy')
