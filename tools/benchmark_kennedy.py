@@ -38,17 +38,43 @@ def resolve_kennedy_columns(columns):
     return resolved
 
 
-def resolve_tecpg_pvalue_column(columns):
+def resolve_tecpg_pvalue_column(columns, override=None):
+    if override is not None:
+        if override not in columns:
+            raise ValueError(f"Override precise_mt_p column '{override}' not found in tecpg catalog. Observed columns: {list(columns)}")
+        if override != 'precise_mt_p':
+            logging.warning(
+                f"WARNING: Using non-precise p-value column '{override}'. "
+                f"Non-precise p columns are float32-saturated below roughly 1e-7. "
+                f"Results below that are invalid."
+            )
+        return override
+
     if 'precise_mt_p' not in columns:
         raise ValueError(f"Missing precise_mt_p in tecpg catalog. Observed columns: {list(columns)}")
     return 'precise_mt_p'
 
 
+def resolve_thresholds(p_thresh, kennedy_thresh, tecpg_thresh):
+    if p_thresh is not None and kennedy_thresh is not None:
+        raise ValueError("Cannot provide both --p-thresh and --kennedy-thresh.")
+
+    if p_thresh is not None:
+        logging.warning("DeprecationWarning: --p-thresh is deprecated. Please use --kennedy-thresh instead.")
+        final_kennedy = p_thresh
+    elif kennedy_thresh is not None:
+        final_kennedy = kennedy_thresh
+    else:
+        final_kennedy = 1e-5
+
+    final_tecpg = tecpg_thresh if tecpg_thresh is not None else 1e-5
+
+    return final_kennedy, final_tecpg
+
+
 
 def load_kennedy(path, sep):
     df = pd.read_csv(path, sep=sep)
-    # We must dropna on key columns, but we don't know the resolved column names here yet!
-    # Wait, the old code didn't dropna on load_kennedy. It did it during merge or set operations.
     return df
 
 
@@ -73,9 +99,9 @@ def compute_eligibility(catalog_df, kennedy_df, cols):
     catalog_probes = set(catalog_df['gt_id'].dropna())
 
     df = kennedy_df.copy()
-    df['eligible_cpg'] = df[cols['cpg']].isin(catalog_cpgs)
-    df['eligible_probe'] = df[cols['probe']].isin(catalog_probes)
-    df['eligible'] = df['eligible_cpg'] & df['eligible_probe']
+    df['cpg_in_tecpg_universe'] = df[cols['cpg']].isin(catalog_cpgs)
+    df['probe_in_tecpg_universe'] = df[cols['probe']].isin(catalog_probes)
+    df['eligible'] = df['cpg_in_tecpg_universe'] & df['probe_in_tecpg_universe']
 
     return df
 
@@ -145,17 +171,25 @@ def export_pair_lists(outdir, catalog_df, kennedy_df, cols, diag_results, tecpg_
     k_only_mt, k_only_gt = zip(*kennedy_only) if kennedy_only else ([], [])
     df_k_only = pd.DataFrame({'mt_id': k_only_mt, 'gt_id': k_only_gt})
 
+    catalog_cpgs = set(catalog_df['mt_id'].dropna())
+    catalog_probes = set(catalog_df['gt_id'].dropna())
+
     def annotate_reasons(df, reason='concordant'):
         if len(df) == 0:
             df['non_overlap_reason'] = []
-            df['eligible_cpg'] = []
-            df['eligible_probe'] = []
+            df['cpg_in_tecpg_universe'] = []
+            df['probe_in_tecpg_universe'] = []
+            df['cpg_in_kennedy_file'] = []
+            df['probe_in_kennedy_file'] = []
             return df
 
         cpg_in_k = df['mt_id'].isin(kennedy_cpgs)
         probe_in_k = df['gt_id'].isin(kennedy_probes)
-        df['eligible_cpg'] = cpg_in_k
-        df['eligible_probe'] = probe_in_k
+        df['cpg_in_kennedy_file'] = cpg_in_k
+        df['probe_in_kennedy_file'] = probe_in_k
+
+        df['cpg_in_tecpg_universe'] = df['mt_id'].isin(catalog_cpgs)
+        df['probe_in_tecpg_universe'] = df['gt_id'].isin(catalog_probes)
 
         if reason == 'tecpg_only':
             reasons = []
@@ -185,18 +219,23 @@ def export_pair_lists(outdir, catalog_df, kennedy_df, cols, diag_results, tecpg_
         for i, row in k_merge.iterrows():
             if in_catalog[i]:
                 reasons.append('tested_and_missed')
-            elif not row['eligible_cpg']:
+            elif not row['cpg_in_tecpg_universe']:
                 reasons.append('ineligible_cpg')
-            elif not row['eligible_probe']:
+            elif not row['probe_in_tecpg_universe']:
                 reasons.append('ineligible_probe')
             else:
                 reasons.append('tested_and_missed')
         k_merge['non_overlap_reason'] = reasons
-        df_k_only = k_merge[['mt_id', 'gt_id', 'non_overlap_reason', 'eligible_cpg', 'eligible_probe']]
+        df_k_only = k_merge[['mt_id', 'gt_id', 'non_overlap_reason', 'cpg_in_tecpg_universe', 'probe_in_tecpg_universe']]
+        df_k_only = df_k_only.copy()
+        df_k_only['cpg_in_kennedy_file'] = df_k_only['mt_id'].isin(kennedy_cpgs)
+        df_k_only['probe_in_kennedy_file'] = df_k_only['gt_id'].isin(kennedy_probes)
     else:
         df_k_only['non_overlap_reason'] = []
-        df_k_only['eligible_cpg'] = []
-        df_k_only['eligible_probe'] = []
+        df_k_only['cpg_in_tecpg_universe'] = []
+        df_k_only['probe_in_tecpg_universe'] = []
+        df_k_only['cpg_in_kennedy_file'] = []
+        df_k_only['probe_in_kennedy_file'] = []
 
     tecpg_cols = ['mt_id', 'gt_id', tecpg_p_col, 'mt_est', 'mt_t', 'region', 'fdr_est']
     tecpg_cols_to_merge = [c for c in tecpg_cols if c in catalog_df.columns]
@@ -209,8 +248,10 @@ def export_pair_lists(outdir, catalog_df, kennedy_df, cols, diag_results, tecpg_
 
     def merge_all(df):
         if len(df) == 0:
-            for c in tecpg_cols_to_merge[2:] + k_cols_valid:
-                df[c] = []
+            empty_cols = tecpg_cols_to_merge[2:] + k_cols_valid
+            for c in empty_cols:
+                if c not in df.columns:
+                    df[c] = []
             return df
         df = pd.merge(df, catalog_df[tecpg_cols_to_merge], on=['mt_id', 'gt_id'], how='left')
         df = pd.merge(
@@ -319,12 +360,12 @@ Pair lists saved to: pairs_*.tsv
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark tecpg output against Kennedy eQTL summary statistics.")
-    parser.add_argument('tecpg', help="Path to tecpg output parquet file")
-    parser.add_argument('kennedy', help="Path to Kennedy supplementary CSV/TSV file")
-    parser.add_argument('--outdir', default='.', help="Directory to save output plots and summary")
+    parser.add_argument('-t', '--tecpg', required=True, help="Path to tecpg output parquet file")
+    parser.add_argument('-k', '--kennedy', required=True, help="Path to Kennedy supplementary CSV/TSV file")
+    parser.add_argument('-o', '--outdir', default='.', help="Directory to save output plots and summary")
 
-    parser.add_argument('--tecpg-thresh', type=float, default=1e-5, help="p-value threshold for tecpg hits")
-    parser.add_argument('--kennedy-thresh', type=float, default=1e-5, help="p-value threshold for Kennedy hits")
+    parser.add_argument('--tecpg-thresh', type=float, default=None, help="p-value threshold for tecpg hits")
+    parser.add_argument('--kennedy-thresh', type=float, default=None, help="p-value threshold for Kennedy hits")
     parser.add_argument('--p-thresh', type=float, default=None, help="Deprecated. Use --kennedy-thresh")
 
     parser.add_argument('--kennedy-sep', default='\t', help="Separator for Kennedy file")
@@ -335,14 +376,9 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    if args.p_thresh is not None:
-        if '--p-thresh' in sys.argv and '--kennedy-thresh' in sys.argv:
-            raise ValueError("Cannot provide both --p-thresh and --kennedy-thresh.")
-        logging.warning("DeprecationWarning: --p-thresh is deprecated. Please use --kennedy-thresh instead.")
-        args.kennedy_thresh = float(args.p_thresh)
-
-    args.kennedy_thresh = float(args.kennedy_thresh)
-    args.tecpg_thresh = float(args.tecpg_thresh)
+    resolved_k, resolved_t = resolve_thresholds(args.p_thresh, args.kennedy_thresh, args.tecpg_thresh)
+    args.kennedy_thresh = resolved_k
+    args.tecpg_thresh = resolved_t
 
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -353,16 +389,25 @@ def main():
     cpg_col = cols['cpg']
     query_col = cols['probe']
 
+    before_dropna = len(df_kennedy)
     df_kennedy = df_kennedy.dropna(subset=[cpg_col, query_col])
+    after_dropna = len(df_kennedy)
+
+    if before_dropna != after_dropna:
+        logging.info(
+            f"Drop site benchmark_kennedy.dropna_keys[{query_col},{cpg_col}]: dropped "
+            f"Kennedy rows with missing key columns: {before_dropna} -> {after_dropna} "
+            f"({before_dropna - after_dropna} dropped)"
+        )
 
     if cols['gene']:
         logging.info(f"Using column '{cols['gene']}' for Gene cardinality diagnostic.")
         genes = len(df_kennedy[cols['gene']].dropna().unique())
-        logging.info(f"Kennedy unique genes: {genes}")
+        logging.info(f"Kennedy unique gene symbols (annot.gene): {genes}")
 
     logging.info(f"Loading tecpg catalog: {args.tecpg}")
     schema = pq.ParquetFile(args.tecpg).schema_arrow.names
-    tecpg_p_col = args.tecpg_p_col if args.tecpg_p_col else resolve_tecpg_pvalue_column(schema)
+    tecpg_p_col = resolve_tecpg_pvalue_column(schema, args.tecpg_p_col)
 
     df_tecpg = load_catalog(args.tecpg, tecpg_p_col)
 
@@ -386,7 +431,7 @@ def main():
 
     if 'gt_id' in df_tecpg.columns and query_col in df_kennedy.columns:
         genes_overlap = len(set(df_tecpg['gt_id'].dropna()).intersection(set(df_kennedy[query_col].dropna())))
-        logging.info(f"Overlapping distinct genes: {genes_overlap}")
+        logging.info(f"Overlapping distinct expression probes (exp.Probe): {genes_overlap}")
 
     logging.info("Merging datasets (inner join)...")
     df_merged = pd.merge(
@@ -409,7 +454,7 @@ def main():
     tstat_col = cols['tstat']
 
     if beta_col is None or tstat_col is None:
-        logging.warning("Could not automatically identify beta or T.stat columns in Kennedy data. Will try to infer.")
+        logging.warning("Optional beta or T.stat column absent. Dependent concordance metrics will be skipped.")
 
     pearson_r_beta = spearman_r_beta = r2_beta = 0.0
     pearson_r_t = spearman_r_t = r2_t = 0.0
