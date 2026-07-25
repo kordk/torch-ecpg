@@ -12,7 +12,13 @@ import time
 import seaborn as sns
 from statsmodels.stats.multitest import multipletests
 
-def process_chunk(chunk, sample_prob, df):
+# Default column names. Parameterizing these lets a second FDR pass write
+# beside the analytic one instead of over it; the defaults preserve the
+# behaviour of every existing invocation exactly.
+DEFAULT_P_COLUMN = 'precise_mt_p'
+DEFAULT_FDR_COLUMN = 'fdr_est'
+
+def process_chunk(chunk, sample_prob, df, p_column=DEFAULT_P_COLUMN):
     """
     Process a chunk of the dataframe (passed as pandas DataFrame).
     Returns:
@@ -45,12 +51,12 @@ def process_chunk(chunk, sample_prob, df):
     # Track before/after counts so the dropped rows (which never enter the
     # global BH-FDR pool) are observable in the run log (M5).
     n_before_drop = len(chunk)
-    if 'precise_mt_p' in chunk.columns:
-        chunk = chunk.dropna(subset=['precise_mt_p'])
-        p_values = chunk['precise_mt_p'].astype(np.float64).values
+    if p_column in chunk.columns:
+        chunk = chunk.dropna(subset=[p_column])
+        p_values = chunk[p_column].astype(np.float64).values
     else:
         if not t_col:
-            raise ValueError(f"Error: precise_mt_p and t-statistic column missing in chunk. Available columns: {list(chunk.columns)}")
+            raise ValueError(f"Error: {p_column} and t-statistic column missing in chunk. Available columns: {list(chunk.columns)}")
         chunk = chunk.dropna(subset=[t_col])
         t_stats = chunk[t_col].astype(np.float64).values
         p_values = stats.t.sf(np.abs(t_stats), np.float64(df)) * 2.0
@@ -138,8 +144,11 @@ Outputs and Metrics Calculated:
     # FDR Output Options
     parser.add_argument("--output-fdr-file", help="Path to the output Parquet file to save the results with the new FDR column.")
 
+    parser.add_argument("--p-column", default=DEFAULT_P_COLUMN, help=f"Name of the p-value column to rank and correct. Default: {DEFAULT_P_COLUMN}.")
+    parser.add_argument("--fdr-column", default=DEFAULT_FDR_COLUMN, help=f"Name of the FDR column to write. Default: {DEFAULT_FDR_COLUMN}. Must not name an existing column.")
+
     fdr_group = parser.add_mutually_exclusive_group()
-    fdr_group.add_argument("--calculate-fdr", action="store_true", help="Calculate and append an estimated FDR (`fdr_est`) column.")
+    fdr_group.add_argument("--calculate-fdr", action="store_true", help="Calculate and append an estimated FDR column (see --fdr-column).")
     fdr_group.add_argument("--assign-fdr-passfail", action="store_true", help="Append a boolean `is_significant` column based on FDR threshold.")
 
     args = parser.parse_args()
@@ -190,9 +199,31 @@ Outputs and Metrics Calculated:
 
     # Check schema for fallback logging
     schema_cols = parquet_file.schema.names
-    using_fallback = 'precise_mt_p' not in schema_cols
+
+    # Fail closed when a caller names a p-column explicitly and it is absent.
+    # The t-statistic fallback below recomputes the ANALYTIC p; falling back
+    # for an explicitly requested column would write analytic values under a
+    # caller-chosen name, which is a mislabelling rather than a degradation.
+    if args.p_column != DEFAULT_P_COLUMN and args.p_column not in schema_cols:
+        print(
+            f"Error: --p-column '{args.p_column}' was requested explicitly but is not "
+            f"present in {main_file}. Refusing to fall back to the t-statistic, which "
+            f"would write analytic p-values under that name."
+        )
+        print(f"Available columns: {schema_cols}")
+        sys.exit(1)
+
+    # Refuse to overwrite an existing column. Every write is additive.
+    if args.fdr_column in schema_cols:
+        print(
+            f"Error: --fdr-column '{args.fdr_column}' already exists in {main_file}. "
+            f"Writes must be additive; choose a new column name."
+        )
+        sys.exit(1)
+
+    using_fallback = args.p_column not in schema_cols
     if using_fallback:
-        print(f"Warning: 'precise_mt_p' column missing in {main_file}. Falling back to t-statistic calculation.")
+        print(f"Warning: '{args.p_column}' column missing in {main_file}. Falling back to t-statistic calculation.")
         print(f"Available columns: {schema_cols}")
 
     has_region = 'region' in schema_cols
@@ -218,7 +249,7 @@ Outputs and Metrics Calculated:
             df_chunk = batch.to_pandas()
             if df_chunk.index.names != [None]:
                 df_chunk = df_chunk.reset_index()
-            res = pool.apply_async(process_chunk, (df_chunk, sample_prob, args.df))
+            res = pool.apply_async(process_chunk, (df_chunk, sample_prob, args.df, args.p_column))
             results.append(res)
 
             if (i + 1) % 100 == 0:
@@ -273,7 +304,7 @@ Outputs and Metrics Calculated:
             else:
                 pct_remaining = round(n_after_drop / n_before_drop * 100, 4) if n_before_drop else 0.0
                 print(
-                    f"Chunk {chunk_idx}: dropped {n_dropped} rows missing precise_mt_p/t from "
+                    f"Chunk {chunk_idx}: dropped {n_dropped} rows missing {args.p_column}/t from "
                     f"FDR universe (before: {n_before_drop}, after: {n_after_drop}, "
                     f"{pct_remaining}% remaining)."
                 )
@@ -306,7 +337,7 @@ Outputs and Metrics Calculated:
     else:
         pct_remaining = round(fdr_universe_after / fdr_universe_before * 100, 4) if fdr_universe_before else 0.0
         print(
-            f"FDR universe: dropped {total_dropped_from_fdr} rows missing precise_mt_p/t in total "
+            f"FDR universe: dropped {total_dropped_from_fdr} rows missing {args.p_column}/t in total "
             f"(before: {fdr_universe_before}, after: {fdr_universe_after}, "
             f"{pct_remaining}% entered the BH pool)."
         )
@@ -441,7 +472,7 @@ Outputs and Metrics Calculated:
 
         if args.output_fdr_file and args.calculate_fdr:
             print("\nEstimating FDR values...")
-            print("Note: The calculated FDR values are estimates (`fdr_est`) because they rely on the `total_tests` parameter and assume the provided dataset contains the top most significant results.")
+            print(f"Note: The calculated FDR values are estimates (`{args.fdr_column}`) because they rely on the `total_tests` parameter and assume the provided dataset contains the top most significant results.")
 
             # fdr_est = p * total_tests / rank
             # Step down procedure: min(q(i+1), estimated_fdr(i))
@@ -536,7 +567,7 @@ Outputs and Metrics Calculated:
 
                 # Retrieve or calculate p-values for this chunk
                 if not using_fallback:
-                    chunk_p_vals = df_chunk['precise_mt_p'].values
+                    chunk_p_vals = df_chunk[args.p_column].values
                 else:
                     t_col = None
                     if 'mt_t' in df_chunk.columns:
@@ -552,9 +583,15 @@ Outputs and Metrics Calculated:
                     # Map the FDR values using exact p-values
                     # Since floats can be tricky, we map using the exact float values computed
                     # Alternatively, vectorizing the lookup with pandas map:
-                    df_chunk['fdr_est'] = pd.Series(chunk_p_vals).map(fdr_map).values
-                    # If any didn't map (shouldn't happen), fill with 1.0
-                    df_chunk['fdr_est'] = df_chunk['fdr_est'].fillna(1.0)
+                    mapped = pd.Series(chunk_p_vals).map(fdr_map)
+                    # A genuine map miss fills to 1.0, as before. A row whose
+                    # source p-value is itself null stays null, so "not
+                    # assessed" remains distinguishable from "assessed and not
+                    # significant" -- the p-column may be null by design for a
+                    # stratum that did not calibrate.
+                    source_is_null = pd.isna(pd.Series(chunk_p_vals))
+                    mapped[~source_is_null] = mapped[~source_is_null].fillna(1.0)
+                    df_chunk[args.fdr_column] = mapped.values
 
                 # Ensure coordinate columns are consistently typed as nullable Int64
                 # This prevents pyarrow from deducing int64 for chunks without nulls and float64 for chunks with nulls.
