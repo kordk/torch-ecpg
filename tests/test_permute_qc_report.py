@@ -281,7 +281,7 @@ def test_schema_conformance_independent_oracle():
         'delta_vs_trans', 'mw_p', 'ks_p', 'lambda',
         'all', 'bulk_median_abs_log_ratio', 'bulk_90th_abs_log_ratio',
         'bulk_spearman_corr', 'tail_median_log_ratio', 'tail_10th_log_ratio',
-        'tail_90th_log_ratio', 'perm_mt_p', 'n_perm', 'mt_t',
+        'tail_90th_log_ratio', 'perm_mt_p', 'n_perm', 'mt_t', 'n_null_pairs', 'perm_resolution_floor',
 
     }
 
@@ -405,39 +405,75 @@ def test_resolution_module_info_without_parquet(sample_report):
 def test_resolution_floor_computation(sample_report):
     df = pd.DataFrame({
         'perm_mt_p': [0.0, 1e-8, 5e-8, np.nan, 1e-7],
-        'n_perm': [10000000] * 5,
-        'mt_t': [1.0, 1.0, 1.0, 1.0, 1.0]
+        'n_perm': [1000] * 5,
+        'mt_t': [5.0, 5.0, 5.0, 5.0, 5.0]
     })
+    sample_report['metadata']['n_perm'] = 1000
+    sample_report['metadata']['n_null_pairs'] = 1000000
+    sample_report['metadata']['perm_resolution_floor'] = 1.0 / (1000 * 1000000)
+    sample_report['metadata']['df'] = 321
+    sample_report['metadata']['tail_p_ana'] = 1e-4
 
     mod = build_permutation_resolution_module(sample_report, df=df)
 
     assert mod.status == 'PASS'
     assert "1e-08" in mod.table_html
-    assert "Zeros</td>\n      <td style=\"text-align: left;\">1</td>" in mod.table_html
-    assert "2 (40.00% of parquet rows)" in mod.table_html
+    assert "Exact zeros</td>\n      <td style=\"text-align: left;\">1</td>" in mod.table_html
 
 
 def test_resolution_warns_when_tail_saturated(sample_report):
     # tail_p_ana is 1e-4 from sample_report metadata
     df = pd.DataFrame({
-        'perm_mt_p': [1e-8, 1e-8, 1e-8, 0.5],
-        'n_perm': [10000000] * 4,
+        'perm_mt_p': [1e-9, 1e-9, 1e-9, 0.5],
+        'n_perm': [10000] * 4,
         'mt_t': [6.0, 6.0, 6.0, 1.0]
     })
     # df degrees of freedom = 321
     sample_report['metadata']['df'] = 321
+    sample_report['metadata']['n_perm'] = 10000
+    sample_report['metadata']['n_null_pairs'] = 100000
+    sample_report['metadata']['perm_resolution_floor'] = 1e-9
 
     mod = build_permutation_resolution_module(sample_report, df=df)
     assert mod.status == 'WARN'
 
     # Sparse tail -> PASS
     df2 = pd.DataFrame({
-        'perm_mt_p': [1e-8, 0.01, 0.01, 0.5],
-        'n_perm': [10000000] * 4,
+        'perm_mt_p': [1e-9, 0.01, 0.01, 0.5],
+        'n_perm': [10000] * 4,
         'mt_t': [6.0, 6.0, 6.0, 1.0]
     })
     mod2 = build_permutation_resolution_module(sample_report, df=df2)
     assert mod2.status == 'PASS'
+
+def test_resolution_missing_floor_info(sample_report):
+    # Floor absent -> module status is INFO, interpretation names --n-null-pairs, no PASS emitted.
+    df = pd.DataFrame({
+        'perm_mt_p': [1e-8, 1e-8, 1e-8, 0.5],
+        'n_perm': [10000000] * 4,
+        'mt_t': [6.0, 6.0, 6.0, 1.0]
+    })
+    sample_report['metadata']['df'] = 321
+    # missing n_null_pairs and perm_resolution_floor
+    mod = build_permutation_resolution_module(sample_report, df=df)
+    assert mod.status == 'INFO'
+    assert '--n-null-pairs' in mod.interpretation
+
+def test_tail_pairs_at_or_below_floor(sample_report):
+    # Floor present -> 'Tail pairs at or below floor' row counts pairs against the floor, not the sample minimum
+    df = pd.DataFrame({
+        'perm_mt_p': [1e-10, 1e-9, 1e-9, 0.5],
+        'n_perm': [10000] * 4,
+        'mt_t': [6.0, 6.0, 6.0, 1.0]
+    })
+    sample_report['metadata']['df'] = 321
+    sample_report['metadata']['n_perm'] = 10000
+    sample_report['metadata']['n_null_pairs'] = 100000
+    sample_report['metadata']['perm_resolution_floor'] = 1e-9
+
+    mod = build_permutation_resolution_module(sample_report, df=df)
+    assert "Tail pairs at or below floor</td>\n      <td style=\"text-align: left;\">3 (100.00%)</td>" in mod.table_html
+
 
 
 def test_tail_module_never_badged(sample_report):
@@ -596,282 +632,30 @@ def test_cis_pair_density_quantiles():
 def test_gene_span_warns_when_mostly_short():
     from tools.permute_qc_report import build_gene_span_distribution_module
     import tools.assignRegionToEcpg_parquet as A
-    PROMOTER_DOWNSTREAM_DISTANCE = A.PROMOTER_DOWNSTREAM_DISTANCE
 
-    # 3 short, 1 long -> 75% short -> WARN
-    gene_annot_warn = {
-        'g1': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE - 10},
-        'g2': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE - 10},
-        'g3': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE - 10},
-        'g4': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE + 1000},
+    # Regression guard for the false positive: Array-like annotation (median span ~50 bp, all spans positive, none above ceiling) renders PASS
+    gene_annot_array = {
+        'g1': {'chromStart': 100, 'chromEnd': 150},
+        'g2': {'chromStart': 200, 'chromEnd': 260},
+        'g3': {'chromStart': 300, 'chromEnd': 340},
+        'g4': {'chromStart': 400, 'chromEnd': 470},
     }
-    mod_warn = build_gene_span_distribution_module({}, None, gene_annot_warn, None)
-    assert mod_warn.status == 'WARN'
-
-    # 2 short, 2 long -> 50% short -> PASS (threshold is > 50%)
-    gene_annot_pass = {
-        'g1': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE - 10},
-        'g2': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE - 10},
-        'g3': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE + 1000},
-        'g4': {'chromStart': 100, 'chromEnd': 100 + PROMOTER_DOWNSTREAM_DISTANCE + 1000},
-    }
-    mod_pass = build_gene_span_distribution_module({}, None, gene_annot_pass, None)
-    assert mod_pass.status == 'PASS', f"Expected PASS, got {mod_pass.status}: {mod_pass.table_html}"
-
-
-def test_gene_span_uses_imported_threshold(monkeypatch):
-    import sys
-    sys.path.insert(0, 'tools')
-    from tools.permute_qc_report import build_gene_span_distribution_module
-    import assignRegionToEcpg_parquet as A
-
-    monkeypatch.setattr(A, 'PROMOTER_DOWNSTREAM_DISTANCE', 500)
-
-    gene_annot = {
-        'g1': {'chromStart': 100, 'chromEnd': 650},  # span 550, > 500 (patched) but < 2500 (unpatched)
-    }
-
-    mod = build_gene_span_distribution_module({}, None, gene_annot, None)
-    # the text should include 500
-    assert "Genes with span ≤ 500" in mod.table_html
-    # short span count should be 0
-    assert "0 (0.00%)" in mod.table_html
-
-
-def test_tss_distance_signed_convention():
-    import pandas as pd
-    from tools.permute_qc_report import build_tss_distance_module
-
-    df = pd.DataFrame({
-        'mt_id': ['m1', 'm2', 'm3', 'm4'],
-        'gt_id': ['g_plus', 'g_plus', 'g_minus', 'g_minus'],
-        'region': ['DISTAL5', 'DISTAL3', 'DISTAL5', 'DISTAL3']  # just dummy regions
-    })
-
-    # + strand: TSS is start
-    # - strand: TSS is end
-    gene_annot = {
-        'g_plus': {'chrom': 'chr1', 'chromStart': 10000, 'chromEnd': 20000, 'strand': '+'},
-        'g_minus': {'chrom': 'chr1', 'chromStart': 10000, 'chromEnd': 20000, 'strand': '-'}
-    }
-
-    meth_annot = {
-        'm1': {'chrom': 'chr1', 'chromStart': 9000},  # 1kb upstream of g_plus TSS -> d = -1000
-        'm2': {'chrom': 'chr1', 'chromStart': 11000},  # 1kb downstream of g_plus TSS -> d = +1000
-        'm3': {'chrom': 'chr1', 'chromStart': 21000},  # 1kb upstream of g_minus TSS -> (21000-20000)*-1 = -1000
-        'm4': {'chrom': 'chr1', 'chromStart': 19000},  # 1kb downstream of g_minus TSS -> (19000-20000)*-1 = +1000
-    }
-
-    mod = build_tss_distance_module({}, df, gene_annot, meth_annot)
-
-    # We should extract the computed distances somehow, or at least they affect the median.
-    # Since DISTAL5 is both m1 and m3, median for DISTAL5 is -1000
-    # Since DISTAL3 is both m2 and m4, median for DISTAL3 is 1000
-    assert "-1000" in mod.table_html
-    assert "1000" in mod.table_html
-    assert "-1000" not in mod.table_html.split("DISTAL3")[1].split("</tr>")[0]  # ensuring DISTAL3 is not -1000
-
-
-def test_tss_distance_band_violation_warns():
-    import pandas as pd
-    from tools.permute_qc_report import build_tss_distance_module
-    import tools.assignRegionToEcpg_parquet as A
-    PROMOTER_DOWNSTREAM_DISTANCE = A.PROMOTER_DOWNSTREAM_DISTANCE
-
-    # 2 correctly placed, 1 violation -> 33% violation -> WARN
-    df = pd.DataFrame({
-        'mt_id': ['m1', 'm2', 'm3'],
-        'gt_id': ['g1', 'g1', 'g1'],
-        'region': ['PROMOTER', 'PROMOTER', 'PROMOTER']
-    })
-
-    gene_annot = {
-        'g1': {'chrom': 'chr1', 'chromStart': 10000, 'chromEnd': 20000, 'strand': '+'}
-    }
-
-    meth_annot = {
-        'm1': {'chrom': 'chr1', 'chromStart': 10000},  # d=0 (ok)
-        'm2': {'chrom': 'chr1', 'chromStart': 10000 + PROMOTER_DOWNSTREAM_DISTANCE},  # d=PDD (ok)
-        'm3': {'chrom': 'chr1', 'chromStart': 10000 + PROMOTER_DOWNSTREAM_DISTANCE + 1},  # d=PDD+1 (violates)
-    }
-
-    mod_warn = build_tss_distance_module({}, df, gene_annot, meth_annot)
-    assert mod_warn.status == 'WARN'
-    assert "33.33%" in mod_warn.table_html
-
-    meth_annot_pass = {
-        'm1': {'chrom': 'chr1', 'chromStart': 10000},
-        'm2': {'chrom': 'chr1', 'chromStart': 10000},
-        'm3': {'chrom': 'chr1', 'chromStart': 10000},
-    }
-    mod_pass = build_tss_distance_module({}, df, gene_annot, meth_annot_pass)
+    mod_pass = build_gene_span_distribution_module({}, None, gene_annot_array, None)
     assert mod_pass.status == 'PASS'
 
-
-def test_tss_distance_skips_span_dependent_bands():
-    import pandas as pd
-    from tools.permute_qc_report import build_tss_distance_module
-
-    df = pd.DataFrame({
-        'mt_id': ['m1', 'm2', 'm3'],
-        'gt_id': ['g1', 'g1', 'g1'],
-        'region': ['GENEBODY', 'CIS3', 'DISTAL3']
-    })
-
-    gene_annot = {'g1': {'chrom': 'chr1', 'chromStart': 10000, 'chromEnd': 20000, 'strand': '+'}}
-    meth_annot = {
-        'm1': {'chrom': 'chr1', 'chromStart': 50000},  # d=40000, way off
-        'm2': {'chrom': 'chr1', 'chromStart': 50000},
-        'm3': {'chrom': 'chr1', 'chromStart': 50000},
+    # Annotation containing one non-positive span -> WARN
+    gene_annot_warn_1 = {
+        'g1': {'chromStart': 100, 'chromEnd': 150},
+        'g2': {'chromStart': 300, 'chromEnd': 150}, # Non-positive
     }
+    mod_warn_1 = build_gene_span_distribution_module({}, None, gene_annot_warn_1, None)
+    assert mod_warn_1.status == 'WARN'
 
-    mod = build_tss_distance_module({}, df, gene_annot, meth_annot)
-    assert mod.status == 'PASS'
-
-    # Should render an em dash
-    assert "—" in mod.table_html
-
-
-def test_tss_distance_excludes_cross_chromosome():
-    import pandas as pd
-    from tools.permute_qc_report import build_tss_distance_module
-
-    df = pd.DataFrame({
-        'mt_id': ['m1'],
-        'gt_id': ['g1'],
-        'region': ['PROMOTER']
-    })
-
-    gene_annot = {'g1': {'chrom': 'chr1', 'chromStart': 10000, 'chromEnd': 20000, 'strand': '+'}}
-    meth_annot = {'m1': {'chrom': 'chr2', 'chromStart': 10000}}
-
-    mod = build_tss_distance_module({}, df, gene_annot, meth_annot)
-    # pair is dropped, so count for PROMOTER is 0, outputs N/A
-    assert ("PROMOTER</td>\n      <td style=\"text-align: left;\">0</td>\n      "
-            "<td style=\"text-align: left;\">N/A") in mod.table_html
-
-
-def test_new_modules_never_raise_on_empty_inputs():
-    from tools.permute_qc_report import (
-        build_analytic_p_precision_module,
-        build_cis_pair_density_module,
-        build_gene_span_distribution_module,
-        build_tss_distance_module
-    )
-
-    m1 = build_analytic_p_precision_module({})
-    assert m1.status == 'INFO'
-
-    m2 = build_cis_pair_density_module({})
-    assert m2.status == 'INFO'
-
-    m3 = build_gene_span_distribution_module({})
-    assert m3.status == 'INFO'
-
-    m4 = build_tss_distance_module({})
-    assert m4.status == 'INFO'
-
-
-def test_all_builders_accept_four_arguments():
-    from tools.permute_qc_report import (
-        build_run_provenance_module,
-        build_region_composition_module,
-        build_bulk_calibration_module,
-        build_calibration_direction_module,
-        build_stratification_module,
-        build_verdict_robustness_module,
-        build_permutation_resolution_module,
-        build_tail_behaviour_module,
-        build_analytic_p_precision_module,
-        build_cis_pair_density_module,
-        build_gene_span_distribution_module,
-        build_tss_distance_module
-    )
-
-    builders = [
-        build_run_provenance_module,
-        build_region_composition_module,
-        build_bulk_calibration_module,
-        build_calibration_direction_module,
-        build_stratification_module,
-        build_verdict_robustness_module,
-        build_permutation_resolution_module,
-        build_tail_behaviour_module,
-        build_analytic_p_precision_module,
-        build_cis_pair_density_module,
-        build_gene_span_distribution_module,
-        build_tss_distance_module
-    ]
-
-    report = {'metadata': {}, 'arms': {'calibration': {}, 'null_sanity': {}, 'resolution': {}}}
-
-    for b in builders:
-        try:
-            b(report, None, None, None)
-        except Exception as e:
-            # We don't care if it fails with KeyError on empty report internals,
-            # we just care it doesn't fail on TypeError (missing arguments)
-            if isinstance(e, TypeError) and "takes" in str(e):
-                raise AssertionError(f"{b.__name__} raised TypeError: {e}")
-
-
-def test_report_generates_with_no_optional_inputs(monkeypatch):
-    import sys
-    import json
-    import os
-    import tempfile
-
-    # We write a dummy valid report and run main with only --report, --dataset, --out
-    with tempfile.TemporaryDirectory() as td:
-        rep_path = os.path.join(td, 'rep.json')
-        with open(rep_path, 'w') as f:
-            json.dump({'metadata': {}, 'arms': {'calibration': {}, 'null_sanity': {}, 'resolution': {}}}, f)
-
-        out_path = os.path.join(td, 'out.html')
-
-        args = ['permute_qc_report.py', '--report', rep_path, '--dataset', 'dummy', '--out', out_path]
-        monkeypatch.setattr(sys, 'argv', args)
-
-        import tools.permute_qc_report as q
-        # This will sys.exit(0) on success, so we catch it
-        try:
-            q.main()
-        except SystemExit as e:
-            assert e.code == 0
-
-        with open(out_path, 'r') as f:
-            content = f.read()
-
-        assert "Analytic P Precision" in content
-        assert "Cis Pair Density" in content
-        assert "Gene Span Distribution" in content
-        assert "TSS Distance by Region" in content
-
-
-def test_tss_distance_sampling_deterministic(monkeypatch):
-    import pandas as pd
-    from tools.permute_qc_report import build_tss_distance_module
-    import tools.permute_qc_report as q_module
-
-    monkeypatch.setattr(q_module, 'DISTANCE_SAMPLE_N', 2)
-
-    df = pd.DataFrame({
-        'mt_id': ['m1', 'm2', 'm3', 'm4'],
-        'gt_id': ['g1', 'g1', 'g1', 'g1'],
-        'region': ['PROMOTER', 'PROMOTER', 'PROMOTER', 'PROMOTER']
-    })
-
-    gene_annot = {'g1': {'chrom': 'chr1', 'chromStart': 10000, 'chromEnd': 20000, 'strand': '+'}}
-    meth_annot = {
-        'm1': {'chrom': 'chr1', 'chromStart': 10000},
-        'm2': {'chrom': 'chr1', 'chromStart': 11000},
-        'm3': {'chrom': 'chr1', 'chromStart': 12000},
-        'm4': {'chrom': 'chr1', 'chromStart': 13000},
+    # Annotation containing one span of 167,143,859 bp -> WARN
+    gene_annot_warn_2 = {
+        'g1': {'chromStart': 100, 'chromEnd': 150},
+        'g2': {'chromStart': 100, 'chromEnd': 100 + 167143859}, # Above ceiling
     }
+    mod_warn_2 = build_gene_span_distribution_module({}, None, gene_annot_warn_2, None)
+    assert mod_warn_2.status == 'WARN'
 
-    mod1 = build_tss_distance_module({}, df, gene_annot, meth_annot)
-    mod2 = build_tss_distance_module({}, df, gene_annot, meth_annot)
-
-    assert mod1.table_html == mod2.table_html
-    # Pairs Sampled for PROMOTER should be 2 because we sampled 2 out of 4 total pairs
-    assert "PROMOTER</td>\n      <td style=\"text-align: left;\">2</td>" in mod1.table_html

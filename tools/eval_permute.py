@@ -167,6 +167,38 @@ def _load_annotation(path, which):
         )
     return annot
 
+
+def _resolve_permutation_parameters(args, df, meta):
+    n_perm = None
+    n_null_pairs = None
+    perm_resolution_floor = None
+
+    if b'tecpg_perm_n_perm' in meta:
+        n_perm = int(meta[b'tecpg_perm_n_perm'])
+    elif 'n_perm' in df.columns:
+        unique_perms = df['n_perm'].dropna().unique()
+        if len(unique_perms) == 1:
+            n_perm = int(unique_perms[0])
+
+    if args.n_null_pairs is not None:
+        n_null_pairs = args.n_null_pairs
+        if b'tecpg_perm_n_null_pairs' in meta and int(meta[b'tecpg_perm_n_null_pairs']) != args.n_null_pairs:
+            print(f"WARNING: --n-null-pairs CLI flag ({args.n_null_pairs}) overrides "
+                  f"the parquet metadata value ({int(meta[b'tecpg_perm_n_null_pairs'])}).", file=sys.stderr)
+    elif b'tecpg_perm_n_null_pairs' in meta:
+        n_null_pairs = int(meta[b'tecpg_perm_n_null_pairs'])
+
+    if n_perm is not None and n_perm > 0 and n_null_pairs is not None and n_null_pairs > 0:
+        perm_resolution_floor = 1.0 / (n_perm * n_null_pairs)
+        print(f"INFO: Permutation resolution floor resolved to {perm_resolution_floor:.3g} "
+              f"({n_perm} perms * {n_null_pairs} null pairs).", file=sys.stderr)
+    else:
+        print("WARNING: Permutation resolution floor could not be resolved. "
+              "If reading an older parquet, supply --n-null-pairs.", file=sys.stderr)
+
+    return n_perm, n_null_pairs, perm_resolution_floor
+
+
 def main():
     parser = argparse.ArgumentParser(description="Phase 3 standalone read-only permutation-evaluation diagnostic")
     parser.add_argument("--perm-output", required=True, help="Path to qr_permute output, .parquet or .csv")
@@ -174,6 +206,10 @@ def main():
     parser.add_argument("--g-annot", required=True, help="Path to expression annotation (gt_id -> chrom,...)")
     parser.add_argument("--df", required=True, type=int, help="Run-level df = n_samples - n_covars - 2. MUST equal the df that produced mt_t.")
     parser.add_argument("--perm-null-sidecar", help="Path to null-accumulator sidecar .npz. When absent, sidecar-gated arms are skipped.")
+    parser.add_argument('--n-null-pairs', type=int, default=None,
+                        help="Number of null pairs used to build the permutation null. "
+                             "Only needed for outputs written before this value was "
+                             "recorded in the parquet metadata.")
     parser.add_argument("--out-dir", required=True, help="Directory for the JSON report.")
     parser.add_argument("--bulk-lo", type=float, default=BULK_LO, help="Lower bound of p_ana for bulk band.")
     parser.add_argument("--bulk-hi", type=float, default=BULK_HI, help="Upper bound of p_ana for bulk band.")
@@ -191,9 +227,12 @@ def main():
     report_path = os.path.join(args.out_dir, "eval_permute_report.json")
 
     # Load data
+    perm_file_meta = {}
     try:
         if args.perm_output.endswith(".parquet"):
-            output = pq.read_table(args.perm_output).to_pandas()
+            _table = pq.read_table(args.perm_output)
+            perm_file_meta = _table.schema.metadata or {}
+            output = _table.to_pandas()
             if output.index.names != [None]:
                 output = output.reset_index()
         else:
@@ -281,6 +320,8 @@ def main():
     is_bulk = (p_ana >= args.bulk_lo) & (p_ana <= args.bulk_hi)
     is_tail = p_ana < TAIL_P_ANA
 
+    n_perm, n_null_pairs, perm_resolution_floor = _resolve_permutation_parameters(args, output, perm_file_meta)
+
     report = {
         "metadata": {
             "n_pairs_input": n_pairs_input,
@@ -291,7 +332,10 @@ def main():
             "df": df_val,
             "bulk_lo": args.bulk_lo,
             "bulk_hi": args.bulk_hi,
-            "tail_p_ana": TAIL_P_ANA
+            "tail_p_ana": TAIL_P_ANA,
+            "n_perm": n_perm,
+            "n_null_pairs": n_null_pairs,
+            "perm_resolution_floor": perm_resolution_floor
         },
         "arms": {}
     }

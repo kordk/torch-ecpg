@@ -15,13 +15,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import assignRegionToEcpg_parquet as A  # noqa: E402
 from eval_permute import (  # noqa: E402
     CANONICAL_REGIONS,
     NEAR_GENE_REGIONS,
     MIN_REGION_BULK_N,
     TOLERANCE_MEDIAN_LOG10_RATIO_DIFF,
 )
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -758,7 +761,10 @@ def build_permutation_resolution_module(report: dict, df=None, gene_annot=None, 
         "this floor roughly in proportion. The implied effective null draws figure is "
         "derived by inverting the observed floor and depends on the empirical p-value "
         "convention in use; treat it as an order-of-magnitude cross-check on the run "
-        "configuration rather than an exact count."
+        "configuration rather than an exact count. "
+        "Values below the empirical floor come from the fitted tail extrapolation rather than from counted "\
+        "null exceedances, so the smallest observed permutation p-value is not the resolution limit and must "\
+        "not be read as one. The two are reported separately here for that reason."
     )
 
     if df is None or 'perm_mt_p' not in df.columns or df['perm_mt_p'].isna().all():
@@ -773,7 +779,6 @@ def build_permutation_resolution_module(report: dict, df=None, gene_annot=None, 
             figure_alt=""
         )
 
-    # Compute stats
     import numpy as np
 
     perm_p = df['perm_mt_p']
@@ -791,27 +796,30 @@ def build_permutation_resolution_module(report: dict, df=None, gene_annot=None, 
             figure_alt=""
         )
 
-    floor = positive_p.min()
-    n_at_floor = (perm_p <= floor).sum()
+    min_observed_p = positive_p.min()
     n_zero = (perm_p == 0).sum()
 
-    n_perm_val = df['n_perm'].unique()[0] if 'n_perm' in df.columns and len(df['n_perm'].unique()) == 1 else None
-
-    # Tail stats
     metadata = report.get('metadata', {})
+
+    n_perm_val = metadata.get('n_perm')
+    if n_perm_val is None:
+        n_perm_val = df['n_perm'].unique()[0] if 'n_perm' in df.columns and len(df['n_perm'].unique()) == 1 else None
+
+    n_null_pairs = metadata.get('n_null_pairs')
+    perm_resolution_floor = metadata.get('perm_resolution_floor')
+
     tail_p_ana = metadata.get('tail_p_ana')
     df_value = metadata.get('df')
 
-    n_tail = "\u2014"
-    n_tail_at_floor = "\u2014"
-    frac_tail_at_floor_str = "\u2014"
+    n_tail = "—"
+    n_tail_at_floor = "—"
+    frac_tail_at_floor_str = "—"
     frac_tail_at_floor = None
 
     if tail_p_ana is not None and df_value is not None and 'mt_t' in df.columns:
         import scipy.stats
         mt_t = df['mt_t']
 
-        # p_ana = 2 * scipy.stats.t.sf(abs(mt_t), df_value)
         p_ana = 2 * scipy.stats.t.sf(np.abs(mt_t), df_value)
 
         tail_mask = p_ana < tail_p_ana
@@ -820,53 +828,66 @@ def build_permutation_resolution_module(report: dict, df=None, gene_annot=None, 
         n_tail = f"{n_tail_val:,}"
 
         if n_tail_val > 0:
-            tail_at_floor = ((perm_p <= floor) & tail_mask).sum()
-            n_tail_at_floor = f"{tail_at_floor:,}"
-            frac_tail_at_floor = tail_at_floor / n_tail_val
-            frac_tail_at_floor_str = f"{frac_tail_at_floor * 100:.2f}%"
+            if perm_resolution_floor is not None:
+                tail_at_floor = ((perm_p <= perm_resolution_floor) & tail_mask).sum()
+                n_tail_at_floor = f"{tail_at_floor:,}"
+                frac_tail_at_floor = tail_at_floor / n_tail_val
+                frac_tail_at_floor_str = f"{frac_tail_at_floor * 100:.2f}%"
         else:
-            n_tail_at_floor = "0"
-            frac_tail_at_floor = 0.0
-            frac_tail_at_floor_str = "0.00%"
-
-    n_scored = len(df)
-    frac_scored = (n_at_floor / n_scored) * 100 if n_scored > 0 else 0
+            if perm_resolution_floor is not None:
+                n_tail_at_floor = "0"
+                frac_tail_at_floor = 0.0
+                frac_tail_at_floor_str = "0.00%"
 
     headers = ['Metric', 'Value']
+
+    nx_below_floor = "—"
+    if perm_resolution_floor is not None and min_observed_p > 0:
+        nx = perm_resolution_floor / min_observed_p
+        nx_below_floor = f"{nx:.1f}x below floor"
+
     rows = [
-        ['Smallest non-zero permutation p', f"{floor:.3g}"],
-        ['Pairs at floor', f"{n_at_floor:,} ({frac_scored:.2f}% of parquet rows)"],
-        ['Zeros', f"{n_zero:,}"],
-        ['Permutations performed', f"{n_perm_val:,}" if n_perm_val is not None else "\u2014"],
+        ['Empirical resolution floor 1 / (B x n_null)', f"{perm_resolution_floor:.3g}" if perm_resolution_floor is not None else "—"],
+        ['Permutations performed', f"{n_perm_val:,}" if n_perm_val is not None else "—"],
+        ['Null pairs', f"{n_null_pairs:,}" if n_null_pairs is not None else "—"],
+        ['Smallest observed non-zero p', f"{min_observed_p:.3g}"],
+        ['Observed minimum relative to floor', nx_below_floor],
+        ['Exact zeros', f"{n_zero:,}"],
         ['Pairs in tail band', n_tail],
-        ['Tail pairs at floor', f"{n_tail_at_floor} ({frac_tail_at_floor_str})"],
-        ['Implied effective null draws ≈ 1 / floor', f"{1/floor:.3g}" if floor > 0 else "\u2014"]
+        ['Tail pairs at or below floor', f"{n_tail_at_floor} ({frac_tail_at_floor_str})"]
     ]
 
     table_html = render_table(headers, rows)
 
-    # Figure
     fig_b64 = ""
     fig, ax = plt.subplots(figsize=(7, 4))
 
     neg_log10_p = -np.log10(positive_p)
     ax.hist(neg_log10_p, bins=50, color='#607d8b', edgecolor='black', alpha=0.7)
 
-    floor_val = -np.log10(floor)
-    ax.axvline(floor_val, color='red', linestyle='--', linewidth=2, label='resolution floor')
+    if perm_resolution_floor is not None:
+        floor_val = -np.log10(perm_resolution_floor)
+        ax.axvline(floor_val, color='red', linestyle='--', linewidth=2, label='resolution floor')
+        min_p_val = -np.log10(min_observed_p)
+        ax.axvline(min_p_val, color='orange', linestyle=':', linewidth=2, label='smallest observed p')
 
     ax.set_yscale('log')
     ax.set_xlabel(r'$-\log_{10}(p_{perm})$')
     ax.set_ylabel('Count')
     ax.set_title('Permutation P-value Distribution (strictly positive)')
-    ax.legend()
+    if perm_resolution_floor is not None:
+        ax.legend()
 
     fig.tight_layout()
     fig_b64 = fig_to_base64(fig)
 
-    status = "PASS"
-    if frac_tail_at_floor is not None and frac_tail_at_floor >= 0.5:
+    if perm_resolution_floor is None:
+        status = "INFO"
+        interpretation += " (Floor is unavailable. Provide --n-null-pairs to eval_permute to assess the tail.)"
+    elif frac_tail_at_floor is not None and frac_tail_at_floor >= 0.5:
         status = "WARN"
+    else:
+        status = "PASS"
 
     return QCModule(
         anchor="permutation-resolution",
@@ -1156,7 +1177,6 @@ def main():
         build_tss_distance_module,
     ]
 
-    import assignRegionToEcpg_parquet as A
     gene_annot = None
     if getattr(args, 'gene_annotation', None):
         try:
@@ -1468,9 +1488,7 @@ def build_gene_span_distribution_module(report: dict, df=None, gene_annot=None, 
             table_html=render_table(["Metric", "Value"], [["Count", "0"]])
         )
 
-    # Must be read dynamically here so monkeypatching works
-    import assignRegionToEcpg_parquet as A
-    PROMOTER_DOWNSTREAM_DISTANCE = getattr(A, 'PROMOTER_DOWNSTREAM_DISTANCE', 2500)
+    MAX_PLAUSIBLE_FEATURE_SPAN = 3000000  # Longest known human gene is ~2.5 Mb
 
     q = [
         spans.min(),
@@ -1481,10 +1499,13 @@ def build_gene_span_distribution_module(report: dict, df=None, gene_annot=None, 
         spans.max()
     ]
 
-    short_spans = (spans <= PROMOTER_DOWNSTREAM_DISTANCE).sum()
+    short_spans = (spans <= A.PROMOTER_DOWNSTREAM_DISTANCE).sum()
     short_spans_pct = (short_spans / len(spans)) * 100
 
-    status = 'WARN' if short_spans_pct > 50 else 'PASS'
+    n_nonpositive_span = (spans <= 0).sum()
+    n_span_above_ceiling = (spans > MAX_PLAUSIBLE_FEATURE_SPAN).sum()
+
+    status = 'WARN' if (n_nonpositive_span > 0 or n_span_above_ceiling > 0) else 'PASS'
 
     def fmt(q):
         return [f"{int(x):,}" for x in q]
@@ -1492,7 +1513,9 @@ def build_gene_span_distribution_module(report: dict, df=None, gene_annot=None, 
     table_rows = [
         ["Total annotated genes", f"{len(spans):,}"],
         ["Gene span (min, 25, 50, 75, 90, max)", ", ".join(fmt(q))],
-        [f"Genes with span ≤ {PROMOTER_DOWNSTREAM_DISTANCE:,}", f"{short_spans:,} ({short_spans_pct:.2f}%)"]
+        [f"Genes with span ≤ {A.PROMOTER_DOWNSTREAM_DISTANCE:,}", f"{short_spans:,} ({short_spans_pct:.2f}%)"],
+        ["Records with non-positive span", f"{n_nonpositive_span:,}"],
+        [f"Records with span > {MAX_PLAUSIBLE_FEATURE_SPAN:,}", f"{n_span_above_ceiling:,}"]
     ]
 
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -1500,8 +1523,8 @@ def build_gene_span_distribution_module(report: dict, df=None, gene_annot=None, 
     bins = np.logspace(0, np.log10(max(q[5], 1) + 1), 50)
     ax.hist(spans, bins=bins, color='seagreen', edgecolor='black')
     ax.set_xscale('log')
-    ax.axvline(PROMOTER_DOWNSTREAM_DISTANCE, color='r', linestyle='--',
-               label=f'Promoter downstream ({PROMOTER_DOWNSTREAM_DISTANCE})')
+    ax.axvline(A.PROMOTER_DOWNSTREAM_DISTANCE, color='r', linestyle='--',
+               label=f'Promoter downstream ({A.PROMOTER_DOWNSTREAM_DISTANCE})')
     ax.set_xlabel("Gene span (bases)")
     ax.set_ylabel("Count of genes")
     ax.legend()
@@ -1557,15 +1580,14 @@ def build_tss_distance_module(report: dict, df=None, gene_annot=None, meth_annot
         )
 
     import sys
-    import assignRegionToEcpg_parquet as A
     import numpy as np
 
     mod = sys.modules[__name__]
     DISTANCE_SAMPLE_N = getattr(mod, 'DISTANCE_SAMPLE_N', 2_000_000)
 
-    PROMOTER_DOWNSTREAM_DISTANCE = getattr(A, 'PROMOTER_DOWNSTREAM_DISTANCE', 2500)
-    CIS_UPSTREAM_DISTANCE = getattr(A, 'CIS_UPSTREAM_DISTANCE', 50000)
-    DISTAL_OFFSET = getattr(A, 'DISTAL_OFFSET', 50000)
+    PROMOTER_DOWNSTREAM_DISTANCE = A.PROMOTER_DOWNSTREAM_DISTANCE
+    CIS_UPSTREAM_DISTANCE = A.CIS_UPSTREAM_DISTANCE
+    DISTAL_OFFSET = A.DISTAL_OFFSET
 
     sampled_df = df
     if len(df) > DISTANCE_SAMPLE_N:
@@ -1642,7 +1664,7 @@ def build_tss_distance_module(report: dict, df=None, gene_annot=None, meth_annot
             if pct_out > 1.0:
                 any_warn = True
         else:
-            band_str = "—"
+            band_str = "n/a (span-dependent)"
 
         table_rows.append([
             r, f"{count:,}", f"{median_d:.0f}", f"{p5:.0f}", f"{p95:.0f}", band_str
