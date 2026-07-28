@@ -171,7 +171,11 @@ def main():
             except OSError:
                 pass
 
-    # Success, atomic rename
+    # Success, atomic rename if any chunks were processed
+    if writer is None:
+        print("Fail-closed: input contains no rows.", file=sys.stderr)
+        sys.exit(1)
+
     os.replace(args.output + '.tmp', args.output)
 
     # 5. Output summary

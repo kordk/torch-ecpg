@@ -234,7 +234,7 @@ def test_fails_closed_when_p_source_missing(tmp_path, input_parquet_path, eval_r
     assert not out.exists()
 
 
-def test_fails_closed_on_unrecognized_region_label_prevents_partial_output(tmp_path, input_parquet_path, eval_report_path):
+def test_fails_closed_on_unrecognized_region_prevents_partial_output(tmp_path, input_parquet_path, eval_report_path):
     df = pd.read_parquet(input_parquet_path)
     # Inject unknown region into a later chunk (e.g. chunk 2 at size 100)
     df.loc[150, "region"] = "UNKNOWN_REG"
@@ -263,3 +263,19 @@ def test_multi_chunk_result_matches_single_chunk(tmp_path, input_parquet_path, e
     df_multi = pd.read_parquet(out_multi)
 
     pd.testing.assert_frame_equal(df_single, df_multi)
+
+
+def test_empty_input_fails_closed(tmp_path, input_parquet_path, eval_report_path):
+    df = pd.read_parquet(input_parquet_path)
+    # create empty dataframe with same schema
+    df_empty = df.iloc[0:0].copy()
+    empty_in = tmp_path / "empty_in.parquet"
+    df_empty.to_parquet(empty_in)
+
+    out = tmp_path / "out.parquet"
+    res = run_tool(tmp_path, empty_in, eval_report_path, out)
+
+    assert res.returncode != 0
+    assert "input contains no rows" in res.stderr
+    assert not out.exists()
+    assert not (tmp_path / "out.parquet.tmp").exists()
