@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -97,10 +98,6 @@ def main():
                     print(f"Fail-closed: Unrecognized region label '{r}'.", file=sys.stderr)
                     sys.exit(1)
 
-                # Add it to tracking if somehow not there (although CANONICAL_REGIONS prepopulates)
-                if r not in region_counts:
-                    region_counts[r] = {'n_rows': 0, 'n_populated': 0}
-
             # Map the new p_column
             # Fill with np.nan initially
             p_new = np.full(len(df_chunk), np.nan, dtype=np.float64)
@@ -144,12 +141,17 @@ def main():
                 df_chunk['mt_chromStart'] = pd.to_numeric(df_chunk['mt_chromStart'], errors='coerce').astype('Int64')
             if 'gt_chromStart' in df_chunk.columns:
                 df_chunk['gt_chromStart'] = pd.to_numeric(df_chunk['gt_chromStart'], errors='coerce').astype('Int64')
+            if 'mt_chromEnd' in df_chunk.columns:
+                df_chunk['mt_chromEnd'] = pd.to_numeric(df_chunk['mt_chromEnd'], errors='coerce').astype('Int64')
+            if 'gt_chromEnd' in df_chunk.columns:
+                df_chunk['gt_chromEnd'] = pd.to_numeric(df_chunk['gt_chromEnd'], errors='coerce').astype('Int64')
 
             table = pa.Table.from_pandas(df_chunk, preserve_index=False)
 
             if writer is None:
                 explicit_schema = table.schema
-                writer = pq.ParquetWriter(args.output, explicit_schema)
+                temp_output = args.output + '.tmp'
+                writer = pq.ParquetWriter(temp_output, explicit_schema)
             else:
                 table = table.cast(explicit_schema)
 
@@ -157,10 +159,20 @@ def main():
 
     except Exception as e:
         print(f"Error processing parquet: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
     finally:
         if writer is not None:
             writer.close()
+        # Clean up temporary file on failure
+        if os.path.exists(args.output + '.tmp') and not sys.exc_info()[0] is None:
+            try:
+                os.remove(args.output + '.tmp')
+            except OSError:
+                pass
+
+    # Success, atomic rename
+    os.replace(args.output + '.tmp', args.output)
 
     # 5. Output summary
     print(f"{'region':<11} {'status':<17} {'licensed':<10} {'n_rows':<11} {'n_populated'}")

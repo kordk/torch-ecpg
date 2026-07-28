@@ -234,15 +234,15 @@ def test_fails_closed_when_p_source_missing(tmp_path, input_parquet_path, eval_r
     assert not out.exists()
 
 
-def test_fails_closed_on_unrecognized_region_label(tmp_path, input_parquet_path, eval_report_path):
+def test_fails_closed_on_unrecognized_region_label_prevents_partial_output(tmp_path, input_parquet_path, eval_report_path):
     df = pd.read_parquet(input_parquet_path)
-    # Inject unknown region
-    df.loc[0, "region"] = "UNKNOWN_REG"
+    # Inject unknown region into a later chunk (e.g. chunk 2 at size 100)
+    df.loc[150, "region"] = "UNKNOWN_REG"
     modified_in = tmp_path / "mod_in.parquet"
     df.to_parquet(modified_in)
 
     out = tmp_path / "out.parquet"
-    res = run_tool(tmp_path, modified_in, eval_report_path, out)
+    res = run_tool(tmp_path, modified_in, eval_report_path, out, ["--chunk-size", "100"])
 
     assert res.returncode != 0
     assert "Unrecognized region label" in res.stderr
