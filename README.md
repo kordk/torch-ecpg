@@ -32,6 +32,10 @@ Pip install from github using `git+https://`.
 ```bash
 pip install git+https://github.com/kordk/torch-ecpg.git
 ```
+Pip install from github using `git+https://` for the dev branch.
+```bash
+pip install git+https://github.com/kordk/torch-ecpg.git@dev
+```
 
 If you want to be able to edit the code for debugging and development, install in editable mode and do not remove the directory.
 
