@@ -12,7 +12,7 @@ def get_python_exe():
     return sys.executable
 
 @pytest.fixture
-def test_data(tmp_path):
+def chain_fixture(tmp_path):
     # Create >= 400 rows fixture
     n_rows = 405
 
@@ -39,7 +39,7 @@ def test_data(tmp_path):
     df = pd.DataFrame({
         "mt_id": [f"cg{i:04d}" for i in range(n_rows)],
         "gt_id": [f"ENSG{i:04d}" for i in range(n_rows)],
-        "mt_t": np.random.randn(n_rows),
+        "mt_t": np.random.default_rng(42).standard_normal(n_rows),
         "mt_p": p_vals.astype("float32"),
         "precise_mt_p": p_vals.astype("float64"),
         "region": regions
@@ -60,6 +60,7 @@ def test_data(tmp_path):
 
     # Generate actual fdr_est using the tool itself to ensure consistency
     total_tests = 10000
+    catalog_with_fdr = tmp_path / "summarized_with_fdr.parquet"
     subprocess.run([
         get_python_exe(), os.path.join(os.getcwd(), "tools/summarizeOutput_parquet.py"),
         "--main-file", str(catalog_path),
@@ -69,11 +70,11 @@ def test_data(tmp_path):
         "--p-column", "precise_mt_p",
         "--fdr-column", "fdr_est",
         "--calculate-fdr",
-        "--output-fdr-file", str(catalog_path)
+        "--output-fdr-file", str(catalog_with_fdr)
     ], cwd=tmp_path, check=True)
 
     return {
-        "catalog": catalog_path,
+        "catalog": catalog_with_fdr,
         "reservoir": reservoir_path,
         "n_rows": n_rows,
         "total_tests": total_tests
@@ -135,37 +136,37 @@ def run_chain(tmp_path, catalog_path, eval_report_path, reservoir_path, total_te
 
     return final_out
 
-def test_fully_licensed_chain_reproduces_fdr_est(tmp_path, test_data):
+def test_fully_licensed_chain_reproduces_fdr_est(tmp_path, chain_fixture):
     eval_report = create_eval_report(tmp_path) # All ok, none divergent
 
     final_out = run_chain(
         tmp_path,
-        test_data["catalog"],
+        chain_fixture["catalog"],
         eval_report,
-        test_data["reservoir"],
-        test_data["total_tests"]
+        chain_fixture["reservoir"],
+        chain_fixture["total_tests"]
     )
 
-    df_in = pd.read_parquet(test_data["catalog"])
+    df_in = pd.read_parquet(chain_fixture["catalog"])
     df_out = pd.read_parquet(final_out)
 
     # Headline oracle: fdr_permute MUST equal fdr_est exactly
     np.testing.assert_allclose(df_out["fdr_permute"], df_in["fdr_est"], rtol=0, atol=0, equal_nan=True)
 
-def test_denominator_change_alters_fdr_permute(tmp_path, test_data):
+def test_denominator_change_alters_fdr_permute(tmp_path, chain_fixture):
     eval_report = create_eval_report(tmp_path)
 
-    smaller_total_tests = test_data["n_rows"] + 10 # still above row count but much smaller than original total_tests
+    smaller_total_tests = chain_fixture["n_rows"] + 10 # still above row count but much smaller than original total_tests
 
     final_out = run_chain(
         tmp_path,
-        test_data["catalog"],
+        chain_fixture["catalog"],
         eval_report,
-        test_data["reservoir"],
+        chain_fixture["reservoir"],
         smaller_total_tests
     )
 
-    df_in = pd.read_parquet(test_data["catalog"])
+    df_in = pd.read_parquet(chain_fixture["catalog"])
     df_out = pd.read_parquet(final_out)
 
     # fdr_permute should differ
@@ -174,16 +175,16 @@ def test_denominator_change_alters_fdr_permute(tmp_path, test_data):
 
     assert not np.array_equal(df_out["fdr_permute"].fillna(-1), df_in["fdr_est"].fillna(-1))
 
-def test_divergent_stratum_yields_null_p_and_null_fdr(tmp_path, test_data):
+def test_divergent_stratum_yields_null_p_and_null_fdr(tmp_path, chain_fixture):
     # one region in divergent_regions while its status stays 'ok'
     eval_report = create_eval_report(tmp_path, divergent_regions=["CIS5"], statuses={"CIS5": "ok"})
 
     final_out = run_chain(
         tmp_path,
-        test_data["catalog"],
+        chain_fixture["catalog"],
         eval_report,
-        test_data["reservoir"],
-        test_data["total_tests"]
+        chain_fixture["reservoir"],
+        chain_fixture["total_tests"]
     )
 
     df_out = pd.read_parquet(final_out)
@@ -192,15 +193,15 @@ def test_divergent_stratum_yields_null_p_and_null_fdr(tmp_path, test_data):
     assert cis_rows["p_permute"].isna().all(), "divergent stratum must have null p_permute"
     assert cis_rows["fdr_permute"].isna().all(), "divergent stratum must have null fdr_permute"
 
-def test_insufficient_data_stratum_yields_null_fdr(tmp_path, test_data):
+def test_insufficient_data_stratum_yields_null_fdr(tmp_path, chain_fixture):
     eval_report = create_eval_report(tmp_path, statuses={"DISTAL5": "insufficient_data"})
 
     final_out = run_chain(
         tmp_path,
-        test_data["catalog"],
+        chain_fixture["catalog"],
         eval_report,
-        test_data["reservoir"],
-        test_data["total_tests"]
+        chain_fixture["reservoir"],
+        chain_fixture["total_tests"]
     )
 
     df_out = pd.read_parquet(final_out)
@@ -209,15 +210,15 @@ def test_insufficient_data_stratum_yields_null_fdr(tmp_path, test_data):
     assert distal_rows["p_permute"].isna().all(), "insufficient_data stratum must have null p_permute"
     assert distal_rows["fdr_permute"].isna().all(), "insufficient_data stratum must have null fdr_permute"
 
-def test_tied_p_values_receive_identical_fdr(tmp_path, test_data):
+def test_tied_p_values_receive_identical_fdr(tmp_path, chain_fixture):
     eval_report = create_eval_report(tmp_path)
 
     final_out = run_chain(
         tmp_path,
-        test_data["catalog"],
+        chain_fixture["catalog"],
         eval_report,
-        test_data["reservoir"],
-        test_data["total_tests"]
+        chain_fixture["reservoir"],
+        chain_fixture["total_tests"]
     )
 
     df_out = pd.read_parquet(final_out)
@@ -234,36 +235,36 @@ def test_tied_p_values_receive_identical_fdr(tmp_path, test_data):
     expected_val = 0.6666666666666666
     np.testing.assert_allclose(nonzero_group["fdr_permute"].iloc[0], expected_val, rtol=1e-5, atol=1e-5)
 
-def test_analytic_columns_unchanged_by_value(tmp_path, test_data):
+def test_analytic_columns_unchanged_by_value(tmp_path, chain_fixture):
     eval_report = create_eval_report(tmp_path, divergent_regions=["CIS5"]) # Use partial to ensure we don't accidentally drop them when masking
 
     final_out = run_chain(
         tmp_path,
-        test_data["catalog"],
+        chain_fixture["catalog"],
         eval_report,
-        test_data["reservoir"],
-        test_data["total_tests"]
+        chain_fixture["reservoir"],
+        chain_fixture["total_tests"]
     )
 
-    df_in = pd.read_parquet(test_data["catalog"])
+    df_in = pd.read_parquet(chain_fixture["catalog"])
     df_out = pd.read_parquet(final_out)
 
     np.testing.assert_allclose(df_out["mt_p"], df_in["mt_p"], rtol=0, atol=0, equal_nan=True)
     np.testing.assert_allclose(df_out["precise_mt_p"], df_in["precise_mt_p"], rtol=0, atol=0, equal_nan=True)
     np.testing.assert_allclose(df_out["fdr_est"], df_in["fdr_est"], rtol=0, atol=0, equal_nan=True)
 
-def test_partial_licensing_is_more_conservative(tmp_path, test_data):
+def test_partial_licensing_is_more_conservative(tmp_path, chain_fixture):
     eval_report = create_eval_report(tmp_path, divergent_regions=["CIS5"])
 
     final_out = run_chain(
         tmp_path,
-        test_data["catalog"],
+        chain_fixture["catalog"],
         eval_report,
-        test_data["reservoir"],
-        test_data["total_tests"]
+        chain_fixture["reservoir"],
+        chain_fixture["total_tests"]
     )
 
-    df_in = pd.read_parquet(test_data["catalog"])
+    df_in = pd.read_parquet(chain_fixture["catalog"])
     df_out = pd.read_parquet(final_out)
 
     licensed_mask = df_out["region"] != "CIS5"
