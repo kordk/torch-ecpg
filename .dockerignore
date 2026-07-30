@@ -1,0 +1,32 @@
+# Project Specific
+data_*
+output_*
+annot_*
+GTP/
+MESA/
+*/GTP/
+cytoBand.txt
+
+# Logs
+*.log
+
+# Data files at root
+/*.parquet
+/*.csv
+
+# Python/Environment
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Git
+.git/
+
+# NOTE: tests/ is intentionally NOT excluded -- it ships so that in-container
+# verification (tests/verify_env.sh, pytest) can run against the built image.
+# The previous `test/` rule matched no tracked path and has been removed.
+
+# Repo artifacts with no runtime role
+logs/
+final_transcript.txt

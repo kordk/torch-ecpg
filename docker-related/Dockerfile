@@ -1,5 +1,5 @@
 # Base Image
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS builder
 
 # Prevent interactive prompts
 ARG DEBIAN_FRONTEND=noninteractive
@@ -28,9 +28,14 @@ RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc |
 
 WORKDIR /app
 
-# Upgrade pip and install PyTorch with cu118
+# Upgrade pip and install PyTorch from the cu124 wheel index.
+# torch 2.6.0 is the LAST release published to download.pytorch.org/whl/cu124;
+# 2.7.0+ ships only cu118/cu126/cu128. Do not float this pin -- an unpinned
+# install silently resolves to a different CUDA build or downgrades outright.
 RUN pip3 install --no-cache-dir --upgrade pip \
-    && pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    && pip3 install --no-cache-dir \
+        torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+        --index-url https://download.pytorch.org/whl/cu124
 
 # Copy and install python dependencies
 COPY requirements.txt .
@@ -44,12 +49,19 @@ RUN Rscript tools/install_dependencies.R
 COPY . .
 RUN pip3 install --no-cache-dir .
 
+# Verify torch survived the subsequent pip resolves with the intended CUDA build.
+# This must run AFTER `pip3 install .` -- that is the last step that can clobber torch.
+RUN python3 -c "import torch; \
+assert torch.__version__.startswith('2.6.0'), 'unexpected torch: ' + torch.__version__; \
+assert torch.version.cuda == '12.4', 'unexpected CUDA build: ' + str(torch.version.cuda); \
+print('OK torch', torch.__version__, 'cuda', torch.version.cuda)"
+
 # Verify R installations in builder
 RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
 
 
 # Runtime Stage
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -80,8 +92,11 @@ RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(Exper
 # Copy application files
 COPY . .
 
-# Verify fa2 imported correctly in runtime
-RUN python3 -c "import fa2"
+# Verify fa2 and torch survived the cross-stage copy
+RUN python3 -c "import fa2" \
+    && python3 -c "import torch; \
+assert torch.version.cuda == '12.4', 'unexpected CUDA build: ' + str(torch.version.cuda); \
+print('OK torch', torch.__version__, 'cuda', torch.version.cuda)"
 
 # Create /work directory for volume mount
 RUN mkdir -p /work
