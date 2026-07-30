@@ -796,7 +796,7 @@ def build_provenance_module(prov) -> QCModule:
     ]
 
     return QCModule(
-        anchor="provenance", title="Provenance", status="INFO",
+        anchor="provenance", title="Provenance", status="FAIL",
         purpose=purpose, interpretation=interpretation,
         table_html=render_table(["Metric", "Value"], table_rows)
     )
@@ -864,7 +864,7 @@ def build_eligibility_decomposition_module(df_kennedy, cols) -> QCModule:
         ["Pair in tecpg (Eligible)", str(df_kennedy['eligible'].sum())]
     ]
     return QCModule(
-        anchor="eligibility", title="Eligibility Decomposition", status="INFO",
+        anchor="eligibility", title="Eligibility Decomposition", status="FAIL",
         purpose=purpose, interpretation=interpretation,
         table_html=render_table(["Metric", "Count"], rows)
     )
@@ -883,7 +883,7 @@ def build_recovery_grid_module(grid_results, thresholds) -> QCModule:
         rows.append(row)
 
     return QCModule(
-        anchor="recovery-grid", title="Recovery Grid", status="INFO",
+        anchor="recovery-grid", title="Recovery Grid", status="FAIL",
         purpose=purpose, interpretation=interpretation,
         table_html=render_table(headers, rows)
     )
@@ -903,7 +903,7 @@ def build_confirmation_grid_module(grid_results, thresholds) -> QCModule:
         rows.append(row)
 
     return QCModule(
-        anchor="confirmation-grid", title="Confirmation Grid", status="INFO",
+        anchor="confirmation-grid", title="Confirmation Grid", status="FAIL",
         purpose=purpose, interpretation=interpretation,
         table_html=render_table(headers, rows)
     )
@@ -918,7 +918,7 @@ def build_diagonal_summary_module(diag) -> QCModule:
         ["Jaccard", f"{diag['jaccard']:.3f}"]
     ]
     return QCModule(
-        anchor="diagonal-summary", title="Diagonal Summary", status="INFO",
+        anchor="diagonal-summary", title="Diagonal Summary", status="FAIL",
         purpose=purpose, interpretation=interpretation,
         table_html=render_table(["Metric", "Value"], rows)
     )
@@ -950,7 +950,7 @@ def build_trans_fraction_module(args) -> QCModule:
     b64 = fig_to_base64(fig)
 
     return QCModule(
-        anchor="trans-fraction", title="Trans Fraction", status="INFO",
+        anchor="trans-fraction", title="Trans Fraction", status="FAIL",
         purpose=purpose, interpretation=interpretation,
         figure_b64=b64
     )
@@ -985,7 +985,7 @@ def build_concordance_module(args) -> QCModule:
         table_html += f'<img src="data:image/png;base64,{b64}" style="max-width:45%; margin: 5px;">'
 
     return QCModule(
-        anchor="concordance", title="Concordance", status="INFO",
+        anchor="concordance", title="Concordance", status="FAIL",
         purpose=purpose, interpretation=interpretation,
         table_html=table_html
     )
