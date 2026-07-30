@@ -17,7 +17,8 @@ import sys
 
 
 import matplotlib.pyplot as plt
-import pandas as pd
+import pandas as pd  # noqa: E402
+import numpy as np  # noqa: E402
 import pyarrow.parquet as pq
 
 import upsetplot
@@ -598,9 +599,9 @@ def profile_kennedy(path, df, sep, cols, thresholds):
 
         str_chroms = df[cols['probe_chrom']].dropna().astype(str)
         profile['chrom_formatting']['flags'] = {
-            'float_like': str_chroms.str.match(r'^[0-9]+\\.0$').any(),
-            'pipe_delimited': str_chroms.str.contains(r'\\|').any(),
-            'nan_string': str_chroms.str.lower().eq('nan').any()
+            'float_like': bool(str_chroms.str.match(r'^[0-9]+\\.0$').any()),
+            'pipe_delimited': bool(str_chroms.str.contains(r'\\|').any()),
+            'nan_string': bool(str_chroms.str.lower().eq('nan').any())
         }
 
     return profile
@@ -697,7 +698,9 @@ def build_provenance(args, df_kennedy):
     return prov
 
 
-def write_provenance_and_reports(args, num_merged, diag_results, grid_results, df_kennedy, cols):
+def write_provenance_and_reports(args, num_merged, diag_results, grid_results, df_kennedy, cols, figs=None):
+    if figs is None:
+        figs = {}
     # Prepare JSON
     out_json = {
         'provenance': build_provenance(args, df_kennedy),
@@ -731,6 +734,8 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
     class NpEncoder(json.JSONEncoder):
         def default(self, obj):
             import numpy as np
+            if isinstance(obj, np.bool_):
+                return bool(obj)
             if isinstance(obj, np.bool_):
                 return bool(obj)
             if isinstance(obj, np.integer):
@@ -769,7 +774,7 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
                 build_confirmation_grid_module(grid_results, [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]),
                 build_diagonal_summary_module(diag_results),
                 build_trans_fraction_module(args),
-                build_concordance_module(args)
+                build_concordance_module(args, figs)
             ])
 
         html_report = render_html("benchmark_kennedy", {}, modules)
@@ -779,7 +784,7 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
 
 def build_provenance_module(prov) -> QCModule:
     purpose = "Records the environment, configuration, and exact input files used."
-    interpretation = "Ensure the SHA256 hashes match expectations for reproducibility."
+    interpretation = 'What to check before trusting anything downstream: input SHA256s match the intended files; both thresholds are the intended ones; git SHA corresponds to a known commit. Note that `tecpg version: unknown` currently appears and should be fixed via importlib.metadata or the package __version__.'
 
     table_rows = [
         ["tecpg version", prov['tecpg_version']],
@@ -804,9 +809,9 @@ def build_provenance_module(prov) -> QCModule:
 
 def build_reference_file_profile_module(prof) -> QCModule:
     purpose = "Profiles the reference file structure, composition, and expected dimensions."
-    interpretation = "Verify the metrics match the known reference dataset properties."
+    interpretation = 'The Kennedy file is a SUGGESTIVE tier (p < 1e-5), not a hit list: roughly 88% of GTP rows are TRANS and at 1e-5 that stratum is close to what the test-space geometry alone would produce. Overlap statistics computed at 1e-5 against this file are therefore dominated by chance agreement in TRANS. The genome-wide significant tier is p < 1e-11 (2,466 GTP pairs), which is the comparable set. State that NA in `distance` is class-conditional (NA exactly for TRANS) and is not missing data.'
 
-    status = "FAIL"
+    status = "INFO"
 
     for k, v in prof['na_counts'].items():
         if v['conditionality'] is not None:
@@ -830,7 +835,7 @@ def build_reference_file_profile_module(prof) -> QCModule:
 
 def build_catalog_profile_module(prof) -> QCModule:
     purpose = "Profiles the tecpg catalog stream."
-    interpretation = "Verify the expected catalog properties are present."
+    interpretation = 'precise_mt_p is float64 and usable to ~1e-118; mt_p is float32-saturated with a block of exact zeros below roughly 1e-7 and must not be used for thresholding. If region shows GENEBODY far below the other near-gene classes, flag it as a known open question (gt_chromEnd is absent from the catalog schema, so gene-body assignment cannot be evaluated from a start coordinate alone) and state that the near-gene strata should be read with caution pending C4.'
 
     status = "INFO"
     if prof.get('chrom_span_observation'):
@@ -855,13 +860,27 @@ def build_catalog_profile_module(prof) -> QCModule:
 
 def build_eligibility_decomposition_module(df_kennedy, cols) -> QCModule:
     purpose = "Decomposes the eligibility of Kennedy pairs in the tecpg universe."
-    interpretation = "Displays marginal containment."
+
+    total = len(df_kennedy)
+    eligible = df_kennedy['eligible'].sum()
+
+    if total > 0 and eligible == total:
+        interp_dynamic = ("Eligibility is 100%. Every non-overlap is a genuine method "
+                          "disagreement rather than a coverage gap, which strengthens "
+                          "interpretation of everything below.")
+    else:
+        interp_dynamic = ("Eligibility is below 100%. The recovery denominator is "
+                          "conditioned on it and cross-cohort comparisons of recovery "
+                          "are not like-for-like.")
+
+    interpretation = ("This is the ceiling on recovery, and it must be read BEFORE "
+                      "the recovery numbers. " + interp_dynamic)
 
     rows = [
-        ["Total Kennedy Pairs", str(len(df_kennedy))],
+        ["Total Kennedy Pairs", str(total)],
         ["CpG in tecpg", str(df_kennedy['cpg_in_tecpg_universe'].sum())],
         ["Probe in tecpg", str(df_kennedy['probe_in_tecpg_universe'].sum())],
-        ["Pair in tecpg (Eligible)", str(df_kennedy['eligible'].sum())]
+        ["Pair in tecpg (Eligible)", str(eligible)]
     ]
     return QCModule(
         anchor="eligibility", title="Eligibility Decomposition", status="INFO",
@@ -872,7 +891,13 @@ def build_eligibility_decomposition_module(df_kennedy, cols) -> QCModule:
 
 def build_recovery_grid_module(grid_results, thresholds) -> QCModule:
     purpose = "Displays the fraction of eligible Kennedy hits found in tecpg."
-    interpretation = "Higher recovery is generally better."
+    interpretation = (
+        "Read along the Kennedy axis: recovery should RISE as their threshold tightens, "
+        "because their strongest hits should be the ones we recover best. A flat or "
+        "falling profile in that direction would suggest we are matching their noise "
+        "rather than their signal, and is the main thing to look for. Recovery falls as "
+        "OUR threshold tightens, which is expected and not informative."
+    )
 
     headers = ["tecpg \\ Kennedy"] + [f"{tk:g}" for tk in thresholds]
     rows = []
@@ -891,8 +916,13 @@ def build_recovery_grid_module(grid_results, thresholds) -> QCModule:
 
 def build_confirmation_grid_module(grid_results, thresholds) -> QCModule:
     purpose = "Displays the fraction of tecpg hits found in Kennedy."
-    interpretation = ("The confirmation rates are a lower bound since the denominator includes "
-                      "all tecpg hits, not just those with kennedy coverage.")
+    interpretation = (
+        "The raw denominator is a LOWER BOUND. Kennedy's tested universe (483,399 CpGs "
+        "x 13,933 transcripts) is not recoverable from the supplement, which contains "
+        "only CpGs that produced at least one suggestive hit. The kennedy_testable "
+        "variant is the opposing bound and is biased UPWARD for the same reason. The "
+        "two bracket the truth; neither is the answer."
+    )
 
     headers = ["tecpg \\ Kennedy"] + [f"{tk:g}" for tk in thresholds]
     rows = []
@@ -911,7 +941,14 @@ def build_confirmation_grid_module(grid_results, thresholds) -> QCModule:
 
 def build_diagonal_summary_module(diag) -> QCModule:
     purpose = "Summary of matched p-value threshold overlap."
-    interpretation = "Jaccard index shown."
+    interpretation = (
+        "The like-for-like line. Note for context that Kennedy's own GTP-to-MESA "
+        "replication was 44% cis / 30% distal / 27% trans using a single method across "
+        "two cohorts; a cross-METHOD recovery within that range is a reasonable result, "
+        "not a poor one. Jaccard is reported for the diagonal only and is dominated by "
+        "the size ratio when the two hit sets differ substantially in size — it is "
+        "secondary and should not be read as the headline."
+    )
     rows = [
         ["Recovery", f"{diag['recovery']:.3f}"],
         ["Confirmation", f"{diag['confirmation_raw']:.3f}"],
@@ -926,25 +963,56 @@ def build_diagonal_summary_module(diag) -> QCModule:
 
 def build_trans_fraction_module(args) -> QCModule:
     purpose = "Compares the trans fraction curves."
-    interpretation = "Visual only."
+
+    thresholds = [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]
+
+    t_data = getattr(args, 'trans_fraction_data', {})
+    k_data = getattr(args, 'kennedy_trans_fraction_data', {})
+
+    meaningful_dirs = []
+    for t in thresholds:
+        if t in k_data and t in t_data and (k_data[t] > 0 or t_data[t] > 0):
+            if t_data[t] > k_data[t] + 1e-6:
+                meaningful_dirs.append("ABOVE")
+            elif t_data[t] < k_data[t] - 1e-6:
+                meaningful_dirs.append("BELOW")
+            else:
+                meaningful_dirs.append("EQUAL")
+
+    if not meaningful_dirs:
+        dyn_interp = "Curves could not be compared."
+    elif all(d == "ABOVE" for d in meaningful_dirs):
+        dyn_interp = ("Our trans fraction sits consistently ABOVE the reference curve "
+                      "across all matched thresholds.")
+    elif all(d == "BELOW" for d in meaningful_dirs):
+        dyn_interp = ("Our trans fraction sits consistently BELOW the reference curve "
+                      "across all matched thresholds.")
+    else:
+        # find inversion
+        inversions = []
+        for i in range(1, len(meaningful_dirs)):
+            if meaningful_dirs[i] != meaningful_dirs[i-1]:
+                inversions.append(f"{thresholds[i]:g}")
+        dyn_interp = f"The direction inverts at threshold(s): {', '.join(inversions)}."
+
+    interpretation = (
+        "The reference file's own trans fraction is measured across log10(p). " + dyn_interp +
+        " Above means less cis enrichment than the reference at equal stringency; below "
+        "means more. Note that GTP and MESA agree to three decimals at 1e-5 despite "
+        "differing 3.6x in sample size, which indicates the suggestive-tier trans fraction "
+        "reflects test-space geometry rather than biology."
+    )
 
     # Generate the curve figure
     fig = plt.figure(figsize=(6, 4))
 
-    thresholds = [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]
+    k_vals = [k_data.get(t, 0) for t in thresholds]
+    t_vals = [t_data.get(t, 0) for t in thresholds]
 
-    k_fractions = []
-    t_fractions = []
-
-    k_profile = args.kennedy_profile_metrics
-    c_profile = args.catalog_profile_metrics
-
-    # We didn't compute tecpg trans_fraction per decade. We only computed total precise_mt_p decades.
-    # The prompt says "ours against the reference file's own measured curve".
-    # Wait, did we compute our trans fraction per decade? No, we didn't track it in stream.
-    # Actually, we didn't explicitly implement tecpg trans fraction per decade tracking.
-
-    plt.plot(range(len(thresholds)), [0]*len(thresholds))
+    plt.plot(range(len(thresholds)), k_vals, label='Kennedy')
+    plt.plot(range(len(thresholds)), t_vals, label='tecpg')
+    plt.xticks(range(len(thresholds)), [f"{t:g}" for t in thresholds])
+    plt.legend()
 
     fig.savefig(os.path.join(args.outdir, 'trans_fraction_curve.png'), dpi=300)
     b64 = fig_to_base64(fig)
@@ -956,24 +1024,34 @@ def build_trans_fraction_module(args) -> QCModule:
     )
 
 
-def build_concordance_module(args) -> QCModule:
+def build_concordance_module(args, figs) -> QCModule:
     purpose = "Venn diagram and effect-size scatter."
-    interpretation = "Visual only."
+    interpretation = (
+        "The diagnostic pattern: if Spearman EXCEEDS Pearson on effect size while falling "
+        "BELOW it on the test statistic, the two coefficient scales are monotonically "
+        "related but not commensurate, which is expected given a mixed model versus "
+        "fixed-effect QR and is why the effect-size panel carries no y=x line. High "
+        "test-statistic concordance with lower effect-size concordance is therefore a "
+        "scale artifact and not a disagreement about which pairs are associated. Sign "
+        "agreement in the quadrant annotation is the scale-invariant quantity and is the "
+        "one to read. Note that a standardized-effect comparison using mt_err and beta.sd "
+        "is planned for C3 and will resolve the scale question directly."
+    )
 
     b64s = []
 
-    if hasattr(args, 'concordance_scatter_fig'):
-        fig = args.concordance_scatter_fig
+    if figs.get('concordance_scatter_fig'):
+        fig = figs['concordance_scatter_fig']
         fig.savefig(os.path.join(args.outdir, 'concordance_scatter.png'), dpi=300)
         b64s.append(fig_to_base64(fig))
 
-    if hasattr(args, 'venn_fig'):
-        fig = args.venn_fig
+    if figs.get('venn_fig'):
+        fig = figs['venn_fig']
         fig.savefig(os.path.join(args.outdir, 'overlap_venn_diagonal.png'), dpi=300)
         b64s.append(fig_to_base64(fig))
 
-    if hasattr(args, 'upset_fig'):
-        fig = args.upset_fig
+    if figs.get('upset_fig'):
+        fig = figs['upset_fig']
         fig.savefig(os.path.join(args.outdir, 'overlap_upset_diagonal.png'), dpi=300)
         b64s.append(fig_to_base64(fig))
 
@@ -1106,7 +1184,12 @@ def main():
 
     pearson_r_beta = spearman_r_beta = r2_beta = 0.0
     pearson_r_t = spearman_r_t = r2_t = 0.0
+    concordance_scatter_fig = None
+    venn_fig = None
+    upset_fig = None
 
+
+    panels_to_draw = []
     if beta_col and 'mt_est' in df_merged.columns:
         valid_beta = df_merged[['mt_est', beta_col]].dropna()
         dropped = len(df_merged) - len(valid_beta)
@@ -1116,23 +1199,7 @@ def main():
             f"{len(valid_beta)} ({dropped} dropped)"
         )
         if len(valid_beta) > 1:
-            pearson_r_beta, _ = stats.pearsonr(valid_beta['mt_est'], valid_beta[beta_col])
-            spearman_r_beta, _ = stats.spearmanr(valid_beta['mt_est'], valid_beta[beta_col])
-            r2_beta = pearson_r_beta**2
-
-            logging.info("Generating scatter plots...")
-            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-            ax1 = axes[0]
-            ax1.hexbin(valid_beta['mt_est'], valid_beta[beta_col], gridsize=50, cmap='Blues', mincnt=1)
-            min_val_b = min(valid_beta['mt_est'].min(), valid_beta[beta_col].min())
-            max_val_b = max(valid_beta['mt_est'].max(), valid_beta[beta_col].max())
-            ax1.plot([min_val_b, max_val_b], [min_val_b, max_val_b], 'r--', lw=2, label='y=x')
-            ax1.set_xlabel('tecpg Effect Size (mt_est)')
-            ax1.set_ylabel(f'Kennedy Effect Size ({beta_col})')
-            ax1.set_title('Effect Size Concordance')
-            text_b = f"Pearson r: {pearson_r_beta:.3f}\nSpearman $\\rho$: {spearman_r_beta:.3f}\n$R^2$: {r2_beta:.3f}"
-            ax1.text(0.05, 0.95, text_b, transform=ax1.transAxes, fontsize=12, verticalalignment='top',
-                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            panels_to_draw.append(('beta', valid_beta))
 
     if tstat_col and 'mt_t' in df_merged.columns:
         valid_t = df_merged[['mt_t', tstat_col]].dropna()
@@ -1143,25 +1210,85 @@ def main():
             f"{len(valid_t)} ({dropped} dropped)"
         )
         if len(valid_t) > 1:
-            pearson_r_t, _ = stats.pearsonr(valid_t['mt_t'], valid_t[tstat_col])
-            spearman_r_t, _ = stats.spearmanr(valid_t['mt_t'], valid_t[tstat_col])
-            r2_t = pearson_r_t**2
+            panels_to_draw.append(('tstat', valid_t))
 
-            if 'ax1' in locals():
-                ax2 = axes[1]
-                ax2.hexbin(valid_t['mt_t'], valid_t[tstat_col], gridsize=50, cmap='Blues', mincnt=1)
-                min_val_t = min(valid_t['mt_t'].min(), valid_t[tstat_col].min())
-                max_val_t = max(valid_t['mt_t'].max(), valid_t[tstat_col].max())
-                ax2.plot([min_val_t, max_val_t], [min_val_t, max_val_t], 'r--', lw=2, label='y=x')
-                ax2.set_xlabel('tecpg Test Statistic (mt_t)')
-                ax2.set_ylabel(f'Kennedy Test Statistic ({tstat_col})')
-                ax2.set_title('Test Statistic Concordance')
-                text_t = f"Pearson r: {pearson_r_t:.3f}\nSpearman $\\rho$: {spearman_r_t:.3f}\n$R^2$: {r2_t:.3f}"
-                ax2.text(0.05, 0.95, text_t, transform=ax2.transAxes, fontsize=12, verticalalignment='top',
-                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    if panels_to_draw:
+        from matplotlib.colors import LogNorm
+        import numpy as np
+        fig, axes = plt.subplots(1, len(panels_to_draw), figsize=(7 * len(panels_to_draw), 6))
+        if len(panels_to_draw) == 1:
+            axes = [axes]
 
-                plt.tight_layout()
-                args.concordance_scatter_fig = fig
+        for i, (p_type, valid_df) in enumerate(panels_to_draw):
+            ax = axes[i]
+            x = valid_df.iloc[:, 0]
+            y = valid_df.iloc[:, 1]
+
+            pearson_r, _ = stats.pearsonr(x, y)
+            spearman_r, _ = stats.spearmanr(x, y)
+            r2 = pearson_r**2
+
+            # Linear regression
+            slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+
+            hb = ax.hexbin(x, y, gridsize=50, cmap='viridis', mincnt=1, norm=LogNorm(vmin=1))
+            fig.colorbar(hb, ax=ax, label='pairs per cell')
+
+            ax.axhline(0, color='lightgrey', lw=1, zorder=0)
+            ax.axvline(0, color='lightgrey', lw=1, zorder=0)
+
+            # Quadrants
+            q1 = ((x > 0) & (y > 0)).sum()
+            q2 = ((x < 0) & (y > 0)).sum()
+            q3 = ((x < 0) & (y < 0)).sum()
+            q4 = ((x > 0) & (y < 0)).sum()
+
+            total_points = len(x)
+            concordant = q1 + q3
+
+            pct_q1 = (q1 / total_points) * 100 if total_points > 0 else 0
+            pct_q2 = (q2 / total_points) * 100 if total_points > 0 else 0
+            pct_q3 = (q3 / total_points) * 100 if total_points > 0 else 0
+            pct_q4 = (q4 / total_points) * 100 if total_points > 0 else 0
+
+            ax.text(0.98, 0.98, f"{q1:,} ({pct_q1:.1f}%)", transform=ax.transAxes, ha='right', va='top', fontsize=9)
+            ax.text(0.02, 0.98, f"{q2:,} ({pct_q2:.1f}%)", transform=ax.transAxes, ha='left', va='top', fontsize=9)
+            ax.text(0.02, 0.02, f"{q3:,} ({pct_q3:.1f}%)", transform=ax.transAxes, ha='left', va='bottom', fontsize=9)
+            ax.text(0.98, 0.02, f"{q4:,} ({pct_q4:.1f}%)", transform=ax.transAxes, ha='right', va='bottom', fontsize=9)
+
+            # Regression line
+            min_val_x = x.min()
+            max_val_x = x.max()
+            fit_x = np.array([min_val_x, max_val_x])
+            fit_y = slope * fit_x + intercept
+            ax.plot(fit_x, fit_y, color='orange', linestyle='--', lw=2, label='OLS fit')
+
+            text_stats = (f"Pearson r: {pearson_r:.3f}\n"
+                  f"Spearman $\\rho$: {spearman_r:.3f}\n"
+                  f"$R^2$: {r2:.3f}\n"
+                  f"OLS Slope: {slope:.3f}\n"
+                  "(OLS is asymmetric)")
+
+            if p_type == 'beta':
+                pearson_r_beta, spearman_r_beta, r2_beta = pearson_r, spearman_r, r2
+                ax.set_xlabel('tecpg Effect Size (mt_est)')
+                ax.set_ylabel(f'Kennedy Effect Size ({beta_col})')
+                ax.set_title(f'Effect Size Concordance\n{concordant:,} / {total_points:,} concordant signs')
+            else:
+                pearson_r_t, spearman_r_t, r2_t = pearson_r, spearman_r, r2
+                ax.set_xlabel('tecpg Test Statistic (mt_t)')
+                ax.set_ylabel(f'Kennedy Test Statistic ({tstat_col})')
+                ax.set_title(f'Test Statistic Concordance\n{concordant:,} / {total_points:,} concordant signs')
+                min_val = min(x.min(), y.min())
+                max_val = max(x.max(), y.max())
+                ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='y=x')
+
+            ax.text(0.02, 0.5, text_stats, transform=ax.transAxes, fontsize=10, verticalalignment='center',
+                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            ax.legend(loc='lower right', fontsize=9)
+
+        plt.tight_layout()
+        concordance_scatter_fig = fig
 
     logging.info("Calculating directional overlap rates (sweep)...")
     thresholds = [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]
@@ -1195,7 +1322,7 @@ def main():
     fig_venn = plt.figure(figsize=(8, 6))
     v = venn2([T_tt, K_tk_E], set_labels=('tecpg hits', 'Kennedy hits (Eligible)'))
     plt.title(f'Diagonal Overlap\n({ineligible_count} ineligible Kennedy hits omitted)')
-    args.venn_fig = fig_venn
+    venn_fig = fig_venn
 
     if args.upset and (len(T_tt) > 0 or len(K_tk_E) > 0):
         upset_data = upsetplot.from_contents({
@@ -1205,7 +1332,7 @@ def main():
         fig_upset = plt.figure(figsize=(8, 6))
         upsetplot.plot(upset_data, fig=fig_upset)
         plt.title('UpSet Plot (Eligible)')
-        args.upset_fig = fig_upset
+        upset_fig = fig_upset
 
     logging.info("Building summary...")
     summary = build_summary_text(
@@ -1221,7 +1348,32 @@ def main():
     with open(os.path.join(args.outdir, 'benchmark_summary.txt'), 'w') as f:
         f.write(summary)
 
-    write_provenance_and_reports(args, num_merged, diag_results, grid_results, df_kennedy, cols)
+
+    if not args.characterize:
+        t_data = {}
+        k_data = {}
+        for t in [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]:
+            if cols['pval'] in df_kennedy.columns and cols['status'] in df_kennedy.columns:
+                k_mask = df_kennedy[cols['pval']] < t
+                k_sub = df_kennedy[k_mask]
+                k_n = len(k_sub)
+                k_trans = (k_sub[cols['status']] == 'TRANS').sum()
+                k_data[t] = k_trans / k_n if k_n > 0 else 0.0
+
+            if tecpg_p_col in df_matched.columns and 'region' in df_matched.columns:
+                t_mask = df_matched[tecpg_p_col] < t
+                t_sub = df_matched[t_mask]
+                t_n = len(t_sub)
+                t_trans = (t_sub['region'] == 'trans').sum()
+                t_data[t] = t_trans / t_n if t_n > 0 else 0.0
+
+        args.trans_fraction_data = t_data
+        args.kennedy_trans_fraction_data = k_data
+
+    write_provenance_and_reports(
+        args, num_merged, diag_results, grid_results, df_kennedy, cols,
+        figs={'concordance_scatter_fig': concordance_scatter_fig, 'venn_fig': venn_fig, 'upset_fig': upset_fig}
+    )
 
 
 if __name__ == '__main__':

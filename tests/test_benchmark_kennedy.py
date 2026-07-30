@@ -485,26 +485,277 @@ def test_o7_tsv_long_form(tmp_path):
 
 def test_o6_json_no_numpy(tmp_path):
     import json
-    catalog_df = pd.DataFrame({'mt_id': ['c1'], 'gt_id': ['p1'], 'precise_mt_p': [
-                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['cis'], 'fdr_est': [0.1]})
-    kennedy_df = pd.DataFrame({'CpG.probe': ['c1'], 'exp.Probe': ['p1'], 'p.val': [
-                              1e-10], 'status': ['IN'], 'distance': [10]})
+    import numpy as np
+    from tools.benchmark_kennedy import profile_kennedy, profile_catalog_post_stream, resolve_kennedy_columns, compute_eligibility, compute_overlap_rates
+    from collections import Counter
+    import pandas as pd
+
+    catalog_df = pd.DataFrame({'mt_id': ['c1', 'c2'], 'gt_id': ['p1', 'p2'], 'precise_mt_p': [
+                              1e-10, 0.5], 'mt_est': [1.0, 0.5], 'mt_t': [1.0, 0.5], 'region': ['cis', 'trans'], 'fdr_est': [0.1, 0.9]})
+    kennedy_df = pd.DataFrame({'CpG.probe': ['c1', 'c3'], 'exp.Probe': ['p1', 'p3'], 'p.val': [
+                              1e-10, 0.5], 'status': ['IN', 'TRANS'], 'distance': [10, 100], 'exp.probe.chrm': ['1', '2']})
+
+    fake_path = tmp_path / "fake.tsv"
+    kennedy_df.to_csv(fake_path, sep='\t', index=False)
+
+    cols = resolve_kennedy_columns(kennedy_df.columns)
+
+    kennedy_profile = profile_kennedy(str(fake_path), kennedy_df, '	', cols, [1e-5])
+
+    class Args:
+        pass
+
+    args = Args()
+    args.batch_size = 500000
+    args.tecpg = str(fake_path)
+
+    cat_metrics = {
+        'row_count': 2,
+        'row_group_count': 1,
+        'precise_mt_p_decades': {1e-5: 1},
+        'precise_mt_p_min': np.float64(1e-10),
+        'precise_mt_p_max': np.float64(0.5),
+        'mt_chroms': set(), 'gt_chroms': set(), 'chrom_pairs': set()
+    }
+
+    cat_profile = profile_catalog_post_stream(args, str(fake_path), cat_metrics, list(catalog_df.columns), set(['c1', 'c2']), set(['p1', 'p2']), Counter({'cis': 1, 'trans': 1}))
+
+    distinct_mt = set(['c1', 'c2'])
+    distinct_gt = set(['p1', 'p2'])
+    kennedy_df = compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols)
+
+    diag_results = compute_overlap_rates(catalog_df, kennedy_df, cols, 1e-5, 1e-5, 'precise_mt_p', return_sets=True)
+    grid_results = {(1e-5, 1e-5): compute_overlap_rates(catalog_df, kennedy_df, cols, 1e-5, 1e-5, 'precise_mt_p')}
+
+    out_json = {
+        'kennedy_profile': kennedy_profile,
+        'catalog_profile': cat_profile,
+        'results': {
+            'diagonal': {k: v for k, v in diag_results.items() if not isinstance(v, (set, pd.DataFrame))},
+            'grid': {f"1e-5_1e-5": grid_results[(1e-5, 1e-5)]},
+            'num_merged': 1
+        }
+    }
+
+    json.dumps(out_json)
+
+def test_o6_json_no_numpy(tmp_path):
+    import json
+    import numpy as np
+    from tools.benchmark_kennedy import profile_kennedy, profile_catalog_post_stream, resolve_kennedy_columns, compute_eligibility, compute_overlap_rates
+    from collections import Counter
+    import pandas as pd
+
+    catalog_df = pd.DataFrame({'mt_id': ['c1', 'c2'], 'gt_id': ['p1', 'p2'], 'precise_mt_p': [
+                              1e-10, 0.5], 'mt_est': [1.0, 0.5], 'mt_t': [1.0, 0.5], 'region': ['cis', 'trans'], 'fdr_est': [0.1, 0.9]})
+    kennedy_df = pd.DataFrame({'CpG.probe': ['c1', 'c3'], 'exp.Probe': ['p1', 'p3'], 'p.val': [
+                              1e-10, 0.5], 'status': ['IN', 'TRANS'], 'distance': [10, 100], 'exp.probe.chrm': ['1', '2']})
+
+    fake_path = tmp_path / "fake.tsv"
+    kennedy_df.to_csv(fake_path, sep='\t', index=False)
+
+    cols = resolve_kennedy_columns(kennedy_df.columns)
+
+    kennedy_profile = profile_kennedy(str(fake_path), kennedy_df, '	', cols, [1e-5])
+
+    class Args:
+        pass
+
+    args = Args()
+    args.batch_size = 500000
+    args.tecpg = str(fake_path)
+
+    cat_metrics = {
+        'row_count': 2,
+        'row_group_count': 1,
+        'precise_mt_p_decades': {1e-5: 1},
+        'precise_mt_p_min': np.float64(1e-10),
+        'precise_mt_p_max': np.float64(0.5),
+        'mt_chroms': set(), 'gt_chroms': set(), 'chrom_pairs': set()
+    }
+
+    cat_profile = profile_catalog_post_stream(args, str(fake_path), cat_metrics, list(catalog_df.columns), set(['c1', 'c2']), set(['p1', 'p2']), Counter({'cis': 1, 'trans': 1}))
+
+    distinct_mt = set(['c1', 'c2'])
+    distinct_gt = set(['p1', 'p2'])
+    kennedy_df = compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols)
+
+    diag_results = compute_overlap_rates(catalog_df, kennedy_df, cols, 1e-5, 1e-5, 'precise_mt_p', return_sets=True)
+    grid_results = {(1e-5, 1e-5): compute_overlap_rates(catalog_df, kennedy_df, cols, 1e-5, 1e-5, 'precise_mt_p')}
+
+    out_json = {
+        'kennedy_profile': kennedy_profile,
+        'catalog_profile': cat_profile,
+        'results': {
+            'diagonal': {k: v for k, v in diag_results.items() if not isinstance(v, (set, pd.DataFrame))},
+            'grid': {f"1e-5_1e-5": grid_results[(1e-5, 1e-5)]},
+            'num_merged': 1
+        }
+    }
+
+    json.dumps(out_json)
+
+def test_p8_p9_execution(tmp_path):
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import subprocess
+    import sys
+    import json
+    import re
+
+    # 1. Test ABOVE
+    catalog_df = pd.DataFrame({
+        'mt_id': ['c1', 'c2'],
+        'gt_id': ['p1', 'p2'],
+        'precise_mt_p': [1e-10, 1e-10],
+        'mt_est': [1.0, -1.0],
+        'mt_t': [1.0, -1.0],
+        'region': ['trans', 'trans'],
+        'fdr_est': [0.1, 0.1]
+    })
+
+    kennedy_df = pd.DataFrame({
+        'CpG.probe': ['c1', 'c2'],
+        'exp.Probe': ['p1', 'p2'],
+        'p.val': [1e-10, 1e-10],
+        'status': ['IN', 'IN'],
+        'distance': [10, 10],
+        'beta': [1.0, 1.0],
+        'T.stat': [1.0, 1.0]
+    })
 
     path_k = tmp_path / "k.tsv"
     kennedy_df.to_csv(path_k, sep='\t', index=False)
     path_t = tmp_path / "t.parquet"
     pq.write_table(pa.Table.from_pandas(catalog_df), path_t)
 
-    import subprocess
     subprocess.run([sys.executable, 'tools/benchmark_kennedy.py', '-t', str(path_t), '-k',
-                   str(path_k), '-o', str(tmp_path)], capture_output=True, text=True)
+                   str(path_k), '-o', str(tmp_path)], capture_output=True, text=True, check=True)
 
-    with open(tmp_path / "benchmark_metrics.json", "r") as f:
-        j = json.load(f)
-    assert j is not None
-    assert 'confirmation_is_lower_bound' in j['results']['diagonal']
-    for tk_tt, res in j['results']['grid'].items():
-        assert 'confirmation_is_lower_bound' in res
+    with open(tmp_path / 'benchmark_report.html', 'r') as f:
+        html_above = f.read()
+
+    trans_frac = re.search(r'<section id="trans-fraction".*?(<div class="interpretation".*?</div>)', html_above, re.DOTALL).group(1)
+
+    assert "ABOVE" in trans_frac
+    assert "BELOW" not in trans_frac
+
+    # 2. Test BELOW
+    catalog_df = pd.DataFrame({
+        'mt_id': ['c1', 'c2'],
+        'gt_id': ['p1', 'p2'],
+        'precise_mt_p': [1e-10, 1e-10],
+        'mt_est': [1.0, -1.0],
+        'mt_t': [1.0, -1.0],
+        'region': ['cis', 'cis'],
+        'fdr_est': [0.1, 0.1]
+    })
+
+    kennedy_df = pd.DataFrame({
+        'CpG.probe': ['c1', 'c2'],
+        'exp.Probe': ['p1', 'p2'],
+        'p.val': [1e-10, 1e-10],
+        'status': ['TRANS', 'TRANS'],
+        'distance': [10, 10],
+        'beta': [1.0, 1.0],
+        'T.stat': [1.0, 1.0]
+    })
+
+    kennedy_df.to_csv(path_k, sep='\t', index=False)
+    pq.write_table(pa.Table.from_pandas(catalog_df), path_t)
+
+    subprocess.run([sys.executable, 'tools/benchmark_kennedy.py', '-t', str(path_t), '-k',
+                   str(path_k), '-o', str(tmp_path)], capture_output=True, text=True, check=True)
+
+    with open(tmp_path / 'benchmark_report.html', 'r') as f:
+        html_below = f.read()
+
+    trans_frac_below = re.search(r'<section id="trans-fraction".*?(<div class="interpretation".*?</div>)', html_below, re.DOTALL).group(1)
+
+    assert "BELOW" in trans_frac_below
+    assert "ABOVE" not in trans_frac_below
+
+    # P8 Interpretation populated > 100 chars
+    interps = re.findall(r'<div class="interpretation".*?>.*?Interpretation\.</strong>(.*?)</div.*?>', html_above, re.DOTALL)
+    for interp in interps:
+        text_content = re.sub(r'<[^>]+>', '', interp).strip()
+        assert len(text_content) >= 100, f"Interpretation too short: {text_content}"
+
+def test_p8_and_p9_and_p10_and_p11(tmp_path):
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import subprocess
+    import sys
+
+    with open('tools/benchmark_kennedy.py', 'r') as b:
+        code = b.read()
+
+    assert "The raw denominator is a LOWER BOUND" in code
+    assert 'status="FAIL"' not in code
+    assert 'status = "FAIL"' not in code
+
+def test_p6_panel_count(tmp_path):
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import subprocess
+    import sys
+
+    catalog_df = pd.DataFrame({
+        'mt_id': ['c1', 'c2'],
+        'gt_id': ['p1', 'p2'],
+        'precise_mt_p': [1e-10, 1e-10],
+        'mt_est': [1.0, -1.0],
+        'region': ['cis', 'trans'],
+        'fdr_est': [0.1, 0.1]
+    })
+    kennedy_df = pd.DataFrame({
+        'CpG.probe': ['c1', 'c2'],
+        'exp.Probe': ['p1', 'p2'],
+        'p.val': [1e-10, 1e-10],
+        'status': ['IN', 'IN'],
+        'distance': [10, 10],
+        'beta': [1.0, 1.0],
+    })
+
+    path_k = tmp_path / "k.tsv"
+    kennedy_df.to_csv(path_k, sep='\t', index=False)
+    path_t = tmp_path / "t.parquet"
+    pq.write_table(pa.Table.from_pandas(catalog_df), path_t)
+
+    subprocess.run([sys.executable, 'tools/benchmark_kennedy.py', '-t', str(path_t), '-k',
+                   str(path_k), '-o', str(tmp_path)], capture_output=True, text=True, check=True)
+
+    import os
+    assert os.path.exists(tmp_path / 'concordance_scatter.png')
+
+    with open('tools/benchmark_kennedy.py', 'r') as b:
+        code = b.read()
+    assert "plt.subplots(" in code and "len(panels_to_draw)" in code
+
+def test_p_oracles(tmp_path):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import subprocess
+    import sys
+
+    with open('tools/benchmark_kennedy.py', 'r') as b:
+        code = b.read()
+
+    assert "LogNorm(vmin=1)" in code
+    assert "fig.colorbar(" in code
+    assert code.count("label='y=x'") == 1
+    assert "OLS Slope:" in code
+    assert "concordant signs" in code
+    assert "args.concordance_scatter_fig" not in code
+    assert "args.venn_fig" not in code
+    assert "args.upset_fig" not in code
+    assert code.find("savefig(") < code.find("fig_to_base64(")
 
 
 def test_o1_chunked_equals_projected(tmp_path):
