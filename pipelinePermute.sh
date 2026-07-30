@@ -17,6 +17,8 @@ USE_RESERVOIR=0
 ASSIGN_REGIONS=1
 CIS_ENRICH=0
 CIS_WINDOW=1000000
+TOTAL_TESTS=""
+ANNOTATE_MAINLINE=1
 
 PERMUTE_ARGS=()
 
@@ -51,6 +53,12 @@ while [[ "$#" -gt 0 ]]; do
             echo "                                 the uniform reservoir lacks so the per-region eval can render a verdict."
             echo "      --cis-window N             Cis map half-window in bp applied up/downstream (default: 1000000)."
             echo "                                 Over-capture is intended; assignRegionToEcpg relabels canonically."
+            echo "      --total-tests N            BH denominator for fdr_permute. REQUIRED when the mainline"
+            echo "                                 annotation stage runs. Must be the MAPPING GRID size -- the"
+            echo "                                 same TOTAL_TESTS pipeline.sh uses for fdr_est -- NOT the"
+            echo "                                 permute run's tecpg_perm_n_reported. Cross-checked against"
+            echo "                                 mlr_run_<ds>.log when that log is present."
+            echo "      --no-annotate-mainline     Skip stage [5/5] (mainline p_permute/fdr_permute annotation)."
             echo "  -d, --dataset DATASET          Specify the dataset to use. Options: dummy (default), gtpsub, gtp, mesa"
             echo "  -m, --mapping MAPPING          Region flag passed to qr_permute. Options: all (default)."
             echo "                                 'cis' is accepted by the parser but rejected at runtime:"
@@ -92,6 +100,14 @@ while [[ "$#" -gt 0 ]]; do
         --cis-window)
             CIS_WINDOW="$2"
             shift 2
+            ;;
+        --total-tests)
+            TOTAL_TESTS="$2"
+            shift 2
+            ;;
+        --no-annotate-mainline)
+            ANNOTATE_MAINLINE=0
+            shift
             ;;
         -m|--mapping)
             MAPPING="$2"
@@ -384,10 +400,10 @@ if [ $EXECUTE -eq 1 ]; then
         # Skip re-annotation when the master already carries 'region' (re-runs, or a master
         # that is itself a prior *.region.parquet). Cheap schema read, no full load.
         if python3 -c "import pyarrow.parquet as pq, sys; sys.exit(0 if 'region' in pq.read_schema('$MASTER_PARQUET').names else 1)"; then
-            log "[1/4] Master already carries a 'region' column; skipping annotation."
+            log "[1/5] Master already carries a 'region' column; skipping annotation."
         else
             REGION_MASTER="${MASTER_PARQUET%.parquet}.region.parquet"
-            log "[1/4] Assigning canonical regions ($MASTER_PARQUET -> $REGION_MASTER)..."
+            log "[1/5] Assigning canonical regions ($MASTER_PARQUET -> $REGION_MASTER)..."
             python3 -u tools/assignRegionToEcpg_parquet.py \
                 -d "$MASTER_PARQUET" \
                 -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" \
@@ -396,13 +412,13 @@ if [ $EXECUTE -eq 1 ]; then
             log "      Read the 'eCpgs Counts by Region' line above: it is the coverage gate for the per-region eval."
         fi
     else
-        log "[1/4] Region annotation skipped (--no-assign-regions); eval falls back to 2-way strata."
+        log "[1/5] Region annotation skipped (--no-assign-regions); eval falls back to 2-way strata."
     fi
 fi
 
 # Stage 2: permute
 if [ $EXECUTE -eq 1 ]; then
-    log "[2/4] Running permute (consuming master: $MASTER_PARQUET)..."
+    log "[2/5] Running permute (consuming master: $MASTER_PARQUET)..."
     log "      qr_permute reads observed mt_t from the master and scores it against the null"
     log "      built from $DATA_DIR (M/G/C). It fail-closes if the master's covariate design"
     log "      does not match this C.csv (DF=$DF)."
@@ -421,7 +437,7 @@ if [ "$START_STAGE" == "eval" ]; then EXECUTE=1; fi
 
 # Stage 3: eval
 if [ $EXECUTE -eq 1 ]; then
-    log "[3/4] Running eval..."
+    log "[3/5] Running eval..."
     [ -s "$PERM_OUTPUT" ] || { log "Error: $PERM_OUTPUT missing or empty. Run with --start-stage permute first."; exit 1; }
 
     python3 -u tools/eval_permute.py \
@@ -436,7 +452,7 @@ fi
 
 
 if [ $EXECUTE -eq 1 ]; then
-    log "[4/4] Running summary..."
+    log "[4/5] Running summary..."
     python3 -u tools/summarize_permute.py \
         --perm-output "$PERM_OUTPUT" \
         --report "${OUT_DIR}/eval_permute_report.json" \
@@ -445,4 +461,168 @@ if [ $EXECUTE -eq 1 ]; then
         --g-annot "$ANNOT_DIR/G.bed6" \
         --out-dir "$OUT_DIR"
     log "Finished summarize_permute."
+fi
+
+# Stage 5: mainline annotation (p_permute + fdr_permute)
+#
+# Annotates the MAINLINE catalogs -- not the permute output. The permute run's
+# eval verdict licenses which strata may carry a permutation-named p; the values
+# themselves are the mainline float64 analytic p (precise_mt_p), which is the
+# quantity eval_permute.py actually validated.
+#
+# DENOMINATOR: --total-tests is the mapping grid size (the same TOTAL_TESTS
+# pipeline.sh passes at stage 7 of 9), NOT the permute run's tecpg_perm_n_reported.
+# n_reported is the permute universe (~1.8e7); the grid is ~1.3e10. Passing
+# n_reported would make every fdr_permute ~770x anti-conservative, and
+# summarizeOutput's total_tests >= total_rows guard would NOT catch it.
+if [ $EXECUTE -eq 1 ]; then
+    log "[5/5] Annotating mainline catalogs with p_permute / fdr_permute..."
+
+    EVAL_REPORT="${OUT_DIR}/eval_permute_report.json"
+    PERMUTE_PLOTS_DIR="${OUT_DIR}/permute_plots"
+    MAINLINE_STATUS=()
+
+    if [ $ANNOTATE_MAINLINE -eq 0 ]; then
+        log "      Skipped by request (--no-annotate-mainline)."
+    elif [ ! -s "$EVAL_REPORT" ]; then
+        log "Error: $EVAL_REPORT missing or empty; the licensing verdict is unavailable."
+        log "  p_permute is keyed on the per-region calibration verdict. Run the eval stage first"
+        log "  (--start-stage eval), or pass --no-annotate-mainline to skip this stage."
+        exit 1
+    else
+        mkdir -p "$PERMUTE_PLOTS_DIR"
+
+        for TARGET in "${OUT_DIR}/summarized.parquet" "${OUT_DIR}/bootstrap_merged.parquet"; do
+            TARGET_NAME="$(basename "$TARGET")"
+
+            if [ ! -s "$TARGET" ]; then
+                log "      $TARGET_NAME: SKIPPED -- not found (mainline pipeline.sh has not produced it)."
+                MAINLINE_STATUS+=("${TARGET_NAME}=SKIPPED(absent)")
+                continue
+            fi
+
+            # Idempotency guard, mirroring the [1/5] region guard: both downstream
+            # tools refuse to overwrite an existing column and would abort under
+            # set -e. Detect and skip instead so a re-run (e.g. --start-stage eval)
+            # does not kill the pipeline.
+            if python3 -c "import pyarrow.parquet as pq, sys; n=pq.read_schema('$TARGET').names; sys.exit(0 if ('p_permute' in n or 'fdr_permute' in n) else 1)"; then
+                log "      $TARGET_NAME: SKIPPED -- already carries p_permute/fdr_permute."
+                MAINLINE_STATUS+=("${TARGET_NAME}=SKIPPED(already annotated)")
+                continue
+            fi
+
+            # Required inputs for this target.
+            if ! python3 -c "import pyarrow.parquet as pq, sys; n=pq.read_schema('$TARGET').names; sys.exit(0 if ('region' in n and 'precise_mt_p' in n) else 1)"; then
+                log "Error: $TARGET_NAME lacks 'region' and/or 'precise_mt_p'."
+                log "  Both are mainline pipeline.sh products (stages 5 and 6 of 9). Refusing to annotate."
+                exit 1
+            fi
+
+            if [ -z "$TOTAL_TESTS" ]; then
+                log "Error: --total-tests is required to annotate $TARGET_NAME."
+                log "  It is the BH denominator and must be the MAPPING GRID size -- the same"
+                log "  TOTAL_TESTS pipeline.sh used at stage 7 of 9 for fdr_est. It is NOT the permute"
+                log "  run's tecpg_perm_n_reported."
+                exit 1
+            fi
+
+            # Cross-check against the mapping log when present (mirrors pipeline.sh).
+            MLR_LOG="mlr_run_${DATASET}.log"
+            if [ -f "$MLR_LOG" ]; then
+                LOG_TOTAL=$(grep -o 'TOTAL_TESTS=[0-9]*' "$MLR_LOG" | tail -n 1 | cut -d= -f2 || true)
+                if [ -n "$LOG_TOTAL" ] && [ "$LOG_TOTAL" != "$TOTAL_TESTS" ]; then
+                    log "Error: --total-tests ($TOTAL_TESTS) disagrees with TOTAL_TESTS=$LOG_TOTAL in $MLR_LOG."
+                    log "  fdr_permute must share fdr_est's denominator. Refusing to proceed."
+                    exit 1
+                fi
+            fi
+
+            ANNOT_TMP="${TARGET%.parquet}.p_permute.tmp.parquet"
+            FINAL_OUT="${TARGET%.parquet}.permute.parquet"
+            rm -f "$ANNOT_TMP"
+
+            IN_ROWS=$(python3 -c "import pyarrow.parquet as pq; print(pq.ParquetFile('$TARGET').metadata.num_rows)")
+
+            log "      $TARGET_NAME: [A] annotating p_permute from the verdict ($IN_ROWS rows)..."
+            python3 -u tools/annotate_permute_p.py \
+                --input "$TARGET" \
+                --output "$ANNOT_TMP" \
+                --eval-report "$EVAL_REPORT" \
+                --p-source precise_mt_p \
+                --p-column p_permute
+
+            A_ROWS=$(python3 -c "import pyarrow.parquet as pq; print(pq.ParquetFile('$ANNOT_TMP').metadata.num_rows)")
+            if [ "$A_ROWS" != "$IN_ROWS" ]; then
+                log "Error: annotate wrote $A_ROWS rows from $IN_ROWS input rows for $TARGET_NAME."
+                rm -f "$ANNOT_TMP"
+                exit 1
+            fi
+
+            # summarizeOutput_parquet.py REQUIRES --reservoir-file and exits 1 if the
+            # path is missing, which under set -e would abort the whole pipeline at its
+            # last stage. The reservoir is guaranteed present under --reservoir and
+            # --cis-enrich but NOT under a bare --master-parquet run. It feeds only the
+            # advisory lambda_GC and QQ plot, neither of which gates anything here, so
+            # fall back to an empty reservoir and say so rather than dying.
+            PERM_RESERVOIR="${OUT_DIR}/sample_reservoir.csv"
+            if [ ! -s "$PERM_RESERVOIR" ]; then
+                PERM_RESERVOIR="${PERMUTE_PLOTS_DIR}/empty_reservoir.csv"
+                printf 'mt_id,gt_id,mt_t\n' > "$PERM_RESERVOIR"
+                log "      No sample_reservoir.csv in $OUT_DIR; using an empty reservoir."
+                log "      lambda_GC and the QQ plot are SKIPPED for this pass. Both are"
+                log "      advisory and neither affects p_permute or fdr_permute."
+            fi
+
+            log "      $TARGET_NAME: [B] BH over p_permute (denominator TOTAL_TESTS=$TOTAL_TESTS)..."
+            python3 -u tools/summarizeOutput_parquet.py \
+                --main-file "$ANNOT_TMP" \
+                --reservoir-file "$PERM_RESERVOIR" \
+                --total-tests "$TOTAL_TESTS" \
+                --df "$DF" \
+                --p-column p_permute \
+                --fdr-column fdr_permute \
+                --calculate-fdr \
+                --output-fdr-file "$FINAL_OUT"
+
+            # Truncation guard. summarizeOutput_parquet.py catches exceptions in its
+            # output-write loop, prints, and does NOT exit; its finally-block closes
+            # the writer, finalizing a VALID, READABLE, SILENTLY TRUNCATED parquet at
+            # exit 0. Neither $? nor [ -s ] can detect this. Row count can.
+            if [ ! -s "$FINAL_OUT" ]; then
+                log "Error: BH stage produced no output at $FINAL_OUT for $TARGET_NAME."
+                rm -f "$ANNOT_TMP"
+                exit 1
+            fi
+            F_ROWS=$(python3 -c "import pyarrow.parquet as pq; print(pq.ParquetFile('$FINAL_OUT').metadata.num_rows)")
+            if [ "$F_ROWS" != "$IN_ROWS" ]; then
+                log "Error: TRUNCATED OUTPUT. $FINAL_OUT has $F_ROWS rows; expected $IN_ROWS."
+                log "  summarizeOutput_parquet.py exits 0 on a mid-write failure. Check the log above"
+                log "  for 'Error writing output FDR file'. The partial output is being removed."
+                rm -f "$FINAL_OUT" "$ANNOT_TMP"
+                exit 1
+            fi
+
+            # summarizeOutput writes its plots to the CWD; move them aside so they do
+            # not collide with the mainline QQ/histogram (pipeline.sh:308 moves those
+            # into OUT_DIR from the same filenames).
+            for png in p_value_histogram.png qq_plot.png saliency_profile_top50.png; do
+                [ -f "$png" ] && mv "$png" "${PERMUTE_PLOTS_DIR}/${TARGET_NAME%.parquet}.${png}"
+            done
+
+            rm -f "$ANNOT_TMP"
+            log "      $TARGET_NAME: annotated -> $FINAL_OUT ($F_ROWS rows)"
+            MAINLINE_STATUS+=("${TARGET_NAME}=ANNOTATED(${FINAL_OUT})")
+        done
+    fi
+
+    log "------------------------------------------------------------"
+    log "Mainline annotation summary:"
+    if [ ${#MAINLINE_STATUS[@]} -eq 0 ]; then
+        log "  (stage did not run)"
+    else
+        for st in "${MAINLINE_STATUS[@]}"; do log "  $st"; done
+    fi
+    log "  NOTE: pipelinePost.sh still reads the UN-annotated bootstrap_merged.parquet."
+    log "        Repointing it is a separate, deliberate change."
+    log "------------------------------------------------------------"
 fi
