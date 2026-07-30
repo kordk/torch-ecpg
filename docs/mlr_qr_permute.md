@@ -154,6 +154,62 @@ The output is the **master parquet with `perm_mt_p` merged on** — keyed on `(m
 
 ---
 
+### 3.10 Column reference
+
+Every per-pair quantity the pipeline computes, the artifact it first appears in, and what it means. Columns are **carried forward** from the artifact that creates them: each stage writes a new file and appends, so a column present at one row of this table is present in every artifact below it in the same chain. The two chains are independent — the mainline catalogs and the permutation output are separate files built from separate runs, and no column crosses between them.
+
+`(mt_id, gt_id)` is the join key throughout: the methylation probe and the gene/transcript of a tested pair.
+
+#### Mainline chain — `pipeline.sh`
+
+| Column | First appears in | Written by | Description |
+|---|---|---|---|
+| `mt_id`, `gt_id` | `merged.parquet` | `tecpg run mlr --mlr-method qr` (stage 3 of 9) | Pair identity. Emitted as a two-level index by the mapper and promoted to columns during merge. |
+| `mt_est`, `mt_err`, `mt_t`, `mt_p` | `merged.parquet` | same | Methylation coefficient, its standard error, the t-statistic, and the two-sided analytic p. `mt_p` is **float32** and saturates below roughly `1e-7`; see `precise_mt_p`. |
+| `const_est`, `const_err`, `const_t`, `const_p` | `merged.parquet` | same | The intercept term's regression outputs. |
+| `<covariate>_est`, `_err`, `_t`, `_p` | `merged.parquet` | same | One quartet per column of `C.csv`, named after the covariate. |
+| `mt_ig`, `<covariate>_ig` | `merged.parquet` | same, with `--compute-ig` | Integrated-gradients attribution per pair. Present only when IG is requested; the covariate set is controlled by the IG covariate filter. |
+| `mt_chrom`, `mt_chromStart`, `mt_strand` | `annotated.parquet` | `tools/assignRegionToEcpg_parquet.py` (stage 5 of 9) | Probe coordinates, joined from `M.bed6`. |
+| `gt_chrom`, `gt_chromStart`, `gt_strand` | `annotated.parquet` | same | Gene coordinates, joined from `G.bed6`. `gt_chromStart` is the TSS. |
+| `region` | `annotated.parquet` | same | The canonical 7-way label: `PROMOTER`, `GENEBODY`, `CIS5`, `CIS3`, `DISTAL5`, `DISTAL3`, `TRANS`. One label per row, assigned by an if/elif chain, so the labels partition the rows exactly. Null where annotation was missing. This tool is the single region authority; nothing downstream re-derives it. |
+| `precise_mt_p` | `annotated_pcalc.parquet` | `tools/recalculate_pvalues_parquet.py` (stage 6 of 9) | The two-sided analytic p recomputed in **float64** from the stored `mt_t` and the run's degrees of freedom. This is the p-value of record for ranking and for FDR — `mt_p` is retained unchanged beside it but must not be used as a fallback, since float32 cancellation places an artificial floor near `5.96e-08`. |
+| `fdr_est` | `summarized.parquet` | `tools/summarizeOutput_parquet.py` (stage 7 of 9) | Benjamini–Hochberg FDR over `precise_mt_p`, with the step-down monotonicity constraint applied. The denominator is `TOTAL_TESTS`, the full mapping grid, not the row count of the catalog — the catalog is the top-N surviving the mapping threshold, so the correction must reference the universe actually tested. |
+| `is_significant` | `summarized.parquet` | same, with `--assign-fdr-passfail` | Boolean pass/fail against the FDR threshold. **Not produced on the golden path**; `pipeline.sh` does not pass this flag. |
+| `mt_est_boot_mean`, `mt_est_boot_std` | `bootstrap_merged.parquet` | `tecpg run mlr --mlr-method qr_bootstrap` (stage 9 of 9) | Mean and standard deviation of the methylation coefficient across resamples, over finite draws only. |
+| `ci_low`, `ci_high` | `bootstrap_merged.parquet` | same | The 2.5% and 97.5% quantiles of the resampled coefficient — a 95% percentile confidence interval. |
+| `p_boot` | `bootstrap_merged.parquet` | same | Two-sided empirical bootstrap p: twice the smaller of the proportions of resampled coefficients at or below and at or above zero, clamped at 1. Floored at `1/finite_count` for that pair, so a strictly one-sided resample distribution reports the smallest representable value rather than exactly zero. |
+| `degenerate_resamples` | `bootstrap_merged.parquet` | same | Count of resamples that produced a non-finite estimate (rank-deficient draws). These are excluded from every statistic above, and this count is the per-pair denominator adjustment. |
+| `seed` | `bootstrap_merged.parquet` | same | The RNG seed actually used, stamped on every row so a run is reproducible from its artifact. |
+
+Bootstrap runs only over the pairs selected into `bootstrap_list.csv`, with `summarized.parquet` as its master, so `bootstrap_merged.parquet` is a row subset of the catalog carrying all of the columns above.
+
+#### Permutation chain — `pipelinePermute.sh`
+
+The permutation master is assembled independently of the mainline catalog. `tools/build_gene_anchored_master.py` and `tools/reservoir_to_parquet.py` both subset to `{mt_id, gt_id, mt_t}`, adding `mt_p` only when both sources carry it. **`precise_mt_p` is not present in the permutation chain**: the reservoir and the cis write-all map both bypass mainline stage 6 of 9, which is the only place that column is ever computed.
+
+| Column | First appears in | Written by | Description |
+|---|---|---|---|
+| `mt_id`, `gt_id`, `mt_t` | the master parquet | `tools/build_gene_anchored_master.py` or `tools/reservoir_to_parquet.py` | Pair identity and the observed t-statistic, **read from the mapping run and never recomputed**. `mt_t` is what the permutation null scores against. |
+| `mt_p` | the master parquet | same | Carried through only when present in every source. The float32 analytic p, subject to the same saturation floor noted above. |
+| `region` | the annotated master | `tools/assignRegionToEcpg_parquet.py` (permute stage 1) | The same 7-way label from the same authority as the mainline chain. Rides through the permute merge so the evaluation can stratify on it. Skipped with `--no-assign-regions`, in which case the evaluation falls back to a coarser two-way split. |
+| `perm_mt_p` | `permutation_results.parquet` | `tecpg run mlr --mlr-method qr_permute` (permute stage 2) | The permutation-null p for the pair: the empirical tail probability of the observed \|t\| against the chromosome-stratified, design-fixed Freedman–Lane null, with a generalized-Pareto fit beyond the empirical threshold. **float64.** Null for master rows that were not scored. |
+| `seed`, `n_perm` | `permutation_results.parquet` | same | Run-level constants stamped on every row: the RNG seed and the number of permutations. Also written to parquet schema metadata as `tecpg_perm_seed` and `tecpg_perm_n_perm`, alongside `tecpg_perm_n_reported` and `tecpg_perm_n_null_pairs`. |
+
+`tools/eval_permute.py` and `tools/summarize_permute.py` are **readers**. They consume `permutation_results.parquet` and emit `eval_permute_report.json` and a markdown summary; neither writes a column, and the report carries a per-region calibration verdict rather than any p-value.
+
+#### Pending — Phase 4 mainline annotation
+
+| Column | Target artifact | Written by | Description |
+|---|---|---|---|
+| `p_permute` | a new `*.permute.parquet` | `tools/annotate_permute_p.py` | The analytic p-value **licensed by the permutation verdict**: `precise_mt_p` copied forward for rows whose region calibrated against the permutation null, null elsewhere. It is a licensed selection of an existing quantity, not an independently measured one — `perm_mt_p` is the measured permutation p. A region is licensed when its status is `ok` or `reference` **and** it is absent from `divergent_regions`; note that divergent regions carry status `ok`, so status alone is not the predicate. |
+| `fdr_permute` | a new `*.permute.parquet` | `tools/summarizeOutput_parquet.py` | Benjamini–Hochberg FDR over `p_permute`, sharing `fdr_est`'s `TOTAL_TESTS` denominator. Null wherever `p_permute` is null, so "not assessed" stays distinguishable from "assessed and not significant". When every region in a catalog is licensed, this column is identical to `fdr_est` by construction; it diverges — upward, more conservative — as strata drop out. |
+
+Both are additive: the stage writes a new file and neither `mt_p`, `precise_mt_p`, nor `fdr_est` is modified. Downstream ranking is unchanged — `tools/createBootstrapList.py` continues to rank on `precise_mt_p`.
+
+> **Retention.** Every stage in both chains writes a new artifact rather than editing in place, and every intermediate is kept: `merged` → `annotated` → `annotated_pcalc` → `summarized` → `bootstrap_merged` on the mainline side, and the master → `permutation_results` on the permutation side. Writes are additive by contract — `region` fails closed if the column already exists, `precise_mt_p` is appended, and `perm_mt_p`, `p_boot`, and `fdr_permute` refuse or drop only their own prior column on a re-run. Permutation output is retained for independent evaluation whether or not a given study elects to use it downstream.
+
+---
+
 ## 4. Architecture
 
 `qr_permute` is registered as a `--mlr-method` value and implemented in its own module, `tecpg/permute.py`, mirroring `qr_bootstrap`. Key architectural choices:
