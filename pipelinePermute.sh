@@ -19,6 +19,7 @@ CIS_ENRICH=0
 CIS_WINDOW=1000000
 TOTAL_TESTS=""
 ANNOTATE_MAINLINE=1
+N_NULL_PAIRS=""
 
 PERMUTE_ARGS=()
 
@@ -36,16 +37,16 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -h, --help                     Show this help message and exit"
-            echo "      --master-parquet PATH      REQUIRED (if no --reservoir). Existing mapping output parquet."
+            echo "      --master-parquet PATH      Overrides --cis-enrich. Existing mapping output parquet."
             echo "                                 Also accepts the reservoir directly: a *.csv PATH (e.g."
             echo "                                 sample_reservoir.csv) is converted to reservoir_master.parquet,"
             echo "                                 and a not-yet-built reservoir_master.parquet is built from its"
             echo "                                 sibling sample_reservoir.csv."
-            echo "      --reservoir                REQUIRED (if no --master-parquet). Convert and use sample_reservoir.csv"
+            echo "      --reservoir                Overrides --cis-enrich. Convert and use sample_reservoir.csv"
             echo "                                 whose (mt_id, gt_id) universe is scored. Must have been"
             echo "                                 mapped from the SAME data_<ds> (same covariate design);"
             echo "                                 qr_permute fail-closes at runtime if the design mismatches."
-            echo "      --cis-enrich               REQUIRED (if no --master-parquet/--reservoir). Cis-window enrichment"
+            echo "      --cis-enrich               [DEFAULT] Instead of a flat reservoir, build a unified master from"
             echo "                                 analysis: runs a cis write-all map, assembles the near-gene pairs"
             echo "                                 with the reservoir's trans/distal pairs (build_gene_anchored_master.py),"
             echo "                                 and scores the assembled master. Needs output_<ds>/sample_reservoir.csv"
@@ -58,6 +59,8 @@ while [[ "$#" -gt 0 ]]; do
             echo "                                 same TOTAL_TESTS pipeline.sh uses for fdr_est -- NOT the"
             echo "                                 permute run's tecpg_perm_n_reported. Cross-checked against"
             echo "                                 mlr_run_<ds>.log when that log is present."
+            echo "      --n-null-pairs N           Fallback for permutation parquets written before tecpg_perm_n_null_pairs"
+            echo "                                 was stamped. Passed directly to eval_permute."
             echo "      --no-annotate-mainline     Skip stage [5/5] (mainline p_permute/fdr_permute annotation)."
             echo "  -d, --dataset DATASET          Specify the dataset to use. Options: dummy (default), gtpsub, gtp, mesa"
             echo "  -m, --mapping MAPPING          Region flag passed to qr_permute. Options: all (default)."
@@ -105,6 +108,10 @@ while [[ "$#" -gt 0 ]]; do
             TOTAL_TESTS="$2"
             shift 2
             ;;
+        --n-null-pairs)
+            N_NULL_PAIRS="$2"
+            shift 2
+            ;;
         --no-annotate-mainline)
             ANNOTATE_MAINLINE=0
             shift
@@ -140,6 +147,20 @@ done
 # qr_permute is a post-mapping consumer: it requires an observed statistic master.
 # Exactly one master source: an existing --master-parquet, the --reservoir, or
 # --cis-enrich (which BUILDS the master from a cis map + the reservoir).
+
+# Default master source. Applied only when no source was given explicitly,
+# so the mutual-exclusion guard below still sees exactly one source and
+# stays argument-order-independent. Do NOT move this into the parse cases:
+# MODE_COUNT is computed after the parse loop, so clearing CIS_ENRICH there
+# makes `--cis-enrich --master-parquet X` and `--master-parquet X
+# --cis-enrich` behave differently.
+if [ -z "$MASTER_PARQUET" ] && [ $USE_RESERVOIR -eq 0 ] && [ $CIS_ENRICH -eq 0 ]; then
+    CIS_ENRICH=1
+    CIS_ENRICH_DEFAULTED=1
+else
+    CIS_ENRICH_DEFAULTED=0
+fi
+
 MODE_COUNT=0
 [ -n "$MASTER_PARQUET" ] && MODE_COUNT=$((MODE_COUNT + 1))
 [ $USE_RESERVOIR -eq 1 ] && MODE_COUNT=$((MODE_COUNT + 1))
@@ -440,12 +461,27 @@ if [ $EXECUTE -eq 1 ]; then
     log "[3/5] Running eval..."
     [ -s "$PERM_OUTPUT" ] || { log "Error: $PERM_OUTPUT missing or empty. Run with --start-stage permute first."; exit 1; }
 
-    python3 -u tools/eval_permute.py \
-        --perm-output "$PERM_OUTPUT" \
-        --m-annot "$ANNOT_DIR/M.bed6" \
-        --g-annot "$ANNOT_DIR/G.bed6" \
-        --df "$DF" \
+    if [ -s "$OUT_DIR/eval_permute_report.json" ]; then
+        BACKUP_PATH="${OUT_DIR}/eval_permute_report.$(date +%Y%m%d-%H%M%S).json"
+        if [ ! -f "$BACKUP_PATH" ]; then
+            cp "$OUT_DIR/eval_permute_report.json" "$BACKUP_PATH" || { log "Error: Failed to backup eval report to $BACKUP_PATH"; exit 1; }
+            log "Backed up existing eval report to $BACKUP_PATH"
+        fi
+    fi
+
+    EVAL_ARGS=(
+        --perm-output "$PERM_OUTPUT"
+        --m-annot "$ANNOT_DIR/M.bed6"
+        --g-annot "$ANNOT_DIR/G.bed6"
+        --df "$DF"
         --out-dir "$OUT_DIR"
+    )
+
+    if [ -n "$N_NULL_PAIRS" ]; then
+        EVAL_ARGS+=( --n-null-pairs "$N_NULL_PAIRS" )
+    fi
+
+    python3 -u tools/eval_permute.py "${EVAL_ARGS[@]}"
 
     log "Finished eval_permute. Report at $OUT_DIR/eval_permute_report.json"
 fi
@@ -492,6 +528,64 @@ if [ $EXECUTE -eq 1 ]; then
     else
         mkdir -p "$PERMUTE_PLOTS_DIR"
 
+        # Resolve TOTAL_TESTS for fdr_permute
+        MLR_LOG="mlr_run_${DATASET}.log"
+        TOTAL_TESTS_SOURCE=""
+        if [ -n "$TOTAL_TESTS" ]; then
+            if [ -f "$MLR_LOG" ]; then
+                LOG_TOTAL=$(grep -o 'TOTAL_TESTS=[0-9]*' "$MLR_LOG" | tail -n 1 | cut -d= -f2 || true)
+                if [ -n "$LOG_TOTAL" ] && [ "$LOG_TOTAL" != "$TOTAL_TESTS" ]; then
+                    log "Error: --total-tests ($TOTAL_TESTS) disagrees with TOTAL_TESTS=$LOG_TOTAL in $MLR_LOG."
+                    log "  fdr_permute must share fdr_est's denominator. Refusing to proceed."
+                    exit 1
+                fi
+                TOTAL_TESTS_SOURCE="--total-tests (cross-checked against mlr_run_${DATASET}.log)"
+            else
+                TOTAL_TESTS_SOURCE="--total-tests (no mapping log present)"
+            fi
+        else
+            if [ -f "$MLR_LOG" ]; then
+                LOG_TOTAL=$(grep -o 'TOTAL_TESTS=[0-9]*' "$MLR_LOG" | tail -n 1 | cut -d= -f2 || true)
+                if [ -n "$LOG_TOTAL" ]; then
+                    TOTAL_TESTS="$LOG_TOTAL"
+                    TOTAL_TESTS_SOURCE="derived from mlr_run_${DATASET}.log"
+                else
+                    log "Error: Could not resolve TOTAL_TESTS. --total-tests was absent, and $MLR_LOG yielded no value."
+                    log "  --total-tests may be supplied explicitly."
+                    exit 1
+                fi
+            else
+                log "Error: Could not resolve TOTAL_TESTS. --total-tests was absent, and $MLR_LOG is missing."
+                log "  --total-tests may be supplied explicitly."
+                exit 1
+            fi
+        fi
+
+        # Extract GENES_EVAL and LOCI_EVAL
+        if [ -f "$MLR_LOG" ]; then
+            GENES_EVAL=$(grep -o 'Genes evaluated: [0-9]*' "$MLR_LOG" | tail -n 1 | grep -o '[0-9]*' || true)
+            LOCI_EVAL=$(grep -o 'Methylation loci evaluated: [0-9]*' "$MLR_LOG" | tail -n 1 | grep -o '[0-9]*' || true)
+            LOG_MTIME=$(date -r "$MLR_LOG" || echo "n/a")
+        else
+            GENES_EVAL=""
+            LOCI_EVAL=""
+            LOG_MTIME="n/a"
+        fi
+
+        if [ -z "$GENES_EVAL" ] || [ -z "$LOCI_EVAL" ]; then
+            GRID_DIMS="unavailable"
+            log "      (Dimension validation will be skipped; GENES_EVAL or LOCI_EVAL could not be extracted)"
+        else
+            GRID_DIMS="${GENES_EVAL} genes x ${LOCI_EVAL} loci"
+        fi
+
+        log "[5/5] BH denominator resolution:"
+        log "        TOTAL_TESTS = $TOTAL_TESTS"
+        log "        source      = $TOTAL_TESTS_SOURCE"
+        log "        log mtime   = $LOG_MTIME"
+        log "        grid dims   = $GRID_DIMS"
+        log "        cis default = $CIS_ENRICH_DEFAULTED"
+
         for TARGET in "${OUT_DIR}/summarized.parquet" "${OUT_DIR}/bootstrap_merged.parquet"; do
             TARGET_NAME="$(basename "$TARGET")"
 
@@ -518,24 +612,11 @@ if [ $EXECUTE -eq 1 ]; then
                 exit 1
             fi
 
-            if [ -z "$TOTAL_TESTS" ]; then
-                log "Error: --total-tests is required to annotate $TARGET_NAME."
-                log "  It is the BH denominator and must be the MAPPING GRID size -- the same"
-                log "  TOTAL_TESTS pipeline.sh used at stage 7 of 9 for fdr_est. It is NOT the permute"
-                log "  run's tecpg_perm_n_reported."
-                exit 1
-            fi
-
-            # Cross-check against the mapping log when present (mirrors pipeline.sh).
-            MLR_LOG="mlr_run_${DATASET}.log"
-            if [ -f "$MLR_LOG" ]; then
-                LOG_TOTAL=$(grep -o 'TOTAL_TESTS=[0-9]*' "$MLR_LOG" | tail -n 1 | cut -d= -f2 || true)
-                if [ -n "$LOG_TOTAL" ] && [ "$LOG_TOTAL" != "$TOTAL_TESTS" ]; then
-                    log "Error: --total-tests ($TOTAL_TESTS) disagrees with TOTAL_TESTS=$LOG_TOTAL in $MLR_LOG."
-                    log "  fdr_permute must share fdr_est's denominator. Refusing to proceed."
-                    exit 1
-                fi
-            fi
+            # Check catalog grid (validation)
+            GRID_ARGS=(--catalog "$TARGET")
+            if [ -n "$GENES_EVAL" ]; then GRID_ARGS+=(--max-genes "$GENES_EVAL"); fi
+            if [ -n "$LOCI_EVAL" ]; then GRID_ARGS+=(--max-loci "$LOCI_EVAL"); fi
+            python3 tools/check_catalog_grid.py "${GRID_ARGS[@]}"
 
             ANNOT_TMP="${TARGET%.parquet}.p_permute.tmp.parquet"
             FINAL_OUT="${TARGET%.parquet}.permute.parquet"
