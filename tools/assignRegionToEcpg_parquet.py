@@ -14,10 +14,6 @@ import pandas as pd
 
 ## DEFAULTS - Kennedy et al. BMC Genomics (2018) 19:476
 
-#PVALCUTOFF=0.00001                   ## 10-5 is "suggestive" in Kennedy 2018
-#PVALCUTOFF=0.00000000001             ## 10-11 is "significant" in Kennedy 2018
-PVALCUTOFF = np.float32(0.000001)     ## 10-6 is our "exploratory" cutoff
-
 ## DISTAL >50Kb TSS
 DISTAL_OFFSET = 50000
 
@@ -599,7 +595,6 @@ def main():
         sys.exit(1)
 
     ## summarize the p-values
-    logger.info(f"[MAIN] Using default p-value cutoff of {PVALCUTOFF}")
     reportPvalues(ecpgDataFile, pval_col, chunk_size)
 
     ## Annotate the pairs

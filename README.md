@@ -542,9 +542,10 @@ HT-12 mapping pipeline (Re-Annotator → GEO → UCSC WG-6, with NA
 fallback and provenance tracking) and correctly handles unmapped
 probes, alternate/unplaced contigs, and pseudoautosomal labels. The
 defaults follow Kennedy et al. *BMC Genomics* (2018) **19:476**:
-`PVALCUTOFF = 1e-6` (exploratory), `CIS < 50 kb` upstream of TSS,
-`DISTAL > 50 kb` from TSS, and `PROMOTER ± 2.5 kb` of TSS. Override
-these in the script's defaults block if you need different cutoffs.
+`CIS < 50 kb` upstream of TSS, `DISTAL > 50 kb` from TSS, and
+`PROMOTER ± 2.5 kb` of TSS. Override these in the script's defaults
+block if you need different cutoffs. The script annotates every row it
+is given; it applies no p-value filter of its own.
 
 > **Legacy CSV path:** the original per-chunk CSV classifier
 > `tools/assignRegionToEcpg.py` is retained for backwards
