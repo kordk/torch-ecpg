@@ -31,6 +31,18 @@ START_STAGE="all"
 MLR_IG_COVARIATES="all"
 BOOTSTRAP_IG_COVARIATES="all"
 
+# Mapper p-value threshold. This is the FIRST filter in the pipeline and the
+# rule that decides which pairs enter the catalog at all: the mapper keeps a
+# pair only if its p-value is <= this value. tecpg's own `-p` default for
+# `run mlr` is 0.001; it is set explicitly here so the value appears in the run
+# log and can be cited in methods instead of being an implicit CLI default.
+# The threshold is applied to the float32 `mt_p` column inside the mapper,
+# before Stage 6 recomputes `precise_mt_p` in float64. float32 is sound AT this
+# cutoff (|t| ~ 3.3, far above the ~5.96e-08 cancellation floor), but the
+# ranking within the retained set is not -- that is what Stage 6 repairs.
+# Changing this value changes the catalog and therefore every downstream count.
+MAP_P_THRESH="0.001"
+
 # Chunk sizes for `tecpg run mlr` are intentionally NOT set here. As of
 # tecpg 1.21.0-dev the CLI's anchored auto-sizer (`_auto_chunk_sizes` in
 # tecpg/cli.py) picks `--gene-loci-per-chunk` and `--meth-loci-per-chunk`
@@ -216,6 +228,7 @@ if [ "${#MLR_CHUNK_ARGS[@]}" -gt 0 ]; then
 else
     log "Chunk sizes auto-selected by tecpg CLI from host budget. Input: $DATA_DIR, Annotations: $ANNOT_DIR, Output: $OUT_DIR"
 fi
+log "Mapper p-value threshold: -p $MAP_P_THRESH (catalog inclusion gate, applied to float32 mt_p)"
 
 # Ensure pipefail is set so pipeline errors (like in mlr) are not masked by tee
 set -o pipefail
@@ -225,7 +238,7 @@ if [ "$MLR_IG_COVARIATES" = "all" ]; then
 elif [ -n "$MLR_IG_COVARIATES" ] && [ "$MLR_IG_COVARIATES" != "none" ]; then
     MLR_IG_ARGS+=(--ig-covariates-list "$MLR_IG_COVARIATES")
 fi
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr --$MAPPING "${MLR_CHUNK_ARGS[@]}" --compute-ig "${MLR_IG_ARGS[@]}" 2>&1 | tee "mlr_run_${DATASET}.log"
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr --$MAPPING -p "$MAP_P_THRESH" "${MLR_CHUNK_ARGS[@]}" --compute-ig "${MLR_IG_ARGS[@]}" 2>&1 | tee "mlr_run_${DATASET}.log"
 set +o pipefail
 fi
 
