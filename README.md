@@ -157,11 +157,14 @@ stages. Each stage name (in `code`) matches the value accepted by
 `--start-stage`, so any individual step can be re-run in isolation.
 
 1. **`map` — eQTM mapping** *(stage `[3/9]`)*. Runs `tecpg ... run
-   mlr --mlr-method qr --<mapping> --compute-ig`, with chunk sizes
-   auto-selected by the CLI's `_auto_chunk_sizes` (overridable by
-   exporting `TECPG_M_CHUNK` / `TECPG_G_CHUNK`). Logs are tee'd to
-   `mlr_run_<dataset>.log` and `TOTAL_TESTS` is extracted from that
-   log for downstream FDR.
+   mlr --mlr-method qr --<mapping> -p "$MAP_P_THRESH" --compute-ig`,
+   with chunk sizes auto-selected by the CLI's `_auto_chunk_sizes`
+   (overridable by exporting `TECPG_M_CHUNK` / `TECPG_G_CHUNK`).
+   `MAP_P_THRESH` (default `0.001`, matching the CLI's own `-p`
+   default) is the catalog's inclusion gate: pairs above it are never
+   written. It is set explicitly in `pipeline.sh` so it appears in the
+   run log. Logs are tee'd to `mlr_run_<dataset>.log` and
+   `TOTAL_TESTS` is extracted from that log for downstream FDR.
 2. **`merge` — Merge chunked output** *(stage `[4/9]`)*.
    `tools/mergeOutputs.py` combines per-chunk files into a single
    `output_<dataset>/merged.parquet`; intermediate chunk files are
