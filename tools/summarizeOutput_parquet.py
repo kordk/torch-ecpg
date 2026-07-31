@@ -146,6 +146,12 @@ Outputs and Metrics Calculated:
 
     parser.add_argument("--p-column", default=DEFAULT_P_COLUMN, help=f"Name of the p-value column to rank and correct. Default: {DEFAULT_P_COLUMN}.")
     parser.add_argument("--fdr-column", default=DEFAULT_FDR_COLUMN, help=f"Name of the FDR column to write. Default: {DEFAULT_FDR_COLUMN}. Must not name an existing column.")
+    parser.add_argument("--compare-fdr-column", default=None,
+                        help="Name of an EXISTING FDR column to compare the newly written --fdr-column "
+                             "against. Optional; off by default. When the two columns share a BH pool and "
+                             "denominator they must agree exactly; when the new pool is a strict subset the "
+                             "new values must be greater than or equal, never smaller. A smaller value is "
+                             "reported as a VIOLATION and exits non-zero.")
 
     fdr_group = parser.add_mutually_exclusive_group()
     fdr_group.add_argument("--calculate-fdr", action="store_true", help="Calculate and append an estimated FDR column (see --fdr-column).")
@@ -558,6 +564,18 @@ Outputs and Metrics Calculated:
     # Write FDR Output
     if args.output_fdr_file:
         print(f"\nWriting output FDR Parquet file to: {args.output_fdr_file}")
+
+        do_compare = args.compare_fdr_column is not None
+        if do_compare and args.compare_fdr_column not in schema_cols:
+            print(f"Notice: --compare-fdr-column '{args.compare_fdr_column}' not found in schema. Skipping comparison.")
+            do_compare = False
+
+        cmp_n_comparable = 0
+        cmp_max_abs_diff = 0.0
+        cmp_min_diff = np.inf
+        cmp_n_new_null_ref_present = 0
+        cmp_n_new_present_ref_null = 0
+
         writer = None
         try:
             for i, batch in enumerate(parquet_file.iter_batches(batch_size=args.chunk_size)):
@@ -593,6 +611,31 @@ Outputs and Metrics Calculated:
                     mapped[~source_is_null] = mapped[~source_is_null].fillna(1.0)
                     df_chunk[args.fdr_column] = mapped.values
 
+                if do_compare:
+                    new_vals = df_chunk[args.fdr_column].astype(np.float64).values
+                    ref_vals = df_chunk[args.compare_fdr_column].astype(np.float64).values
+
+                    new_is_na = np.isnan(new_vals)
+                    ref_is_na = np.isnan(ref_vals)
+
+                    cmp_n_new_null_ref_present += (new_is_na & ~ref_is_na).sum()
+                    cmp_n_new_present_ref_null += (~new_is_na & ref_is_na).sum()
+
+                    comparable_mask = ~new_is_na & ~ref_is_na
+                    if comparable_mask.any():
+                        c_new = new_vals[comparable_mask]
+                        c_ref = ref_vals[comparable_mask]
+                        diff = c_new - c_ref
+
+                        cmp_n_comparable += len(diff)
+                        chunk_max_abs = np.max(np.abs(diff))
+                        chunk_min = np.min(diff)
+
+                        if chunk_max_abs > cmp_max_abs_diff:
+                            cmp_max_abs_diff = chunk_max_abs
+                        if chunk_min < cmp_min_diff:
+                            cmp_min_diff = chunk_min
+
                 # Ensure coordinate columns are consistently typed as nullable Int64
                 # This prevents pyarrow from deducing int64 for chunks without nulls and float64 for chunks with nulls.
                 if 'mt_chromStart' in df_chunk.columns:
@@ -621,6 +664,36 @@ Outputs and Metrics Calculated:
         finally:
             if writer is not None:
                 writer.close()
+
+        if do_compare:
+            if cmp_n_comparable == 0:
+                verdict = "INFO (no comparable rows)"
+                cmp_min_diff_fmt = 0.0
+            elif cmp_min_diff < 0.0:
+                verdict = "VIOLATION (new FDR smaller than reference; check the BH denominator)"
+                cmp_min_diff_fmt = cmp_min_diff
+            elif cmp_max_abs_diff == 0.0:
+                verdict = "EQUAL (identical pools and denominator)"
+                cmp_min_diff_fmt = cmp_min_diff
+            else:
+                verdict = "DIRECTIONAL-OK (new pool is a subset; values moved upward only)"
+                cmp_min_diff_fmt = cmp_min_diff
+
+            if cmp_n_comparable == 0 and cmp_min_diff == np.inf:
+                cmp_min_diff_fmt = 0.0
+
+            print("-" * 60)
+            print(f"FDR comparison: {args.fdr_column} vs {args.compare_fdr_column}")
+            print(f"  comparable rows      : {cmp_n_comparable}")
+            print(f"  max|diff|            : {cmp_max_abs_diff:.6e}")
+            print(f"  min diff (signed)    : {cmp_min_diff_fmt:.6e}")
+            print(f"  rows left the pool   : {cmp_n_new_null_ref_present}")
+            print(f"  rows entered the pool: {cmp_n_new_present_ref_null}")
+            print(f"  VERDICT: {verdict}")
+            print("-" * 60)
+
+            if verdict.startswith("VIOLATION"):
+                sys.exit(1)
 
     # Histogram
     try:

@@ -279,3 +279,56 @@ def test_empty_input_fails_closed(tmp_path, input_parquet_path, eval_report_path
     assert "input contains no rows" in res.stderr
     assert not out.exists()
     assert not (tmp_path / "out.parquet.tmp").exists()
+
+def test_unlicensed_region_populated_fails_closed(tmp_path, input_parquet_path, eval_report_path, monkeypatch, capsys):
+    import tools.annotate_permute_p as app
+    import pandas as pd
+    import sys
+
+    original_isin = pd.Series.isin
+    def patched_isin(self, values):
+        res = original_isin(self, values)
+        if hasattr(self, 'name') and self.name == 'region':
+            genebody_mask = (self == 'GENEBODY')
+            res = res | genebody_mask
+        return res
+
+    monkeypatch.setattr(pd.Series, 'isin', patched_isin)
+
+    sys.argv = [
+        "annotate_permute_p.py",
+        "--input", str(input_parquet_path),
+        "--output", str(tmp_path / "out.parquet"),
+        "--eval-report", str(eval_report_path)
+    ]
+
+    with pytest.raises(SystemExit) as e:
+        app.main()
+
+    assert e.value.code == 1
+
+    captured = capsys.readouterr()
+    assert "Fail-closed: unlicensed region(s) carry populated p-values:" in captured.err
+    assert "GENEBODY" in captured.err
+
+def test_absent_region_rows_never_populated(tmp_path, input_parquet_path, eval_report_path, capsys):
+    out = tmp_path / "out.parquet"
+    res = run_tool(tmp_path, input_parquet_path, eval_report_path, out)
+    assert res.returncode == 0
+
+    import re
+    match = re.search(r"\(absent\)\s+-\s+no\s+(\d+)\s+(\d+)", res.stdout)
+    assert match is not None, "Could not find (absent) row in stdout"
+    n_rows = int(match.group(1))
+    n_populated = int(match.group(2))
+
+    assert n_rows > 0
+    assert n_populated == 0
+
+def test_provenance_line_names_source_and_target(tmp_path, input_parquet_path, eval_report_path):
+    out = tmp_path / "out.parquet"
+    res = run_tool(tmp_path, input_parquet_path, eval_report_path, out,
+                   ["--p-source", "precise_mt_p", "--p-column", "p_permute"])
+    assert res.returncode == 0
+
+    assert "Provenance: wrote 'p_permute' as a copy of 'precise_mt_p'" in res.stdout
