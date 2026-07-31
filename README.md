@@ -747,8 +747,8 @@ Visualization and network analysis:
 
 Benchmarking and profiling:
 
-* `tools/benchmark_kennedy.py` — comparison against the Kennedy et al.
-  benchmark.
+* `pipelineBenchmarkKennedy.sh` / `tools/benchmark_kennedy.py` — comparison against the Kennedy et al.
+  benchmark, standardizing thresholds (1e-5 and 1e-11) across cohorts.
 * `tools/io_microbench.py` — IO microbenchmarks for the save pool.
 * `profiling.sh` and `docs/profiling.md` — bottleneck diagnostic harness.
 
