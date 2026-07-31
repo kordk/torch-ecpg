@@ -135,6 +135,7 @@ def main():
                 if '(absent)' not in region_counts:
                     region_counts['(absent)'] = {'n_rows': 0, 'n_populated': 0}
                 region_counts['(absent)']['n_rows'] += null_mask.sum()
+                region_counts['(absent)']['n_populated'] += (~np.isnan(p_new[null_mask.values])).sum()
 
             # Fix coordinate columns as in summarizeOutput_parquet
             if 'mt_chromStart' in df_chunk.columns:
@@ -179,6 +180,8 @@ def main():
     os.replace(args.output + '.tmp', args.output)
 
     # 5. Output summary
+    print(f"Provenance: wrote '{args.p_column}' as a copy of '{args.p_source}' "
+          f"for licensed strata; unlicensed and null-region rows left null.")
     print(f"{'region':<11} {'status':<17} {'licensed':<10} {'n_rows':<11} {'n_populated'}")
 
     # We want to print all regions that are present (n_rows > 0)
@@ -198,6 +201,22 @@ def main():
         print(f"{'(absent)':<11} {'-':<17} {'no':<10} {stats['n_rows']:<11} {stats['n_populated']}")
 
     print(f"\nTotals: {total_rows} rows, {total_populated} populated. Recommendation: {recommendation}")
+
+    # Licensing-mask guard. A region that did not license must carry no populated
+    # p-values. A populated unlicensed region means the mask inverted or leaked --
+    # which would license precisely the strata the verdict excluded.
+    leaks = []
+    for r, stats in region_counts.items():
+        if r == '(absent)':
+            if stats['n_populated'] > 0:
+                leaks.append((r, stats['n_populated']))
+        elif r not in licensed and stats['n_populated'] > 0:
+            leaks.append((r, stats['n_populated']))
+    if leaks:
+        print("Fail-closed: unlicensed region(s) carry populated p-values:", file=sys.stderr)
+        for r, n in leaks:
+            print(f"  {r}: {n} populated rows", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

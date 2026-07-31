@@ -219,3 +219,177 @@ def test_bh_matches_hand_computed_reference(tmp_path, base_fixture):
     df_valid.iloc[sorted_idx, df_valid.columns.get_loc('hand_fdr')] = fdr_est
 
     pd.testing.assert_series_equal(df_valid['fdr_est'], df_valid['hand_fdr'], check_names=False)
+
+def run_fdr_tool(tmp_path, df_in, fdr_col, compare_col=None, total_tests=10):
+    main_file = tmp_path / "main.parquet"
+    res_file = tmp_path / "res.csv"
+    out_file = tmp_path / f"out_{fdr_col}.parquet"
+
+    df_in.to_parquet(main_file)
+    pd.DataFrame(columns=['mt_id', 'gt_id', 'mt_t', 'p_value']).to_csv(res_file, index=False)
+
+    cmd = [
+        "--main-file", str(main_file),
+        "--reservoir-file", str(res_file),
+        "--total-tests", str(total_tests),
+        "--df", "10",
+        "--calculate-fdr",
+        "--p-column", "p_source" if "p_source" in df_in.columns else "precise_mt_p",
+        "--fdr-column", fdr_col,
+        "--output-fdr-file", str(out_file)
+    ]
+    if compare_col:
+        cmd.extend(["--compare-fdr-column", compare_col])
+
+    return run_tool(cmd), out_file
+
+def test_compare_fdr_identical_pools_reports_equal(tmp_path):
+    df = pd.DataFrame({'mt_id': [1, 2, 3], 'gt_id': [1, 2, 3], 'precise_mt_p': [0.01, 0.05, 0.1]})
+    res1, out1 = run_fdr_tool(tmp_path, df, "fdr_est")
+    df2 = pd.read_parquet(out1)
+    df2["p_permute"] = df2["precise_mt_p"]
+    main_file2 = tmp_path / "main2.parquet"
+    res_file2 = tmp_path / "res2.csv"
+    out_file2 = tmp_path / "out2.parquet"
+    df2.to_parquet(main_file2)
+    pd.DataFrame(columns=['mt_id', 'gt_id', 'mt_t', 'p_value']).to_csv(res_file2, index=False)
+    res2 = run_tool([
+        "--main-file", str(main_file2), "--reservoir-file", str(res_file2), "--total-tests", "10",
+        "--df", "10", "--calculate-fdr", "--p-column", "p_permute", "--fdr-column", "fdr_permute",
+        "--compare-fdr-column", "fdr_est", "--output-fdr-file", str(out_file2)
+    ])
+    assert res2.returncode == 0
+    assert "VERDICT: EQUAL (identical pools and denominator)" in res2.stdout
+    assert "max|diff|            : 0.000000e+00" in res2.stdout
+
+def test_compare_fdr_subset_pool_reports_directional(tmp_path):
+    df = pd.DataFrame({'mt_id': [1, 2, 3, 4, 5], 'gt_id': [1, 2, 3, 4, 5], 'precise_mt_p': [0.001, 0.002, 0.003, 0.004, 0.005]})
+    res1, out1 = run_fdr_tool(tmp_path, df, "fdr_est")
+    df2 = pd.read_parquet(out1)
+    df2["p_permute"] = df2["precise_mt_p"]
+    df2.loc[1:2, "p_permute"] = np.nan
+    main_file2 = tmp_path / "main2.parquet"
+    res_file2 = tmp_path / "res2.csv"
+    out_file2 = tmp_path / "out2.parquet"
+    df2.to_parquet(main_file2)
+    pd.DataFrame(columns=['mt_id', 'gt_id', 'mt_t', 'p_value']).to_csv(res_file2, index=False)
+    res2 = run_tool([
+        "--main-file", str(main_file2), "--reservoir-file", str(res_file2), "--total-tests", "10",
+        "--df", "10", "--calculate-fdr", "--p-column", "p_permute", "--fdr-column", "fdr_permute",
+        "--compare-fdr-column", "fdr_est", "--output-fdr-file", str(out_file2)
+    ])
+    assert res2.returncode == 0
+    assert "VERDICT: DIRECTIONAL-OK" in res2.stdout
+    assert "rows left the pool   : 2" in res2.stdout
+    import re
+    match = re.search(r"min diff \(signed\)\s*:\s*([^\s]+)", res2.stdout)
+    assert match is not None
+    assert float(match.group(1)) >= 0.0
+
+def test_compare_fdr_smaller_denominator_is_violation(tmp_path):
+    df = pd.DataFrame({'mt_id': [1, 2, 3], 'gt_id': [1, 2, 3], 'precise_mt_p': [0.01, 0.05, 0.1]})
+    res1, out1 = run_fdr_tool(tmp_path, df, "fdr_est", total_tests=9)
+    df2 = pd.read_parquet(out1)
+    df2["p_permute"] = df2["precise_mt_p"]
+    main_file2 = tmp_path / "main2.parquet"
+    res_file2 = tmp_path / "res2.csv"
+    out_file2 = tmp_path / "out2.parquet"
+    df2.to_parquet(main_file2)
+    pd.DataFrame(columns=['mt_id', 'gt_id', 'mt_t', 'p_value']).to_csv(res_file2, index=False)
+    res2 = run_tool([
+        "--main-file", str(main_file2), "--reservoir-file", str(res_file2), "--total-tests", "3",
+        "--df", "10", "--calculate-fdr", "--p-column", "p_permute", "--fdr-column", "fdr_permute",
+        "--compare-fdr-column", "fdr_est", "--output-fdr-file", str(out_file2)
+    ])
+    assert res2.returncode == 1
+    assert "VERDICT: VIOLATION" in res2.stdout
+
+def test_compare_fdr_column_absent_prints_notice_and_skips(tmp_path, base_fixture):
+    main_file, res_file = base_fixture
+    out_file = tmp_path / "out.parquet"
+    res = run_tool([
+        "--main-file", str(main_file), "--reservoir-file", str(res_file), "--total-tests", "10",
+        "--df", "10", "--calculate-fdr", "--fdr-column", "fdr_est", "--compare-fdr-column", "missing_fdr",
+        "--output-fdr-file", str(out_file)
+    ])
+    assert res.returncode == 0
+    assert "Notice: --compare-fdr-column 'missing_fdr' not found in schema. Skipping comparison." in res.stdout
+    assert "FDR comparison:" not in res.stdout
+    assert out_file.exists()
+
+def test_compare_fdr_not_requested_prints_no_verdict_block(tmp_path, base_fixture):
+    main_file, res_file = base_fixture
+    out_file = tmp_path / "out.parquet"
+    res = run_tool([
+        "--main-file", str(main_file), "--reservoir-file", str(res_file), "--total-tests", "10",
+        "--df", "10", "--calculate-fdr", "--fdr-column", "fdr_est", "--output-fdr-file", str(out_file)
+    ])
+    assert res.returncode == 0
+    assert "FDR comparison:" not in res.stdout
+    assert out_file.exists()
+
+def test_compare_fdr_disjoint_nulls_excluded_from_comparable(tmp_path):
+    df = pd.DataFrame({'mt_id': [1, 2, 3, 4], 'gt_id': [1, 2, 3, 4], 'precise_mt_p': [0.01, 0.05, np.nan, 0.1]})
+    res1, out1 = run_fdr_tool(tmp_path, df, "fdr_est")
+    df2 = pd.read_parquet(out1)
+    df2["p_permute"] = [0.01, np.nan, 0.08, 0.1]
+    main_file2 = tmp_path / "main2.parquet"
+    res_file2 = tmp_path / "res2.csv"
+    out_file2 = tmp_path / "out2.parquet"
+    df2.to_parquet(main_file2)
+    pd.DataFrame(columns=['mt_id', 'gt_id', 'mt_t', 'p_value']).to_csv(res_file2, index=False)
+    res2 = run_tool([
+        "--main-file", str(main_file2), "--reservoir-file", str(res_file2), "--total-tests", "10",
+        "--df", "10", "--calculate-fdr", "--p-column", "p_permute", "--fdr-column", "fdr_permute",
+        "--compare-fdr-column", "fdr_est", "--output-fdr-file", str(out_file2)
+    ])
+    assert res2.returncode == 0
+    assert "comparable rows      : 2" in res2.stdout
+    assert "rows left the pool   : 1" in res2.stdout
+    assert "rows entered the pool: 1" in res2.stdout
+
+def test_compare_fdr_subtolerance_positive_diff_is_not_equal(tmp_path):
+    df = pd.DataFrame({'mt_id': [1, 2, 3], 'gt_id': [1, 2, 3], 'precise_mt_p': [0.01, 0.05, 0.1]})
+    res1, out1 = run_fdr_tool(tmp_path, df, "fdr_est")
+    df2 = pd.read_parquet(out1)
+    df2["p_permute"] = df2["precise_mt_p"]
+    df2.loc[0, "fdr_est"] -= 5e-13
+    main_file2 = tmp_path / "main2.parquet"
+    res_file2 = tmp_path / "res2.csv"
+    out_file2 = tmp_path / "out2.parquet"
+    df2.to_parquet(main_file2)
+    pd.DataFrame(columns=['mt_id', 'gt_id', 'mt_t', 'p_value']).to_csv(res_file2, index=False)
+    res2 = run_tool([
+        "--main-file", str(main_file2), "--reservoir-file", str(res_file2), "--total-tests", "10",
+        "--df", "10", "--calculate-fdr", "--p-column", "p_permute", "--fdr-column", "fdr_permute",
+        "--compare-fdr-column", "fdr_est", "--output-fdr-file", str(out_file2)
+    ])
+    assert res2.returncode == 0
+    assert "VERDICT: DIRECTIONAL-OK" in res2.stdout
+    import re
+    match = re.search(r"max\|diff\|\s*:\s*([^\s]+)", res2.stdout)
+    assert match is not None
+    max_diff = float(match.group(1))
+    assert np.isclose(max_diff, 5e-13, atol=1e-15, rtol=0)
+    match2 = re.search(r"min diff \(signed\)\s*:\s*([^\s]+)", res2.stdout)
+    assert match2 is not None
+    assert float(match2.group(1)) >= 0.0
+
+def test_compare_fdr_subtolerance_negative_diff_is_violation(tmp_path):
+    df = pd.DataFrame({'mt_id': [1, 2, 3], 'gt_id': [1, 2, 3], 'precise_mt_p': [0.01, 0.05, 0.1]})
+    res1, out1 = run_fdr_tool(tmp_path, df, "fdr_est")
+    df2 = pd.read_parquet(out1)
+    df2["p_permute"] = df2["precise_mt_p"]
+    df2.loc[0, "fdr_est"] += 5e-13
+    main_file2 = tmp_path / "main2.parquet"
+    res_file2 = tmp_path / "res2.csv"
+    out_file2 = tmp_path / "out2.parquet"
+    df2.to_parquet(main_file2)
+    pd.DataFrame(columns=['mt_id', 'gt_id', 'mt_t', 'p_value']).to_csv(res_file2, index=False)
+    res2 = run_tool([
+        "--main-file", str(main_file2), "--reservoir-file", str(res_file2), "--total-tests", "10",
+        "--df", "10", "--calculate-fdr", "--p-column", "p_permute", "--fdr-column", "fdr_permute",
+        "--compare-fdr-column", "fdr_est", "--output-fdr-file", str(out_file2)
+    ])
+    assert res2.returncode == 1
+    assert "VERDICT: VIOLATION" in res2.stdout

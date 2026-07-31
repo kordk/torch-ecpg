@@ -581,6 +581,7 @@ if [ $EXECUTE -eq 1 ]; then
                 --df "$DF" \
                 --p-column p_permute \
                 --fdr-column fdr_permute \
+                --compare-fdr-column fdr_est \
                 --calculate-fdr \
                 --output-fdr-file "$FINAL_OUT"
 
