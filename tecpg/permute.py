@@ -17,6 +17,12 @@ T_MAX = 10.0
 N_BINS = 1000
 TOPK_CAPACITY = 10_000
 
+# Host-memory ceiling on the null-population cross-product (|M| x |G|), which is
+# built as a DataFrame of Python string pairs before any GPU work begins. This is a
+# resource limit, NOT a methodological bound: any product under it is a legitimate
+# configuration. Raise it if a larger null is wanted and the host can hold it.
+MAX_NULL_PAIR_PRODUCT = 50_000_000
+
 
 def _normalize_annotations(M_annot, G_annot, M, G, logger):
     from .chrom import canonicalize_chrom
@@ -64,6 +70,16 @@ def _select_null_population(M, G, C, M_annot, G_annot, region,
                             subsample_mt_count, subsample_g_count, seed, logger):
     # CHUNK 4: seeded uniform pair subsample for the NULL population.
     if subsample_mt_count is None and subsample_g_count is None:
+        product = len(M) * len(G)
+        if product > MAX_NULL_PAIR_PRODUCT:
+            raise ValueError(
+                "Host-memory ceiling exceeded: {0} CpGs x {1} genes = {2} null pairs "
+                "(ceiling is {3}). These flags size the null only and do not change "
+                "which pairs are reported. Provide --subsample-mt-count and "
+                "--subsample-g-count to set a manageable null population size.".format(
+                    len(M), len(G), product, MAX_NULL_PAIR_PRODUCT
+                )
+            )
         return M, G
 
     rng = np.random.default_rng(seed)
@@ -91,6 +107,17 @@ def _select_null_population(M, G, C, M_annot, G_annot, region,
         idx = rng.choice(len(G), size=subsample_g_count, replace=False)
         idx.sort()
         null_G = G.iloc[idx]
+
+    product = len(null_M) * len(null_G)
+    if product > MAX_NULL_PAIR_PRODUCT:
+        raise ValueError(
+            "Host-memory ceiling exceeded: {0} CpGs x {1} genes = {2} null pairs "
+            "(ceiling is {3}). These flags size the null only and do not change "
+            "which pairs are reported. Provide --subsample-mt-count and "
+            "--subsample-g-count to set a manageable null population size.".format(
+                len(null_M), len(null_G), product, MAX_NULL_PAIR_PRODUCT
+            )
+        )
 
     return null_M, null_G
 
