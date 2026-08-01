@@ -23,6 +23,19 @@ N_NULL_PAIRS=""
 
 PERMUTE_ARGS=()
 
+# Null-population size. qr_permute's null is a seeded subsample of raw M/G, NOT the
+# reported universe -- these do not change which pairs receive a p-value, only the
+# size of the yardstick they are scored against. Left unset, the method builds the
+# FULL M x G cross-product as a host-side DataFrame of Python strings: on GTP that
+# is 1.35e10 rows, ~230 GB of RAM, and the run never reaches the GPU.
+#
+# These values are a starting point with a known resource profile (a GTP run at
+# these counts: 63.5 min, 14.1 GB peak RSS, GPU-resident), NOT a methodological
+# recommendation. Null size and composition are part of the parameter space this
+# pipeline exists to explore -- override freely.
+SUBSAMPLE_MT_COUNT=2000
+SUBSAMPLE_G_COUNT=2000
+
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -70,8 +83,10 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -s, --start-stage STAGE        Specify the starting stage. Options: all, permute, eval. Default is 'all'."
             echo "      --no-assign-regions        Skip adding a 'region' column via assignRegionToEcpg_parquet.py"
             echo "      --permutations N           Passthrough to qr_permute."
-            echo "      --subsample-mt-count N     Passthrough to qr_permute. NOTE: does NOT shrink output."
-            echo "      --subsample-g-count N      Passthrough to qr_permute. NOTE: does NOT shrink output."
+            echo "      --subsample-mt-count N     Null-population CpG count. Default: 2000."
+            echo "                                 NOTE: sizes the NULL only; does NOT shrink output."
+            echo "      --subsample-g-count N      Null-population gene count. Default: 2000."
+            echo "                                 NOTE: sizes the NULL only; does NOT shrink output."
             echo "      --seed N                   Passthrough to qr_permute."
             exit 0
             ;;
@@ -125,11 +140,11 @@ while [[ "$#" -gt 0 ]]; do
             shift 2
             ;;
         --subsample-mt-count)
-            PERMUTE_ARGS+=(--subsample-mt-count "$2")
+            SUBSAMPLE_MT_COUNT="$2"
             shift 2
             ;;
         --subsample-g-count)
-            PERMUTE_ARGS+=(--subsample-g-count "$2")
+            SUBSAMPLE_G_COUNT="$2"
             shift 2
             ;;
         --seed)
@@ -217,17 +232,20 @@ log "Start Stage: $START_STAGE"
 if [ $CIS_ENRICH -eq 1 ]; then log "Mode: cis-enrich (cis map + assemble; cis-window=+/-${CIS_WINDOW} bp)"; fi
 log "============================================================"
 
+# Append the resolved null-population size. Defaults apply unless overridden above.
+PERMUTE_ARGS+=(--subsample-mt-count "$SUBSAMPLE_MT_COUNT")
+PERMUTE_ARGS+=(--subsample-g-count "$SUBSAMPLE_G_COUNT")
+
 # Warnings
-for arg in "${PERMUTE_ARGS[@]}"; do
-    if [[ "$arg" == "--subsample-mt-count" || "$arg" == "--subsample-g-count" ]]; then
-        log "NOTE: --subsample-mt-count/--subsample-g-count subsample the NULL population only."
-        log "      The reported set is the master parquet's (mt_id, gt_id) universe; these flags"
-        log "      do NOT reduce output size. To score a smaller set, narrow the master (map a"
-        log "      smaller universe) -- a --pairs-file subset is not exposed by this wrapper."
-        log "      Subsample LOCI, never SAMPLES -- dropping samples changes DF."
-        break
-    fi
-done
+NULL_PRODUCT=$((SUBSAMPLE_MT_COUNT * SUBSAMPLE_G_COUNT))
+log "Null population: ${SUBSAMPLE_MT_COUNT} CpGs x ${SUBSAMPLE_G_COUNT} genes = ${NULL_PRODUCT} pairs before trans filtering."
+log "      The two axes are sampled independently and need not be balanced; qr_permute"
+log "      reports the realized null-pair count after trans filtering."
+log "NOTE: --subsample-mt-count/--subsample-g-count subsample the NULL population only."
+log "      The reported set is the master parquet's (mt_id, gt_id) universe; these flags"
+log "      do NOT reduce output size. To score a smaller set, narrow the master (map a"
+log "      smaller universe) -- a --pairs-file subset is not exposed by this wrapper."
+log "      Subsample LOCI, never SAMPLES -- dropping samples changes DF."
 
 if [ "$DATASET" == "dummy" ]; then
     log "NOTE: dummy is a WIRING SMOKE TEST ONLY. Disbelieve its numbers."
