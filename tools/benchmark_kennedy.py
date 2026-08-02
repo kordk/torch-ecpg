@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import importlib.metadata
 import subprocess
 import datetime
 import json
@@ -671,9 +672,26 @@ def get_git_sha():
         return "unknown"
 
 
+def _resolve_tecpg_version() -> str:
+    """Resolve the installed tecpg version string. Never raises."""
+    try:
+        v = importlib.metadata.version('tecpg')
+        if isinstance(v, str) and v.strip():
+            return v
+    except Exception:
+        pass
+    try:
+        import tecpg
+        v = getattr(tecpg, '__version__', None)
+        if isinstance(v, str) and v.strip():
+            return v
+    except Exception:
+        pass
+    return 'unknown'
+
 def build_provenance(args, df_kennedy):
     prov = {
-        'tecpg_version': 'unknown',  # Assuming tecpg version isn't strictly available, fallback.
+        'tecpg_version': _resolve_tecpg_version(),
         'git_sha': get_git_sha(),
         'timestamp_utc': datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
         'argv': sys.argv,
