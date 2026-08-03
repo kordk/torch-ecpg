@@ -335,7 +335,11 @@ Outputs and Metrics Calculated:
                 all_top_ig.append(top_ig_df)
 
         except Exception as e:
-            print(f"Error retrieving result from worker: {e}")
+            sys.stderr.write(
+                f"Error retrieving result from worker for chunk {chunk_idx}: {e}\n"
+                "Aggregation is incomplete; no summary, FDR threshold or output "
+                "file was produced.\n")
+            sys.exit(1)
 
     # Final total of rows dropped from the FDR universe across all chunks (M5).
     if total_dropped_from_fdr == 0:
