@@ -188,8 +188,8 @@ def stream_catalog_and_match(args, schema, tecpg_p_col, kennedy_pairs,
 
 def compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols):
     df = kennedy_df.copy()
-    df['cpg_in_tecpg_universe'] = df[cols['cpg']].isin(set(df[cols['cpg']].dropna()))
-    df['probe_in_tecpg_universe'] = df[cols['probe']].isin(set(df[cols['probe']].dropna()))
+    df['cpg_in_tecpg_universe'] = df[cols['cpg']].isin(set(distinct_mt))
+    df['probe_in_tecpg_universe'] = df[cols['probe']].isin(set(distinct_gt))
     df['eligible'] = df['cpg_in_tecpg_universe'] & df['probe_in_tecpg_universe']
     return df
 

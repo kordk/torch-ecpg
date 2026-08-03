@@ -83,6 +83,33 @@ def test_na_preservation(tmp_path):
     loaded = load_kennedy(path, sep='\t')
     assert len(loaded) == 2
 
+# O5b. test_eligibility_uses_tecpg_universe
+
+
+def test_eligibility_uses_tecpg_universe():
+    import pandas as pd
+    from tools.benchmark_kennedy import compute_eligibility
+
+    kennedy_df = pd.DataFrame({
+        'CpG.probe': ['cgA', 'cgB', 'cgA', 'cgC'],
+        'exp.Probe': ['prA', 'prA', 'prB', 'prC'],
+    })
+    cols = {'cpg': 'CpG.probe', 'probe': 'exp.Probe'}
+
+    # tecpg universe deliberately NARROWER than the Kennedy frame
+    distinct_mt = {'cgA'}
+    distinct_gt = {'prA'}
+
+    out = compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols)
+
+    assert list(out['cpg_in_tecpg_universe'])   == [True, False, True, False]
+    assert list(out['probe_in_tecpg_universe']) == [True, True, False, False]
+    assert list(out['eligible'])                == [True, False, False, False]
+
+    # not vacuous: at least one row must be ineligible
+    assert not out['eligible'].all()
+
+
 # O6. eligibility_classification
 
 
@@ -118,10 +145,7 @@ def test_eligibility_classification(tmp_path):
     assert len(df_k_only) == 3
     # Check reasons
     reasons = df_k_only.set_index(['mt_id', 'gt_id'])['non_overlap_reason'].to_dict()
-    assert reasons[('cg2', 'pr1')] in ['ineligible_cpg', 'kennedy_tested_and_missed',
-                                       'kennedy_universe_unknown', 'tested_and_missed']
-    pass
-    pass
+    assert reasons[('cg2', 'pr1')] == 'ineligible_cpg'
 
 # O7. recovery_confirmation_arithmetic
 
