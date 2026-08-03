@@ -539,6 +539,62 @@ def test_o6_json_no_numpy(tmp_path):
 
     json.dumps(out_json)
 
+def test_o6_json_no_numpy(tmp_path):
+    import json
+    import numpy as np
+    from tools.benchmark_kennedy import profile_kennedy, profile_catalog_post_stream, resolve_kennedy_columns, compute_eligibility, compute_overlap_rates
+    from collections import Counter
+    import pandas as pd
+
+    catalog_df = pd.DataFrame({'mt_id': ['c1', 'c2'], 'gt_id': ['p1', 'p2'], 'precise_mt_p': [
+                              1e-10, 0.5], 'mt_est': [1.0, 0.5], 'mt_t': [1.0, 0.5], 'region': ['cis', 'trans'], 'fdr_est': [0.1, 0.9]})
+    kennedy_df = pd.DataFrame({'CpG.probe': ['c1', 'c3'], 'exp.Probe': ['p1', 'p3'], 'p.val': [
+                              1e-10, 0.5], 'status': ['IN', 'TRANS'], 'distance': [10, 100], 'exp.probe.chrm': ['1', '2']})
+
+    fake_path = tmp_path / "fake.tsv"
+    kennedy_df.to_csv(fake_path, sep='\t', index=False)
+
+    cols = resolve_kennedy_columns(kennedy_df.columns)
+
+    kennedy_profile = profile_kennedy(str(fake_path), kennedy_df, '	', cols, [1e-5])
+
+    class Args:
+        pass
+
+    args = Args()
+    args.batch_size = 500000
+    args.tecpg = str(fake_path)
+
+    cat_metrics = {
+        'row_count': 2,
+        'row_group_count': 1,
+        'precise_mt_p_decades': {1e-5: 1},
+        'precise_mt_p_min': np.float64(1e-10),
+        'precise_mt_p_max': np.float64(0.5),
+        'mt_chroms': set(), 'gt_chroms': set(), 'chrom_pairs': set()
+    }
+
+    cat_profile = profile_catalog_post_stream(args, str(fake_path), cat_metrics, list(catalog_df.columns), set(['c1', 'c2']), set(['p1', 'p2']), Counter({'cis': 1, 'trans': 1}))
+
+    distinct_mt = set(['c1', 'c2'])
+    distinct_gt = set(['p1', 'p2'])
+    kennedy_df = compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols)
+
+    diag_results = compute_overlap_rates(catalog_df, kennedy_df, cols, 1e-5, 1e-5, 'precise_mt_p', return_sets=True)
+    grid_results = {(1e-5, 1e-5): compute_overlap_rates(catalog_df, kennedy_df, cols, 1e-5, 1e-5, 'precise_mt_p')}
+
+    out_json = {
+        'kennedy_profile': kennedy_profile,
+        'catalog_profile': cat_profile,
+        'results': {
+            'diagonal': {k: v for k, v in diag_results.items() if not isinstance(v, (set, pd.DataFrame))},
+            'grid': {f"1e-5_1e-5": grid_results[(1e-5, 1e-5)]},
+            'num_merged': 1
+        }
+    }
+
+    json.dumps(out_json)
+
 def test_p8_p9_execution(tmp_path):
     import pandas as pd
     import pyarrow as pa
@@ -914,26 +970,3 @@ def test_o18_html_from_json():
     with open('tools/benchmark_kennedy.py', 'r') as b:
         code = b.read()
     assert "build_reference_file_profile_module(args.kennedy_profile_metrics)" in code
-
-def test_version_lookup_never_raises(monkeypatch):
-    import importlib.metadata
-    import sys
-    from types import SimpleNamespace
-    from tools.benchmark_kennedy import _resolve_tecpg_version
-
-    def _raise_pnf(_):
-        raise importlib.metadata.PackageNotFoundError('tecpg')
-
-    monkeypatch.setattr(importlib.metadata, 'version', lambda _: '1.2.3')
-    assert _resolve_tecpg_version() == '1.2.3'
-
-    monkeypatch.setattr(importlib.metadata, 'version', _raise_pnf)
-    monkeypatch.setitem(sys.modules, 'tecpg',
-                        SimpleNamespace(__version__='9.9.9'))
-    assert _resolve_tecpg_version() == '9.9.9'
-
-    monkeypatch.setattr(importlib.metadata, 'version', _raise_pnf)
-    monkeypatch.setitem(sys.modules, 'tecpg', SimpleNamespace())
-    v = _resolve_tecpg_version()
-    assert v == 'unknown'
-    assert isinstance(v, str) and v

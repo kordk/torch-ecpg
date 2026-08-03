@@ -51,9 +51,9 @@ def _region(n, median, mad, tmin, tmax, rho, ci, bins, reason=None):
 def _summary():
     unassigned = _region(500, 1.0580, 0.0849, 4.2244, 16.2207,
                          0.1965, [0.1735, 0.2160], _bins(4.2244, 0.006))
-    unassigned["n_null_region"] = 500
-    unassigned["n_noncanonical_region"] = 0
-    unassigned["noncanonical_labels"] = []
+    unassigned["n_null_region"] = 437
+    unassigned["n_noncanonical_region"] = 63
+    unassigned["noncanonical_labels"] = ["WEIRD"]
     unassigned["noncanonical_labels_truncated"] = False
     return {
         "input": "/data/output_gtp/bootstrap_concordance.parquet",
@@ -161,17 +161,25 @@ def test_census_echoes_summary_and_does_not_recompute(rendered):
 
 
 def test_region_with_withheld_trend_is_reported_with_its_reason(rendered):
-    """A region below the trend gate must appear, carrying why, not vanish."""
+    """A region below the trend gate must appear in the census, carrying why, not vanish."""
+    from se_ratio_trend_report import build_modules
+    census = build_modules(_summary())[1]
+    assert census.anchor == "region-census"
+    assert "GENEBODY" in census.table_html
+    assert "n_scored below --min-region-n" in census.table_html
     _, html, _ = rendered
     assert "GENEBODY" in html
-    assert "n_scored below --min-region-n" in html
 
 
 def test_unassigned_breakdown_is_reported(rendered):
     """The null-region count is the diagnostic for an upstream annotation gap."""
-    _, html, _ = rendered
-    assert "n_null_region" in html or "null" in html.lower()
-    assert "500" in html
+    from se_ratio_trend_report import build_modules
+    census = build_modules(_summary())[1]
+    assert census.anchor == "region-census"
+    assert "n_null_region" in census.table_html
+    assert "437" in census.table_html
+    assert "63" in census.table_html
+    assert "WEIRD" in census.table_html
 
 
 def test_interval_direction_is_reported(rendered):
@@ -221,6 +229,7 @@ def test_missing_required_key_fails_closed(tmp_path):
     proc = _run(inp, out_html, expect_ok=False)
     assert proc.returncode == 1
     assert "regions" in proc.stderr
+    assert "Traceback" not in proc.stderr
     assert not out_html.exists()
 
 
