@@ -565,6 +565,9 @@ Outputs and Metrics Calculated:
     if args.output_fdr_file:
         print(f"\nWriting output FDR Parquet file to: {args.output_fdr_file}")
 
+        tmp_output_fdr_file = args.output_fdr_file + ".tmp"
+        write_error = None
+
         do_compare = args.compare_fdr_column is not None
         if do_compare and args.compare_fdr_column not in schema_cols:
             print(f"Notice: --compare-fdr-column '{args.compare_fdr_column}' not found in schema. Skipping comparison.")
@@ -648,7 +651,7 @@ Outputs and Metrics Calculated:
                 if writer is None:
                     # Define explicit schema once on the first chunk
                     explicit_schema = table.schema
-                    writer = pq.ParquetWriter(args.output_fdr_file, explicit_schema)
+                    writer = pq.ParquetWriter(tmp_output_fdr_file, explicit_schema)
                 else:
                     # Cast subsequent chunks to the explicit schema established by the first chunk
                     table = table.cast(explicit_schema)
@@ -660,10 +663,25 @@ Outputs and Metrics Calculated:
 
             print(f"\nFinished writing FDR Parquet file.")
         except Exception as e:
-            print(f"Error writing output FDR file: {e}")
+            write_error = e
         finally:
             if writer is not None:
                 writer.close()
+
+        if write_error is not None:
+            # Cleanup must never raise: a failure here would replace the real
+            # diagnosis with an unrelated traceback.
+            if os.path.isfile(tmp_output_fdr_file):
+                try:
+                    os.remove(tmp_output_fdr_file)
+                except OSError:
+                    pass
+            sys.stderr.write(
+                f"Error writing output FDR file: {write_error}\n"
+                "No output was written; the destination is unchanged.\n")
+            sys.exit(1)
+
+        os.replace(tmp_output_fdr_file, args.output_fdr_file)
 
         if do_compare:
             if cmp_n_comparable == 0:
