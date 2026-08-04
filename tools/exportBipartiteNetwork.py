@@ -7,6 +7,9 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
+P_COLUMN_PREFERENCE = ['precise_mt_p', 'mt_p']
+
+
 def main():
     parser = argparse.ArgumentParser(description="Export eQTM Parquet file to Cytoscape Node and Edge tables.")
     parser.add_argument("-i", "--input", required=True, help="Path to the input Parquet file (e.g., results.precise_p.annot.fdr.parquet).")
@@ -37,11 +40,25 @@ def main():
         sys.exit(1)
 
     # 2. Check required edge columns (statistical)
-    required_edge_cols = ['mt_est', 'mt_p']
-    missing_edge_cols = [col for col in required_edge_cols if col not in df.columns]
+    # precise_mt_p is float64. mt_p is float32 and is computed by a subtraction
+    # in which values below about 5.96e-08 (2**-24) are lost to cancellation, so
+    # it can read as exactly zero across the range the top-ranked edges occupy.
+    p_column = next((c for c in P_COLUMN_PREFERENCE if c in df.columns), None)
+    missing_edge_cols = [c for c in ['mt_est'] if c not in df.columns]
+    if p_column is None:
+        missing_edge_cols.append(' or '.join(P_COLUMN_PREFERENCE))
     if missing_edge_cols:
-        logging.error(f"Missing required edge columns: {missing_edge_cols}. Expected at least: {required_edge_cols}")
+        logging.error(f"Missing required edge columns: {missing_edge_cols}. Expected 'mt_est' and one of: {P_COLUMN_PREFERENCE}")
         sys.exit(1)
+    if p_column == 'mt_p':
+        logging.warning(
+            "Using 'mt_p' for edge p-values because 'precise_mt_p' is absent. "
+            "mt_p is float32 and loses values below about 5.96e-08 to "
+            "cancellation, so the most significant edges may carry a p-value "
+            "of exactly zero."
+        )
+    else:
+        logging.info(f"Using '{p_column}' for edge p-values.")
 
     # 3. Handle region column
     if 'region' not in df.columns:
@@ -83,7 +100,7 @@ def main():
 
     # 5. Build Edge Table
     logging.info("Building Edge table...")
-    base_edge_cols = ['mt_id', 'gt_id', 'region', 'mt_est', 'mt_p']
+    base_edge_cols = ['mt_id', 'gt_id', 'region', 'mt_est', p_column]
     if 'mt_t' in df_top.columns:
         base_edge_cols.append('mt_t')
     if used_abs_t:
