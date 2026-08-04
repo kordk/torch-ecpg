@@ -1175,8 +1175,8 @@ def _tecpg_mlr_qr_inner(
                         if aggressive_gc or (total_memory and torch.cuda.memory_allocated() / total_memory > HIGH_WATER):
                             torch.cuda.empty_cache()
 
-            import gc; gc.collect()
             del Q, R_inv, XtXi_diag_sqrt
+            import gc; gc.collect()
 
             mc_logger.time('Looped over methylation loci in {l} seconds')
             mc_logger.time('Calculated tecpg_mlr_qr in {t} seconds')
