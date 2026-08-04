@@ -425,6 +425,7 @@ def main():
     parser.add_argument("--out-dir", default=".", help="Output directory for results.")
     parser.add_argument("--rank-by", nargs="+", choices=["fdr", "ig"], default=["fdr"], help="Methods to run enrichment on.")
     parser.add_argument("--fdr-threshold", type=float, default=0.05, help="FDR threshold for significance.")
+    parser.add_argument("--fdr-column", default="fdr_est", help="Column carrying the FDR estimate used for significance selection.")
     parser.add_argument("--ig-inflection-method", default="auto", choices=["auto", "kneed", "chord"], help="Method for IG inflection detection.")
     parser.add_argument("--encode-enrichment", action="store_true", help="Run ENCODE enrichment analysis.")
     parser.add_argument("--encode-bed-dir", default="encode_beds", help="Directory for ENCODE BED files.")
@@ -451,21 +452,26 @@ def main():
         else:
             try:
                 parquet_file = pq.ParquetFile(args.fdr_input)
-                using_fallback = 'precise_mt_p' not in parquet_file.schema.names
+                if args.fdr_column not in parquet_file.schema.names:
+                    logger.error(
+                        f"FDR column '{args.fdr_column}' not found in {args.fdr_input}. "
+                        f"Observed columns: {list(parquet_file.schema.names)}. "
+                        "Significance selection must be made on an FDR estimate; "
+                        "refusing to fall back to raw p-values."
+                    )
+                    sys.exit(1)
+                n_rows_read = 0
+                n_rows_selected = 0
 
                 for batch in parquet_file.iter_batches(batch_size=args.chunk_size):
                     df_chunk = batch.to_pandas()
                     if df_chunk.index.names != [None]:
                         df_chunk = df_chunk.reset_index()
 
-                    if not using_fallback:
-                        chunk_p_vals = df_chunk['precise_mt_p'].values
-                    else:
-                        t_col = 'mt_t' if 'mt_t' in df_chunk.columns else 't'
-                        t_stats = df_chunk[t_col].values
-                        chunk_p_vals = stats.t.sf(np.abs(t_stats), np.float64(args.df)) * 2.0
-
-                    sig_mask = chunk_p_vals <= args.fdr_threshold
+                    fdr_vals = df_chunk[args.fdr_column].astype(np.float64).values
+                    sig_mask = fdr_vals <= args.fdr_threshold
+                    n_rows_read += len(df_chunk)
+                    n_rows_selected += int(sig_mask.sum())
                     if sig_mask.any():
                         sig_df = df_chunk[sig_mask]
                         if 'region' in sig_df.columns:
@@ -498,6 +504,10 @@ def main():
                                         start = int(row['mt_chromStart'])
                                         fdr_significant_cpgs.add((chrom, start))
                                         fdr_cpgs_by_region[region].add((chrom, start))
+                logger.info(
+                    f"FDR selection on '{args.fdr_column}' <= {args.fdr_threshold}: "
+                    f"selected {n_rows_selected} of {n_rows_read} rows."
+                )
                 logger.info(f"FDR processing complete. Collected regions: {list(fdr_genes_by_region.keys())}")
             except Exception as e:
                 logger.error(f"Error processing FDR path: {e}")

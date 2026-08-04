@@ -28,6 +28,7 @@ class TestRunEnrichment(unittest.TestCase):
             'gt_id': ['ENSG1', 'ENSG2'],
             'region': ['CIS', 'CIS'],
             'precise_mt_p': [0.01, 0.06],
+            'fdr_est': [0.01, 0.06],
             'mt_chrom': ['chr1', 'chr1'],
             'mt_chromStart': [100, 200]
         })
