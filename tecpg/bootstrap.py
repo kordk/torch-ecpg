@@ -12,6 +12,36 @@ from .logger import Logger
 
 from typing import Optional
 
+BOOTSTRAP_RESULT_COLUMNS = [
+    'mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high',
+    'p_boot', 'degenerate_resamples',
+]
+
+
+def merge_bootstrap_into_master(master_df, res_df, ig_columns, logger=None):
+    """Left-join bootstrap results onto the master catalog on [mt_id, gt_id].
+
+    Columns the bootstrap produces are dropped from the master first, so a
+    re-run replaces them rather than producing suffixed duplicates.
+    """
+    cols_to_drop = [
+        c for c in BOOTSTRAP_RESULT_COLUMNS + list(ig_columns)
+        if c in master_df.columns
+    ]
+    if cols_to_drop:
+        master_df = master_df.drop(columns=cols_to_drop)
+
+    # We might need to ensure types match for joining
+    master_df = master_df.copy()
+    res_df = res_df.copy()
+    master_df['mt_id'] = master_df['mt_id'].astype(str)
+    master_df['gt_id'] = master_df['gt_id'].astype(str)
+    res_df['mt_id'] = res_df['mt_id'].astype(str)
+    res_df['gt_id'] = res_df['gt_id'].astype(str)
+
+    return master_df.merge(res_df, on=['mt_id', 'gt_id'], how='left')
+
+
 def tecpg_mlr_qr_bootstrap(
     M: pd.DataFrame,
     G: pd.DataFrame,
@@ -386,20 +416,7 @@ def tecpg_mlr_qr_bootstrap(
         logger.error(f"Failed to read master parquet file: {e}")
         return
 
-    # Perform Left Join on [mt_id, gt_id]
-    # Rows not in res_df will automatically get NaN
-    # But before join, check if those columns already exist to avoid suffixing
-    cols_to_drop = [c for c in ['mt_est_boot_mean', 'mt_est_boot_std', 'ci_low', 'ci_high', 'p_boot', 'degenerate_resamples'] + ig_columns if c in master_df.columns]
-    if cols_to_drop:
-        master_df = master_df.drop(columns=cols_to_drop)
-
-    # We might need to ensure types match for joining
-    master_df['mt_id'] = master_df['mt_id'].astype(str)
-    master_df['gt_id'] = master_df['gt_id'].astype(str)
-    res_df['mt_id'] = res_df['mt_id'].astype(str)
-    res_df['gt_id'] = res_df['gt_id'].astype(str)
-
-    merged_df = master_df.merge(res_df, on=['mt_id', 'gt_id'], how='left')
+    merged_df = merge_bootstrap_into_master(master_df, res_df, ig_columns, logger)
 
     # Record the seed actually used alongside every output row so a run is
     # reproducible from its artifact. The seed is a run-level constant, so it
