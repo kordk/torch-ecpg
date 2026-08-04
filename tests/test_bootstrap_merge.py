@@ -2,10 +2,9 @@
 
 The bootstrap covers a small candidate subset of the catalog, and its results
 are left-joined onto the master. This file pins what that join does today,
-including one behaviour that is a defect: IG columns present on the master are
-dropped before the join and repopulated only for the bootstrapped pairs, so
-they end up null on every unbootstrapped row. That is characterized here rather
-than fixed, so the change that fixes it has something to move against.
+including how IG columns are handled: those already present on the master are
+genome-wide and are kept, while the bootstrap's recomputed values are written
+beside them under a suffix.
 """
 import numpy as np
 import pandas as pd
@@ -62,23 +61,39 @@ def test_bootstrap_columns_are_null_outside_the_candidate_set():
         assert merged.loc[merged["mt_id"] == "cg0", col].isna().all()
 
 
-def test_ig_columns_from_master_are_currently_discarded():
-    """CHARACTERIZATION OF A DEFECT, not an endorsement.
-
-    The master carries genome-wide IG for every row. The join drops those
-    columns and repopulates them only for bootstrapped pairs, so an
-    unbootstrapped row loses a value it already had.
-    """
+def test_genome_wide_ig_from_master_survives_the_join():
+    """The mapper writes IG for every row; the join must not discard it."""
     master = _master()
     assert master["mt_ig"].notna().all()
 
     merged = merge_bootstrap_into_master(master, _res([1]), IG_COLUMNS)
 
-    assert merged.loc[merged["mt_id"] == "cg1", "mt_ig"].iloc[0] == 99.0
-    assert merged.loc[merged["mt_id"] == "cg0", "mt_ig"].isna().all()
-    assert merged["mt_ig"].notna().sum() == 1
-    assert merged["Exp_PC1_ig"].notna().sum() == 1
-    assert "mt_ig_boot" not in merged.columns
+    assert merged["mt_ig"].notna().all()
+    assert merged["Exp_PC1_ig"].notna().all()
+    pd.testing.assert_series_equal(
+        merged["mt_ig"], master["mt_ig"], check_names=False)
+
+
+def test_bootstrap_ig_is_written_beside_it_under_a_suffix():
+    """The recomputed values get their own column, filled only where bootstrapped."""
+    merged = merge_bootstrap_into_master(_master(), _res([1]), IG_COLUMNS)
+
+    assert "mt_ig_boot" in merged.columns
+    assert "Exp_PC1_ig_boot" in merged.columns
+    assert merged.loc[merged["mt_id"] == "cg1", "mt_ig_boot"].iloc[0] == 99.0
+    assert merged["mt_ig_boot"].notna().sum() == 1
+    assert merged.loc[merged["mt_id"] == "cg0", "mt_ig_boot"].isna().all()
+
+
+def test_rejoining_does_not_accumulate_suffixes():
+    """A re-run replaces the _boot columns rather than nesting or suffixing them."""
+    once = merge_bootstrap_into_master(_master(), _res([1]), IG_COLUMNS)
+    twice = merge_bootstrap_into_master(once, _res([1]), IG_COLUMNS)
+
+    assert "mt_ig_boot_boot" not in twice.columns
+    assert list(once.columns) == list(twice.columns)
+    assert twice["mt_ig"].notna().all()
+    assert twice["mt_ig_boot"].notna().sum() == 1
 
 
 def test_rejoining_does_not_produce_suffixed_duplicates():

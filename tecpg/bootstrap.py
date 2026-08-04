@@ -18,18 +18,42 @@ BOOTSTRAP_RESULT_COLUMNS = [
 ]
 
 
+BOOTSTRAP_IG_SUFFIX = '_boot'
+
+
 def merge_bootstrap_into_master(master_df, res_df, ig_columns, logger=None):
     """Left-join bootstrap results onto the master catalog on [mt_id, gt_id].
 
     Columns the bootstrap produces are dropped from the master first, so a
     re-run replaces them rather than producing suffixed duplicates.
+
+    IG columns are treated differently. The mapper writes them for every row of
+    the catalog, while the bootstrap recomputes them for the candidate subset
+    only. Dropping the genome-wide values and repopulating from the bootstrap
+    would leave them null on every unbootstrapped row, so an IG column already
+    present on the master is kept and the bootstrap's value is written beside
+    it under BOOTSTRAP_IG_SUFFIX. An IG column absent from the master is taken
+    from the bootstrap under its own name, as before.
     """
-    cols_to_drop = [
-        c for c in BOOTSTRAP_RESULT_COLUMNS + list(ig_columns)
-        if c in master_df.columns
-    ]
+    ig_columns = list(ig_columns)
+    ig_on_master = [c for c in ig_columns if c in master_df.columns]
+
+    cols_to_drop = [c for c in BOOTSTRAP_RESULT_COLUMNS if c in master_df.columns]
     if cols_to_drop:
         master_df = master_df.drop(columns=cols_to_drop)
+
+    if ig_on_master:
+        rename_map = {c: c + BOOTSTRAP_IG_SUFFIX for c in ig_on_master}
+        collisions = [v for v in rename_map.values() if v in master_df.columns]
+        if collisions:
+            master_df = master_df.drop(columns=collisions)
+        res_df = res_df.rename(columns=rename_map)
+        if logger is not None:
+            logger.info(
+                "Preserving genome-wide IG on the master and writing the "
+                "bootstrap values beside them: "
+                + ", ".join(f"{k} -> {v}" for k, v in rename_map.items())
+            )
 
     # We might need to ensure types match for joining
     master_df = master_df.copy()
