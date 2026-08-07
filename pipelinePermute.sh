@@ -223,6 +223,11 @@ if [ $IS_VALID_DATASET -eq 0 ]; then
     exit 1
 fi
 
+if [ "$DATASET" == "mesa" ]; then
+    CIS_MAP_M_CHUNK=20000
+    CIS_MAP_G_CHUNK=1000
+fi
+
 log "============================================================"
 log "Starting tecpg Permute Pipeline"
 log "Dataset: $DATASET"
@@ -230,6 +235,9 @@ log "Master Parquet: $MASTER_PARQUET"
 log "Mapping: $MAPPING"
 log "Start Stage: $START_STAGE"
 if [ $CIS_ENRICH -eq 1 ]; then log "Mode: cis-enrich (cis map + assemble; cis-window=+/-${CIS_WINDOW} bp)"; fi
+if [ -n "$CIS_MAP_M_CHUNK" ] && [ -n "$CIS_MAP_G_CHUNK" ]; then
+    log "Chunk Overrides: M=$CIS_MAP_M_CHUNK, G=$CIS_MAP_G_CHUNK"
+fi
 log "============================================================"
 
 # Append the resolved null-population size. Defaults apply unless overridden above.
@@ -404,6 +412,11 @@ if [ $CIS_ENRICH -eq 1 ] && [ "$START_STAGE" == "all" ]; then
     CIS_MAP_DIR="$OUT_DIR/cis_map"
     CIS_MAP_PARQUET="$OUT_DIR/cis_map_write_all.parquet"
 
+    CIS_MAP_ARGS=()
+    if [ -n "$CIS_MAP_M_CHUNK" ] && [ -n "$CIS_MAP_G_CHUNK" ]; then
+        CIS_MAP_ARGS+=(--meth-loci-per-chunk "$CIS_MAP_M_CHUNK" --gene-loci-per-chunk "$CIS_MAP_G_CHUNK")
+    fi
+
     log "[cis-map] Cis write-all map (region=cis, +/-${CIS_WINDOW} bp, p-thresh 1.0)..."
     log "          Per-chunk outputs -> $CIS_MAP_DIR, merged -> $CIS_MAP_PARQUET."
     log "          Write-all (-p 1.0) is required: it keeps the mostly-null near-gene"
@@ -415,7 +428,7 @@ if [ $CIS_ENRICH -eq 1 ] && [ "$START_STAGE" == "all" ]; then
     python3 -u -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$CIS_MAP_DIR" \
         run mlr --mlr-method qr --cis \
         -w 0 -u "$CIS_WINDOW" -d "$CIS_WINDOW" \
-        -p 1.0 --output-format parquet 2>&1 | tee "cis_map_run_${DATASET}.log"
+        -p 1.0 --output-format parquet "${CIS_MAP_ARGS[@]}" 2>&1 | tee "cis_map_run_${DATASET}.log"
     set +o pipefail
 
     python3 -u tools/mergeOutputs.py --format parquet --pattern "*.*" \
