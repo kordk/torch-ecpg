@@ -71,7 +71,7 @@ python3 -u tools/exportBipartiteNetwork.py \
 
 # Stage 5: Run visualizeBipartiteNetwork.py
 log "[5/8] Running visualizeBipartiteNetwork.py..."
-python3 -u tools/visualizeBipartiteNetwork.py --edges "$NETWORK_DIR/cytoscape_edges.csv" --nodes "$NETWORK_DIR/cytoscape_nodes.csv" --out-dir "$NETWORK_DIR"
+python3 -u tools/visualizeBipartiteNetwork.py --edges "$NETWORK_DIR/cytoscape_edges.csv" --nodes "$NETWORK_DIR/cytoscape_nodes.csv" --out-dir "$NETWORK_DIR" --per-region
 # Stage 6: Run evaluateSaliency.py
 log "[6/8] Running evaluateSaliency.py..."
 python3 -u tools/evaluateSaliency.py -i "$PARQUET_FILE" -o "$PLOTS_DIR"
