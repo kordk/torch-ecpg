@@ -492,6 +492,40 @@ def plot_degree_distribution(G, nodes, out_dir):
     plt.close()
     logging.info(f"Saved Figure 3 to {out_path}")
 
+def plot_unipartite_projection(G_proj, out_dir, out_name='UnipartiteProjection.png', title='Unipartite Projection (Genes)'):
+    logging.info(f"Generating Unipartite Projection Network: {title} -> {out_name}...")
+    try:
+        import matplotlib.pyplot as plt
+        import networkx as nx
+        fig, ax = plt.subplots(figsize=(10, 10))
+        pos = nx.spring_layout(G_proj, seed=42)
+
+        edges_proj = G_proj.edges(data=True)
+        weights = [d['weight'] for u, v, d in edges_proj]
+        if weights:
+            max_w = max(weights)
+            min_w = min(weights)
+            if max_w > min_w:
+                edge_widths = [0.5 + 2.0 * (w - min_w) / (max_w - min_w) for w in weights]
+            else:
+                edge_widths = [1.0] * len(weights)
+        else:
+            edge_widths = []
+
+        nx.draw_networkx_nodes(G_proj, pos, node_size=50, node_color='tab:orange', alpha=0.8, ax=ax)
+        nx.draw_networkx_edges(G_proj, pos, width=edge_widths, alpha=0.5, ax=ax)
+
+        ax.set_title(title)
+        ax.axis('off')
+
+        fig_out_path = os.path.join(out_dir, out_name)
+        plt.savefig(fig_out_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        logging.info(f"Saved {out_name} to {fig_out_path}")
+    except Exception as e:
+        logging.error(f"Failed to generate Unipartite Projection visualization ({title}): {e}")
+
+
 def generate_figures(G, filtered_edges, nodes, weight_col, out_dir):
     """Generate the full figure set for one edge universe into out_dir."""
     plot_network(G, out_dir)
@@ -526,37 +560,16 @@ def generate_figures(G, filtered_edges, nodes, weight_col, out_dir):
     logging.info(f"Saved Unipartite Projection edge list to {proj_out_path}")
 
     # Generate a simple visualization for the unipartite network (Figure 6)
-    logging.info("Generating Figure 6: Unipartite Projection Network...")
-    try:
-        import matplotlib.pyplot as plt
-        import networkx as nx
-        fig, ax = plt.subplots(figsize=(10, 10))
-        pos = nx.spring_layout(G_proj, seed=42)
+    plot_unipartite_projection(G_proj, out_dir)
 
-        edges_proj = G_proj.edges(data=True)
-        weights = [d['weight'] for u, v, d in edges_proj]
-        if weights:
-            max_w = max(weights)
-            min_w = min(weights)
-            if max_w > min_w:
-                edge_widths = [0.5 + 2.0 * (w - min_w) / (max_w - min_w) for w in weights]
-            else:
-                edge_widths = [1.0] * len(weights)
-        else:
-            edge_widths = []
-
-        nx.draw_networkx_nodes(G_proj, pos, node_size=50, node_color='tab:orange', alpha=0.8, ax=ax)
-        nx.draw_networkx_edges(G_proj, pos, width=edge_widths, alpha=0.5, ax=ax)
-
-        ax.set_title("Unipartite Projection (Genes)")
-        ax.axis('off')
-
-        fig_out_path = os.path.join(out_dir, "UnipartiteProjection.png")
-        plt.savefig(fig_out_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        logging.info(f"Saved Figure 6 to {fig_out_path}")
-    except Exception as e:
-        logging.error(f"Failed to generate Unipartite Projection visualization: {e}")
+    # Hypergeometric 1-Mode Projection (additive): gene-gene edges weighted by
+    # -log10 p of sharing more CpG regulators than expected by chance. The
+    # count-based projection outputs above are unchanged.
+    G_proj_hg, proj_hg_df = project_bipartite_to_unipartite(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, target='gene', weight_method='hypergeometric')
+    proj_hg_out_path = os.path.join(out_dir, "UnipartiteProjection_Hypergeom_Edges.csv")
+    proj_hg_df.to_csv(proj_hg_out_path, index=False)
+    logging.info(f"Saved Hypergeometric Unipartite Projection edge list to {proj_hg_out_path}")
+    plot_unipartite_projection(G_proj_hg, out_dir, out_name='UnipartiteProjectionHypergeom.png', title='Unipartite Projection (Genes, Hypergeometric)')
 
 
 def main():
