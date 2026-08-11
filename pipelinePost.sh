@@ -25,8 +25,11 @@ CONCORDANCE_PARQUET="${OUT_DIR}/bootstrap_concordance.parquet"
 CONCORDANCE_SUMMARY="${OUT_DIR}/bootstrap_concordance_summary.json"
 
 # Network export filtering defaults
-NETWORK_TOP_K=5000
-NETWORK_MAX_BOOT_P=0.05
+# Universe: FDR-significant catalog (fdr_est <= NETWORK_MAX_FDR). NETWORK_TOP_K
+# is a non-binding safety cap sized above the expected significant-pair count;
+# it does not define the universe.
+NETWORK_TOP_K=100000
+NETWORK_MAX_FDR=0.05
 
 log "======================================"
 log "Starting Pipeline Post-Processing for DATASET: ${DATASET}"
@@ -67,7 +70,7 @@ python3 -u tools/exportBipartiteNetwork.py \
     -o cytoscape \
     --out-dir "$NETWORK_DIR" \
     --top-k "$NETWORK_TOP_K" \
-    --max-boot-p "$NETWORK_MAX_BOOT_P"
+    --max-fdr "$NETWORK_MAX_FDR"
 
 # Stage 5: Run visualizeBipartiteNetwork.py
 log "[5/8] Running visualizeBipartiteNetwork.py..."

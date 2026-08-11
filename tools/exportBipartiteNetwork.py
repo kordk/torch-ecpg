@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--top-k", type=int, default=10000, help="Number of top hits to include (default: 10000).")
     parser.add_argument("--min-effect", type=float, default=None, help="Retain only edges where abs(mt_est) >= min-effect.")
     parser.add_argument("--max-boot-p", type=float, default=None, help="Retain only edges where p_boot <= max-boot-p.")
+    parser.add_argument("--max-fdr", type=float, default=None, help="Retain only edges where fdr_est <= max-fdr. Rows with missing (NaN) fdr_est are excluded when this filter is active.")
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
@@ -65,7 +66,7 @@ def main():
         logging.info("Column 'region' not found. Defaulting Interaction to 'Undefined'.")
         df['region'] = 'Undefined'
 
-    # 4. Apply Filters (Order: --min-effect, --max-boot-p, --top-k)
+    # 4. Apply Filters (Order: --min-effect, --max-boot-p, --max-fdr, --top-k)
     # The --top-k filter selects the top K from whatever survives the threshold filters.
     # It ranks by mt_ig (Integrated Gradients score) descending, with fallback ranking by abs(mt_t).
 
@@ -82,6 +83,13 @@ def main():
             logging.info(f"Edges surviving --max-boot-p <= {args.max_boot_p}: {len(df)}")
         else:
             logging.warning("Column 'p_boot' not found in Parquet file. Skipping --max-boot-p filter.")
+
+    if args.max_fdr is not None:
+        if 'fdr_est' in df.columns:
+            df = df[df['fdr_est'] <= args.max_fdr]
+            logging.info(f"Edges surviving --max-fdr <= {args.max_fdr}: {len(df)}")
+        else:
+            logging.warning("Column 'fdr_est' not found in Parquet file. Skipping --max-fdr filter.")
 
     if 'mt_ig' in df.columns:
         logging.info(f"Sorting by mt_ig (Saliency) in descending order and taking top {args.top_k}.")
