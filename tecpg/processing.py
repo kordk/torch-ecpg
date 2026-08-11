@@ -471,10 +471,17 @@ def _tecpg_mlr_qr_inner(
         )
         logger.info(
             f"Initializing reservoir sampling. Will retain up to {reservoir_count} "
-            f"results out of an expected {expected_items} total items."
+            f"results out of an expected {expected_items} total items. "
+            f"Reservoir RNG seeded with {seed}."
         )
     reservoir_buffer = [] # Store tuple of (results_tensor, gt_sites, mt_sites)
     reservoir_processed = 0
+    # Dedicated generator for reservoir draws. Seeded from the run's seed so
+    # the sample is reproducible, and kept separate from the global torch RNG
+    # so that seeding it here neither perturbs nor is perturbed by any other
+    # consumer of torch randomness in the same process.
+    reservoir_rng = torch.Generator(device=device)
+    reservoir_rng.manual_seed(seed)
 
     # Create methylation chunk (mc_) and chunk saving (inner_) logger
     mc_logger = logger.alias()
@@ -960,7 +967,9 @@ def _tecpg_mlr_qr_inner(
                             mt_sites_res = mt_sites_res[mask_np_res]
 
                         # Generate random rolls for reservoir
-                        rolls = torch.rand(batch_size, device=device)
+                        rolls = torch.rand(
+                            batch_size, device=device, generator=reservoir_rng
+                        )
                         # Probability P for each item j in batch is reservoir_count / (reservoir_processed + j + 1)
                         # To do this correctly:
                         # P_j = reservoir_count / (reservoir_processed + j + 1)
@@ -997,7 +1006,13 @@ def _tecpg_mlr_qr_inner(
                                 # Where to place them in the buffer?
                                 # For each kept item, if its total index <= reservoir_count, we append it
                                 # If its total index > reservoir_count, it replaces a random element [0, reservoir_count-1]
-                                replace_indices = torch.randint(0, reservoir_count, (len(kept_indices),), device=device)
+                                replace_indices = torch.randint(
+                                    0,
+                                    reservoir_count,
+                                    (len(kept_indices),),
+                                    device=device,
+                                    generator=reservoir_rng,
+                                )
 
                                 # Process the kept items
                                 for idx, kept_idx in enumerate(kept_indices):
