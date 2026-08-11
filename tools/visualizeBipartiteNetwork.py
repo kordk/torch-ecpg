@@ -234,8 +234,9 @@ def plot_umap(filtered_edges, nodes, weight_col, out_dir):
     plt.close()
     logging.info(f"Saved Figure 2 to {out_path}")
 
-def plot_bi_adjacency_heatmap(df, cpg_col='Source', gene_col='Target', weight_col='weight', out_dir='.', figsize=(10, 8)):
-    logging.info("Generating Figure 4: Biclustered Bi-Adjacency Heatmap...")
+def plot_bi_adjacency_heatmap(df, cpg_col='Source', gene_col='Target', weight_col='weight', out_dir='.', figsize=(10, 8),
+                              out_name='BiclusteredBiAdjacencyHeatmap.png', title='Biclustered Bi-Adjacency Heatmap'):
+    logging.info(f"Generating {title} (weight_col='{weight_col}')...")
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
@@ -270,9 +271,9 @@ def plot_bi_adjacency_heatmap(df, cpg_col='Source', gene_col='Target', weight_co
             method='average' # Hierarchical clustering method
         )
 
-        g.fig.suptitle("Biclustered Bi-Adjacency Heatmap", y=1.05)
+        g.fig.suptitle(title, y=1.05)
 
-        out_path = os.path.join(out_dir, "BiclusteredBiAdjacencyHeatmap.png")
+        out_path = os.path.join(out_dir, out_name)
         g.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close(g.fig)
         logging.info(f"Saved Figure 4 to {out_path}")
@@ -503,6 +504,22 @@ def main():
 
     # Note: Source and Target defaults match the output of prepare_network/filtered_edges
     plot_bi_adjacency_heatmap(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=args.out_dir)
+
+    # Signed biclustered heatmap (mt_est): additive second figure; never replaces
+    # the mt_ig/abs_t heatmap above. Writes SignedBiclusteredBiAdjacencyHeatmap.png.
+    if 'mt_est' in filtered_edges.columns:
+        plot_bi_adjacency_heatmap(
+            filtered_edges,
+            cpg_col='Source',
+            gene_col='Target',
+            weight_col='mt_est',
+            out_dir=args.out_dir,
+            out_name='SignedBiclusteredBiAdjacencyHeatmap.png',
+            title='Signed Biclustered Bi-Adjacency Heatmap (mt_est)',
+        )
+    else:
+        logging.warning("Column 'mt_est' not found in edges. Skipping signed biclustered heatmap (mt_est).")
+
     plot_arc_diagram(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=args.out_dir)
 
     # 1-Mode Projection
