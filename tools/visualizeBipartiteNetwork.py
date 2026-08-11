@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import sys
 import pandas as pd
 import numpy as np
@@ -19,6 +20,9 @@ def parse_args():
     parser.add_argument("--nodes", required=True, help="Path to the nodes CSV file.")
     parser.add_argument("--out-dir", default=".", help="Directory to save output figures (default: current directory).")
     parser.add_argument("--threshold", type=float, default=0.5, help="Edge weight threshold for filtering (default: 0.5).")
+    parser.add_argument("--per-region", action="store_true",
+                        help="Additionally re-generate the full figure set per Interaction (region) stratum "
+                             "into out-dir/region_<REGION>/ subdirectories (default: off).")
     return parser.parse_args()
 
 def load_data(args):
@@ -488,22 +492,14 @@ def plot_degree_distribution(G, nodes, out_dir):
     plt.close()
     logging.info(f"Saved Figure 3 to {out_path}")
 
-def main():
-    args = parse_args()
-
-    if not os.path.exists(args.out_dir):
-        os.makedirs(args.out_dir)
-
-    edges, nodes, weight_col = load_data(args)
-
-    G, filtered_edges = prepare_network(edges, nodes, weight_col, args.threshold, args.out_dir)
-
-    plot_network(G, args.out_dir)
-    plot_umap(filtered_edges, nodes, weight_col, args.out_dir)
-    plot_degree_distribution(G, nodes, args.out_dir)
+def generate_figures(G, filtered_edges, nodes, weight_col, out_dir):
+    """Generate the full figure set for one edge universe into out_dir."""
+    plot_network(G, out_dir)
+    plot_umap(filtered_edges, nodes, weight_col, out_dir)
+    plot_degree_distribution(G, nodes, out_dir)
 
     # Note: Source and Target defaults match the output of prepare_network/filtered_edges
-    plot_bi_adjacency_heatmap(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=args.out_dir)
+    plot_bi_adjacency_heatmap(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=out_dir)
 
     # Signed biclustered heatmap (mt_est): additive second figure; never replaces
     # the mt_ig/abs_t heatmap above. Writes SignedBiclusteredBiAdjacencyHeatmap.png.
@@ -513,19 +509,19 @@ def main():
             cpg_col='Source',
             gene_col='Target',
             weight_col='mt_est',
-            out_dir=args.out_dir,
+            out_dir=out_dir,
             out_name='SignedBiclusteredBiAdjacencyHeatmap.png',
             title='Signed Biclustered Bi-Adjacency Heatmap (mt_est)',
         )
     else:
         logging.warning("Column 'mt_est' not found in edges. Skipping signed biclustered heatmap (mt_est).")
 
-    plot_arc_diagram(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=args.out_dir)
+    plot_arc_diagram(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, out_dir=out_dir)
 
     # 1-Mode Projection
     G_proj, proj_df = project_bipartite_to_unipartite(filtered_edges, cpg_col='Source', gene_col='Target', weight_col=weight_col, target='gene', weight_method='count')
     # Save the projection edge list
-    proj_out_path = os.path.join(args.out_dir, "UnipartiteProjection_Edges.csv")
+    proj_out_path = os.path.join(out_dir, "UnipartiteProjection_Edges.csv")
     proj_df.to_csv(proj_out_path, index=False)
     logging.info(f"Saved Unipartite Projection edge list to {proj_out_path}")
 
@@ -555,12 +551,44 @@ def main():
         ax.set_title("Unipartite Projection (Genes)")
         ax.axis('off')
 
-        fig_out_path = os.path.join(args.out_dir, "UnipartiteProjection.png")
+        fig_out_path = os.path.join(out_dir, "UnipartiteProjection.png")
         plt.savefig(fig_out_path, dpi=300, bbox_inches='tight')
         plt.close()
         logging.info(f"Saved Figure 6 to {fig_out_path}")
     except Exception as e:
         logging.error(f"Failed to generate Unipartite Projection visualization: {e}")
+
+
+def main():
+    args = parse_args()
+
+    if not os.path.exists(args.out_dir):
+        os.makedirs(args.out_dir)
+
+    edges, nodes, weight_col = load_data(args)
+
+    G, filtered_edges = prepare_network(edges, nodes, weight_col, args.threshold, args.out_dir)
+
+    generate_figures(G, filtered_edges, nodes, weight_col, args.out_dir)
+
+    # Per-region stratified figure sets (additive; default off). Regions are taken
+    # from the data (unique Interaction values present after filtering), never from
+    # a hardcoded list.
+    if args.per_region:
+        if 'Interaction' not in filtered_edges.columns:
+            logging.warning("Column 'Interaction' not found in edges. Skipping per-region figure generation.")
+        else:
+            regions = sorted(filtered_edges['Interaction'].dropna().astype(str).unique())
+            logging.info(f"Per-region figure generation for {len(regions)} region(s): {regions}")
+            for region in regions:
+                region_edges = filtered_edges[filtered_edges['Interaction'].astype(str) == region]
+                safe_region = re.sub(r'[^A-Za-z0-9_.-]', '_', region)
+                region_dir = os.path.join(args.out_dir, f"region_{safe_region}")
+                if not os.path.exists(region_dir):
+                    os.makedirs(region_dir)
+                logging.info(f"Region '{region}': {len(region_edges)} edge(s) -> {region_dir}")
+                G_region, region_filtered = prepare_network(region_edges, nodes, weight_col, args.threshold, region_dir)
+                generate_figures(G_region, region_filtered, nodes, weight_col, region_dir)
 
     logging.info("All visualizations complete.")
 
