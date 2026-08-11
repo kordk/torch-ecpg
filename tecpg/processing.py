@@ -30,6 +30,89 @@ from .import_data import initialize_dir, save_dataframe_part
 from .logger import Logger, analyze_bottleneck
 
 
+def qr_peak_bytes(
+    mt_count: int,
+    nrows: int,
+    ncols: int,
+    datum_bytes: int,
+) -> int:
+    """Device bytes provably required by one methylation chunk's QR.
+
+    The dominant per-chunk allocations are the design matrix
+    ``X`` of shape ``(mt_count, nrows, K)``, the reduced-mode ``Q``
+    returned by ``torch.linalg.qr`` (identical shape, since
+    ``nrows >= K``), and ``R`` of shape ``(mt_count, K, K)``, where
+    ``K = ncols + 1``.
+
+    This is a deliberate *lower* bound on the chunk's true peak: it
+    counts only tensors that are unconditionally allocated, and
+    excludes the gene-loop working set, cuSOLVER workspace, and
+    allocator slack. A lower bound cannot abort a run that would
+    otherwise have succeeded on account of over-estimation.
+    """
+    K = ncols + 1
+    return datum_bytes * mt_count * (2 * nrows * K + K * K)
+
+
+def _cuda_free_bytes(device: 'torch.device') -> Optional[int]:
+    """Free device bytes, or ``None`` when the device is not CUDA."""
+    if device is None or getattr(device, 'type', None) != 'cuda':
+        return None
+    return int(torch.cuda.mem_get_info(device)[0])
+
+
+def check_chunk_headroom(
+    mt_count: int,
+    nrows: int,
+    ncols: int,
+    datum_bytes: int,
+    device: 'torch.device',
+    meth_chunk_index: int,
+    meth_chunk_count: int,
+    logger,
+    free_bytes_fn=_cuda_free_bytes,
+) -> None:
+    """Fail fast when the next methylation chunk cannot fit.
+
+    No-op on non-CUDA devices. Logs the measured headroom at every
+    boundary so the per-chunk deficit trend is visible even on runs
+    that succeed. Set ``TECPG_HEADROOM_WARN_ONLY=1`` to downgrade the
+    failure to a warning and continue -- which is how the deficit is
+    collected across more than one chunk boundary.
+    """
+    free_bytes = free_bytes_fn(device)
+    if free_bytes is None:
+        return
+
+    required = qr_peak_bytes(mt_count, nrows, ncols, datum_bytes)
+    free_mb = free_bytes / (1024 * 1024)
+    required_mb = required / (1024 * 1024)
+    headroom_mb = free_mb - required_mb
+
+    logger.info(
+        f"{meth_chunk_index + 1}/{meth_chunk_count} mt_count={mt_count} "
+        f"required={required_mb:.2f}MB free={free_mb:.2f}MB "
+        f"headroom={headroom_mb:.2f}MB"
+    )
+
+    if free_bytes >= required:
+        return
+
+    deficit = required - free_bytes
+    message = (
+        f"tecpg: insufficient GPU memory for methylation chunk "
+        f"{meth_chunk_index + 1}/{meth_chunk_count}. "
+        f"mt_count={mt_count}, required={required}, free={free_bytes}, "
+        f"deficit={deficit}."
+    )
+
+    if os.environ.get('TECPG_HEADROOM_WARN_ONLY') == '1':
+        logger.warning(f"{message} (Guard bypassed via TECPG_HEADROOM_WARN_ONLY=1)")
+        return
+
+    raise RuntimeError(message)
+
+
 def create_normal_p(device: torch.device, dtype: torch.dtype):
     scalar = (
         torch.tensor(2, device=device, dtype=dtype).sqrt().reciprocal().neg()
@@ -488,6 +571,17 @@ def _tecpg_mlr_qr_inner(
                         device=device,
                         dtype=torch.int32,
                     )
+
+            check_chunk_headroom(
+                mt_count,
+                nrows,
+                ncols,
+                torch.ones(1, dtype=dtype).element_size(),
+                device,
+                meth_chunk_index,
+                meth_chunk_count,
+                mc_logger,
+            )
 
             # Calculate design matrix X for the current methylation chunk
             Mt: torch.Tensor = torch.tensor(
