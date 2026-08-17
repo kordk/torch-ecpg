@@ -358,8 +358,9 @@ def run_enrichr(method, args, genes_by_region):
 
     if not validated_libraries:
         logger.error("No valid enrichment libraries available. Skipping enrichment.")
-        return
+        return 0
 
+    n_failed = 0
     for region, gene_dict in genes_by_region.items():
         sorted_genes = sorted(gene_dict.keys(), key=lambda g: gene_dict[g])
         if len(sorted_genes) > args.enrichment_max_genes:
@@ -403,6 +404,7 @@ def run_enrichr(method, args, genes_by_region):
                         time.sleep(delay)
                     else:
                         logger.error(f"Failed to run gseapy for {library} ({method}) after {max_retries} retries: {e}")
+                        n_failed += 1
 
             if enr is not None and enr.results is not None and not enr.results.empty:
                 sig_res = enr.results[enr.results['Adjusted P-value'] < 0.05]
@@ -417,6 +419,8 @@ def run_enrichr(method, args, genes_by_region):
                     logger.info(f"No significant terms found (Adjusted P-value < 0.05) for {region} ({method}) in {library}.")
             elif enr is not None:
                 logger.info(f"No enrichment results returned for {region} ({method}) in {library}.")
+
+    return n_failed
 
 def main():
     parser = argparse.ArgumentParser(description="Standalone Functional and ENCODE Enrichment Analysis.")
@@ -511,6 +515,7 @@ def main():
                 logger.info(f"FDR processing complete. Collected regions: {list(fdr_genes_by_region.keys())}")
             except Exception as e:
                 logger.error(f"Error processing FDR path: {e}")
+                sys.exit(1)
 
     # 2. IG Path
     if "ig" in args.rank_by:
@@ -554,11 +559,13 @@ def main():
                     logger.info(f"IG processing complete. Collected regions: {list(ig_genes_by_region.keys())}")
             except Exception as e:
                 logger.error(f"Error processing IG path: {e}")
+                sys.exit(1)
 
     # Run Enrichment
+    n_enrichr_failed = 0
     if fdr_genes_by_region:
         logger.info("Running Enrichr for FDR gene sets...")
-        run_enrichr("fdr", args, fdr_genes_by_region)
+        n_enrichr_failed += run_enrichr("fdr", args, fdr_genes_by_region) or 0
     if ig_genes_by_region:
         # Note: we need to sort IG descending, so we negate the fractions when passing to run_enrichr, which sorts ascending by default
         ig_genes_by_region_neg = defaultdict(dict)
@@ -566,7 +573,7 @@ def main():
             for g, v in d.items():
                 ig_genes_by_region_neg[r][g] = -v
         logger.info("Running Enrichr for IG gene sets...")
-        run_enrichr("ig", args, ig_genes_by_region_neg)
+        n_enrichr_failed += run_enrichr("ig", args, ig_genes_by_region_neg) or 0
 
     # Comparison output
     if "fdr" in args.rank_by and "ig" in args.rank_by:
@@ -604,6 +611,13 @@ def main():
     if args.encode_enrichment:
         logger.info("Running ENCODE enrichment...")
         run_encode_enrichment(args, fdr_genes_by_region, fdr_significant_cpgs, fdr_cpgs_by_region)
+
+    if n_enrichr_failed > 0:
+        logger.error(
+            f"{n_enrichr_failed} Enrichr call(s) failed after retries; enrichment output is "
+            "incomplete. Exiting non-zero so the pipeline does not report success."
+        )
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
