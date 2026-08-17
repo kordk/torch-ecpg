@@ -100,6 +100,14 @@ python3 -u tools/runEnrichment.py \
     --out-dir "$ENRICHMENT_DIR" \
     --rank-by fdr ig
 
+# Stage 8 (cont.): Render a self-contained HTML summary of the enrichment
+# outputs (top-25 tables and figures per analysis, plus an overview).
+log "[8/8] Rendering enrichment summary HTML..."
+python3 -u tools/summarizeEnrichment.py \
+    --enrichment-dir "$ENRICHMENT_DIR" \
+    --out "$ENRICHMENT_DIR/enrichment_summary.html" \
+    --top-n 25
+
 log "======================================"
 log "Post-processing pipeline completed successfully!"
 log "Outputs saved to ${OUT_DIR}/plots/, ${OUT_DIR}/network/, and ${OUT_DIR}/enrichment/"
