@@ -106,7 +106,7 @@ Methylation values, gene expression values, and covariates are provided in CSV o
 
 > **Note:** The concrete `M.csv` / `G.csv` / `C.csv` / BED6 snippets below are taken from the GTP demo dataset purely as examples of the expected formats. The GTP and MESA demo datasets themselves, and the `pipeline*.sh` scripts that produce these files, are documented in *Part B — Demonstration* below.
 
-Methylatlion CSV datafiles from the GTP dataset (see Demostration below):
+Methylation CSV datafiles from the GTP dataset (see Demonstration below):
 ```bash
 head -5 data/M.csv | cut -d, -f1-5
 ```
@@ -118,7 +118,7 @@ cg00000165,0.266529984719736,0.159711109475489,0.145981687514545,0.1000003506885
 cg00000236,0.812799925026805,0.897011511592051,0.908067942964869,0.863719773724759
 ```
 
-Gene expression CSV datafiles from the GTP dataset (see Demostration below):
+Gene expression CSV datafiles from the GTP dataset (see Demonstration below):
 ```bash
 head data/G.csv | cut -d, -f1-5
 ```
@@ -133,7 +133,7 @@ ILMN_2383229,48.15523,42.69902,35.71749,39.52501
 head -5 data/C.csv
 ```
 
-Covariate CSV datafiles from the GTP dataset (see Demostration below):
+Covariate CSV datafiles from the GTP dataset (see Demonstration below):
 ```
 ,Sex,age
 5881,1,44
@@ -324,7 +324,7 @@ Here, we see GPU 0 is the A2 (previous one) and GPU 1 is the L4 (new one).
 
 Selection of the GPU to use can be done through software (e.g., https://discuss.pytorch.org/t/selecting-the-gpu/20276) or using the shell. For software that we are not going to be editing directly (e.g., tecpg), we use the shell variable direction.
  
-The the environment variable CUDA_VISIBLE_DEVICES can be set when you call python.
+The environment variable CUDA_VISIBLE_DEVICES can be set when you call python.
  
 To use the A2 GPU, the following re-mapping works:
 ```bash
