@@ -241,6 +241,16 @@ def compute_overlap_rates(df_matched, kennedy_df, cols, kennedy_thresh, tecpg_th
         'confirmation_raw': confirmation_raw,
         'confirmation_kennedy_testable': confirmation_kennedy_testable,
         'jaccard': jaccard,
+        'counts': {
+            'recovery_num': int(recovery_num),
+            'recovery_denom': int(recovery_denom),
+            'confirmation_num': int(confirmation_num),
+            'confirmation_denom': int(confirmation_denom),
+            'confirmation_testable_num': int(confirmation_testable_num),
+            'confirmation_testable_denom': int(confirmation_testable_denom),
+            'k_tk': int(len(K_tk)),
+            'union': int(union_len),
+        },
     }
     if return_sets:
         res.update({
