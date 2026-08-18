@@ -35,7 +35,7 @@ def test_permute_skeleton_end_to_end(tmp_path, master_parquet_fixture):
     df = pd.read_csv(output_file)
 
     # Assert correct columns (schema)
-    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
+    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'perm_seed', 'perm_n_perm'}
     assert expected_cols.issubset(set(df.columns))
     assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
 
@@ -51,5 +51,5 @@ def test_permute_skeleton_end_to_end(tmp_path, master_parquet_fixture):
     # Assert additional columns
     import numpy as np
     assert np.isfinite(df['mt_t']).all()
-    assert (df['seed'] == 42).all()
-    assert (df['n_perm'] == 10).all()
+    assert (df['perm_seed'] == 42).all()
+    assert (df['perm_n_perm'] == 10).all()

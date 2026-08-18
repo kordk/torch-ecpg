@@ -100,7 +100,7 @@ def test_permute_with_subsample(tmp_path, master_parquet_fixture):
     assert os.path.exists(output_file)
     df = pd.read_csv(output_file)
 
-    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
+    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'perm_seed', 'perm_n_perm'}
     assert expected_cols.issubset(set(df.columns))
     assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
 
