@@ -84,5 +84,6 @@ def test_influence_with_ig_deep_raises_usage_error():
     from tecpg.logger import Logger
     import os; open('M.csv', 'w').write('1\n2'); open('G.csv', 'w').write('1\n2'); open('C.csv', 'w').write('1\n2')
     result = runner.invoke(mlr, ['--compute-influence', '--compute-ig-deep', '--p-thresh', '0.05', '--mlr-method', 'qr'], obj={'logger': Logger(), 'data': {'root_path': '.', 'input_dir': '.', 'output_dir': '.', 'meth_file': 'M.csv', 'gene_file': 'G.csv', 'covar_file': 'C.csv'}})
+    os.remove('M.csv'); os.remove('G.csv'); os.remove('C.csv')
     assert result.exit_code != 0
     assert 'Cannot use --compute-influence with --compute-ig-deep' in result.output
