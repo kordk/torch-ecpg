@@ -183,6 +183,56 @@ def test_recovery_confirmation_arithmetic(tmp_path):
     assert "Confirmation denominators are LOWER BOUNDS (except kennedy_testable)" in summary
     assert "The Kennedy file is not a full universe, so we cannot know how many of our" in summary
 
+# O7b. counts_reconstruct_rates
+
+
+def test_counts_reconstruct_rates():
+    # The per-cell integer counts emitted alongside each rate must reproduce every
+    # reported rate exactly, so any rate in benchmark_metrics.json is obtainable from
+    # that run's own outputs. Uses the same synthetic fixture as O7 (inputs hand-controlled).
+    catalog_df = pd.DataFrame({
+        'mt_id': ['c1', 'c2', 'c3', 'c4', 'c5'],
+        'gt_id': ['p1', 'p2', 'p3', 'p4', 'p5'],
+        'precise_mt_p': [1e-10, 1e-10, 1e-4, 1e-4, 1e-10],
+        'mt_est': [1.0]*5, 'mt_t': [1.0]*5, 'region': ['cis']*5, 'fdr_est': [0.1]*5
+    })
+    kennedy_df = pd.DataFrame({
+        'CpG.probe': ['c1', 'c3', 'cx', 'c2'],
+        'exp.Probe': ['p1', 'p3', 'px', 'p2'],
+        'p.val': [1e-10, 1e-10, 1e-10, 1e-4],
+        'status': ['IN']*4, 'distance': [10]*4
+    })
+    cols = resolve_kennedy_columns(kennedy_df.columns)
+    distinct_mt = set(catalog_df['mt_id'].dropna())
+    distinct_gt = set(catalog_df['gt_id'].dropna())
+    kennedy_df = compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols)
+    # No return_sets: this is the grid-cell code path, where 'counts' must also be present.
+    res = compute_overlap_rates(catalog_df, kennedy_df, cols, 1e-5, 1e-5, 'precise_mt_p')
+
+    counts = res['counts']
+
+    # Hand-computed oracle for this fixture.
+    assert counts['recovery_num'] == 1
+    assert counts['recovery_denom'] == 2
+    assert counts['confirmation_num'] == 1
+    assert counts['confirmation_denom'] == 3
+    assert counts['confirmation_testable_num'] == 1
+    assert counts['confirmation_testable_denom'] == 2
+    assert counts['k_tk'] == 3
+    assert counts['union'] == 5
+
+    # Reproducibility: each reported rate equals the ratio of its emitted integers.
+    assert res['recovery'] == counts['recovery_num'] / counts['recovery_denom']
+    assert res['confirmation_raw'] == counts['confirmation_num'] / counts['confirmation_denom']
+    assert res['confirmation_kennedy_testable'] == \
+        counts['confirmation_testable_num'] / counts['confirmation_testable_denom']
+    assert res['jaccard'] == counts['confirmation_num'] / counts['union']
+
+    # Counts must be JSON-native python ints (so the JSON needs no encoder for them).
+    for v in counts.values():
+        assert type(v) is int
+
+
 # O8. threshold_dtype
 
 
