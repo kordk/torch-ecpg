@@ -36,7 +36,7 @@ changes. Each version section is organized into **Features**,
   demonstration (PR #376).
 - Remove the stale "MLR approximate p-values" README section (PR #374).
 
-### Housekeeping
+### Chores
 - Delete the stray `final_transcript.txt` file.
 
 ## 2.0.0b2.dev67
@@ -73,7 +73,7 @@ changes. Each version section is organized into **Features**,
 
 ## 2.0.0b2.dev63
 
-### Housekeeping
+### Chores
 - Version bump only.
 
 ## 2.0.0b2.dev62
@@ -236,7 +236,7 @@ changes. Each version section is organized into **Features**,
 - Update the CHANGELOG for `2.0.0b2.dev40` through `dev48` (PR #323) and
   revise the `qr_permute` status and evaluation details.
 
-### Housekeeping
+### Chores
 - Remove the orphaned test scripts at the repository root (PR #324).
 
 ## 2.0.0b2.dev48
