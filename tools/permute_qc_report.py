@@ -803,7 +803,14 @@ def build_permutation_resolution_module(report: dict, df=None, gene_annot=None, 
 
     n_perm_val = metadata.get('n_perm')
     if n_perm_val is None:
-        n_perm_val = df['n_perm'].unique()[0] if 'n_perm' in df.columns and len(df['n_perm'].unique()) == 1 else None
+        # Namespaced column first; the bare name is still read so artifacts
+        # written before the rename keep resolving rather than silently
+        # falling through to None.
+        for _col in ('perm_n_perm', 'n_perm'):
+            if _col in df.columns:
+                _uniq = df[_col].unique()
+                n_perm_val = _uniq[0] if len(_uniq) == 1 else None
+                break
 
     n_null_pairs = metadata.get('n_null_pairs')
     perm_resolution_floor = metadata.get('perm_resolution_floor')

@@ -152,7 +152,7 @@ def test_end_to_end_permute(cli_shaped_annotated_fixture, tmp_path, master_parqu
     import numpy as np
     np.testing.assert_allclose(merged_check['mt_p'].values, merged_check['mt_p_master'].values, err_msg="mt_p values must remain unchanged")
 
-    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
+    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'perm_seed', 'perm_n_perm'}
     assert expected_cols.issubset(set(df.columns))
     assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
 

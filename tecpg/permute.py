@@ -476,18 +476,28 @@ def _verify_master_consistency(M, G, C, universe, device, logger,
 
 def _finalize_output(master_df, reported_pairs, perm_mt_p, seed, n_perm,
                      output_p_threshold, logger):
+    """Left-join permutation results onto master catalog, stamping perm_seed/perm_n_perm."""
     res = reported_pairs.copy()            # ['mt_id','gt_id'], already str-cast
     res['perm_mt_p'] = np.asarray(perm_mt_p, dtype=np.float64)
     if output_p_threshold is not None:
         res = res[res['perm_mt_p'] <= output_p_threshold].reset_index(drop=True)
     # Drop any pre-existing perm columns on master to avoid _x/_y suffixing
     # (and make re-running permute on its own prior output idempotent).
-    drop = [c for c in ['perm_mt_p', 'seed', 'n_perm'] if c in master_df.columns]
+    # Run-level scalars are namespaced (perm_seed, perm_n_perm) so they cannot
+    # collide with the bootstrap chain's boot_seed when the two artifacts are
+    # joined. The unprefixed names are still dropped here so that re-running
+    # permute over an artifact written before the rename removes the legacy
+    # columns rather than leaving them beside the namespaced ones.
+    drop = [
+        c
+        for c in ['perm_mt_p', 'seed', 'n_perm', 'perm_seed', 'perm_n_perm']
+        if c in master_df.columns
+    ]
     if drop:
         master_df = master_df.drop(columns=drop)
     merged = master_df.merge(res, on=['mt_id', 'gt_id'], how='left')
-    merged['seed'] = seed        # run-level scalars on ALL rows (mirror bootstrap)
-    merged['n_perm'] = n_perm
+    merged['perm_seed'] = seed   # run-level scalars on ALL rows
+    merged['perm_n_perm'] = n_perm
     return merged
 
 

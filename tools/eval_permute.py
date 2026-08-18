@@ -175,10 +175,16 @@ def _resolve_permutation_parameters(args, df, meta):
 
     if b'tecpg_perm_n_perm' in meta:
         n_perm = int(meta[b'tecpg_perm_n_perm'])
-    elif 'n_perm' in df.columns:
-        unique_perms = df['n_perm'].dropna().unique()
-        if len(unique_perms) == 1:
-            n_perm = int(unique_perms[0])
+    else:
+        # Namespaced column first; the bare name is still read so artifacts
+        # written before the rename keep resolving rather than silently
+        # falling through to None.
+        for _col in ('perm_n_perm', 'n_perm'):
+            if _col in df.columns:
+                unique_perms = df[_col].dropna().unique()
+                if len(unique_perms) == 1:
+                    n_perm = int(unique_perms[0])
+                break
 
     if args.n_null_pairs is not None:
         n_null_pairs = args.n_null_pairs

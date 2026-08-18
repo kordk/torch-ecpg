@@ -22,7 +22,7 @@ BOOTSTRAP_IG_SUFFIX = '_boot'
 
 
 def merge_bootstrap_into_master(master_df, res_df, ig_columns, logger=None):
-    """Left-join bootstrap results onto the master catalog on [mt_id, gt_id].
+    """Left-join bootstrap results onto the master catalog on [mt_id, gt_id], stamping boot_seed.
 
     Columns the bootstrap produces are dropped from the master first, so a
     re-run replaces them rather than producing suffixed duplicates.
@@ -445,7 +445,14 @@ def tecpg_mlr_qr_bootstrap(
     # Record the seed actually used alongside every output row so a run is
     # reproducible from its artifact. The seed is a run-level constant, so it
     # is set after the merge (applies to all rows, matched or not).
-    merged_df['seed'] = seed
+    #
+    # The column is namespaced (boot_seed) so it cannot collide with the
+    # permute chain's perm_seed when the two artifacts are joined. A bare
+    # 'seed' column from an artifact written before the rename is dropped, so
+    # a re-run does not leave the legacy column beside the namespaced one.
+    if 'seed' in merged_df.columns:
+        merged_df = merged_df.drop(columns=['seed'])
+    merged_df['boot_seed'] = seed
 
     logger.info(f"Saving merged results to {output_file} ...")
 

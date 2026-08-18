@@ -636,7 +636,7 @@ def test_seed_round_trip():
         res1 = pd.read_csv(out_file1)
 
         # Assert column
-        assert res1['seed'].iloc[0] == seed_val
+        assert res1['boot_seed'].iloc[0] == seed_val
 
         # Assert metadata (parquet only feature, so we also need to test parquet)
         out_file1_pq = os.path.join(workdir1, 'bootstrap_merged.parquet')

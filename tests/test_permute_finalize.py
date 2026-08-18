@@ -30,15 +30,15 @@ def test_finalize_output_columns_and_values():
         logger=Logger()
     )
 
-    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'seed', 'n_perm'}
+    expected_cols = {'mt_id', 'gt_id', 'mt_t', 'mt_p', 'perm_mt_p', 'perm_seed', 'perm_n_perm'}
     assert expected_cols.issubset(set(df.columns))
     assert not any(c.endswith('_x') or c.endswith('_y') for c in df.columns)
 
     np.testing.assert_allclose(df['mt_t'].values, master_df['mt_t'].values)
     np.testing.assert_allclose(df['mt_p'].values, master_df['mt_p'].values)
     np.testing.assert_allclose(df['perm_mt_p'].values, perm_mt_p)
-    assert (df['seed'] == seed).all()
-    assert (df['n_perm'] == n_perm).all()
+    assert (df['perm_seed'] == seed).all()
+    assert (df['perm_n_perm'] == n_perm).all()
 
 
 def test_finalize_output_threshold():
