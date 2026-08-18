@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev48**.
+The current development version on the `dev` branch is **2.0.0b2.dev68**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -16,6 +16,228 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## 2.0.0b2.dev68
+
+### Features
+- Add a `--max-fdr` export filter and use the FDR-significant catalog as the
+  network universe (PR #369).
+- Add `tools/summarizeEnrichment.py`, a self-contained HTML summary of
+  enrichment results (PR #372).
+- Namespace the run-level columns as `perm_seed`, `perm_n_perm` and
+  `boot_seed` (PR #375).
+
+### Bug Fixes
+- Make `runEnrichment.py` fail closed on selection errors and exhausted
+  retries (PR #373).
+
+### Documentation
+- Reorganize the README to separate the core `tecpg` tool from the GTP / MESA
+  demonstration (PR #376).
+- Remove the stale "MLR approximate p-values" README section (PR #374).
+
+### Housekeeping
+- Delete the stray `final_transcript.txt` file.
+
+## 2.0.0b2.dev67
+
+### Features
+- Add a signed biclustered heatmap (`mt_est`) with tests (PR #366).
+- Add `--per-region` stratified figure generation to
+  `visualizeBipartiteNetwork` (PR #367).
+- Add a hypergeometric gene–gene projection alongside the count projection
+  (PR #368).
+
+### Improvements / Performance
+- Add a per-chunk GPU headroom guard to `tecpg_mlr_qr` (PR #365).
+
+### Bug Fixes
+- Seed reservoir sampling from the run seed (PR #370).
+
+## 2.0.0b2.dev66
+
+### Improvements / Performance
+- Add chunk-size overrides for the `mesa` dataset in `pipelinePermute.sh`
+  (PR #364).
+
+## 2.0.0b2.dev65
+
+### Bug Fixes
+- Move garbage collection to after the variable deletions so the memory is
+  actually released.
+
+## 2.0.0b2.dev64
+
+### Improvements / Performance
+- Run garbage collection after deleting large variables to free memory.
+
+## 2.0.0b2.dev63
+
+### Housekeeping
+- Version bump only.
+
+## 2.0.0b2.dev62
+
+### Improvements / Performance
+- Extract the bootstrap-to-master join into a separately testable function
+  (PR #361).
+- Keep the genome-wide Integrated Gradients columns on the master and suffix
+  the bootstrap's own columns (PR #362).
+- Use `precise_mt_p` for edge p-values, keeping `mt_p` as a fallback
+  (PR #363).
+
+## 2.0.0b2.dev61
+
+### Features
+- Add the `diagnose_se_ratio_trend` tool (PR #353) and an accompanying
+  se-ratio trend HTML report (PR #355).
+
+### Improvements / Performance
+- Add a version resolver to `benchmark_kennedy`, de-duplicate its `NpEncoder`
+  branch and remove a shadowed test (PR #354).
+- Select the enrichment foreground on the FDR column rather than on the
+  p-value (PR #360).
+
+### Bug Fixes
+- Make `compute_eligibility` in `benchmark_kennedy` use the `tecpg` universe
+  (PR #357).
+- Fail closed when the FDR parquet write fails (PR #358).
+- Fail closed when a worker result cannot be retrieved (PR #359).
+
+### Documentation
+- Revise the `qr_permute` documentation with the calibration updates.
+
+## 2.0.0b2.dev60
+
+### Bug Fixes
+- Default the `qr_permute` null population and add a host-memory ceiling
+  (PR #351).
+
+## 2.0.0b2.dev59
+
+### Features
+- Give `pipelinePermute.sh` a golden path that derives its inputs, logs
+  loudly and validates the result (PR #348).
+
+## 2.0.0b2.dev58
+
+### Features
+- Add raw bootstrap / analytic concordance scores and a distribution summary
+  (PR #350).
+
+### Improvements / Performance
+- Make the mapper p-value threshold explicit in `pipeline.sh` (PR #349).
+- Remove the dead `PVALCUTOFF` constant and its log line (PR #347).
+
+## 2.0.0b2.dev57
+
+### Features
+- Add a `benchmark_kennedy` wrapper pipeline (PR #345).
+- Add an FDR-column comparison oracle and a licensing-mask guard (PR #346).
+
+### Documentation
+- Revise the `qr_permute` documentation for the Phase 4 updates and update
+  the eCpG filtering prioritization plan.
+
+## 2.0.0b2.dev56
+
+### Features
+- Add mainline `p_permute` / `fdr_permute` annotation to `pipelinePermute.sh`
+  (PR #342).
+
+### Documentation
+- Document the Integrated Gradients computation and its implications.
+
+## 2.0.0b2.dev55
+
+### Improvements / Performance
+- Migrate the Docker image to a CUDA 12.4 base with a pinned
+  `torch 2.6.0+cu124` (PR #344).
+
+### Bug Fixes
+- Fix the `NpEncoder` JSON blocker (NumPy boolean handling) and improve the
+  `benchmark_kennedy` report figures and guidance (PR #343).
+
+### Documentation
+- Document the column references for the MLR QR permutation chains and
+  revise the `qr_permute` documentation.
+- Add `dev`-branch installation instructions to the README.
+
+## 2.0.0b2.dev54
+
+### Features
+- Add `tools/annotate_permute_p.py` to set `p_permute` from the calibration
+  verdict (PR #340).
+- Parameterize the FDR columns used by `summarizeOutput_parquet.py`
+  (PR #339).
+
+### Improvements / Performance
+- Refactor `tools/benchmark_kennedy.py` for the C1 (PR #336), C1b (PR #338)
+  and C2 (PR #341) work items.
+
+## 2.0.0b2.dev53
+
+### Features
+- Add a self-contained HTML QC report for `qr_permute` (PR #332).
+- Add the direction, verdict-robustness, permutation-resolution and tail QC
+  modules (PR #333).
+- Add the analytic-p precision, pair density, gene span and TSS distance QC
+  modules (PR #334).
+
+### Bug Fixes
+- Enforce the permutation resolution floor and badge discipline (PR #335).
+
+### Tests
+- Restore the QC test coverage deleted in PR #335 and de-duplicate the
+  metadata keys (PR #337).
+
+### Documentation
+- Update the `qr_permute` documentation to match the current code.
+
+## 2.0.0b2.dev52
+
+### Bug Fixes
+- Promote `mt_id` / `gt_id` from a named index in `assemble_master`
+  (PR #331).
+
+### Documentation
+- Revise the `qr_permute` status and implementation details.
+
+## 2.0.0b2.dev51
+
+### Features
+- Add additional descriptions to the CLI output (PR #328).
+- Expand `pipelinePermute.sh` to apply the cis region evaluation.
+
+### Bug Fixes
+- Fix the `int8` overflow in the cis / distal region mask, which silently
+  collapsed a requested window to a few base pairs (PR #329).
+- Fix the empty cis windows produced for negative-strand genes (PR #330).
+
+### Documentation
+- Revise the `qr_permute` development-status documentation.
+
+## 2.0.0b2.dev50
+
+### Features
+- Add the `build_gene_anchored_master` assembly tool (PR #326).
+
+### Improvements / Performance
+- Refactor the chromosome canonicalization into a shared, torch-free module
+  (PR #327).
+
+## 2.0.0b2.dev49
+
+### Features
+- Make `summarize_permute` consume the region authority and render the 7-way
+  table (PR #325).
+
+### Documentation
+- Update the CHANGELOG for `2.0.0b2.dev40` through `dev48` (PR #323) and
+  revise the `qr_permute` status and evaluation details.
+
+### Housekeeping
+- Remove the orphaned test scripts at the repository root (PR #324).
 
 ## 2.0.0b2.dev48
 
