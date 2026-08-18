@@ -986,6 +986,17 @@ def corr(
     'The tecpg_perm_n_reported metadata will preserve the '
     'pre-threshold universe. For qr_permute.',
 )
+@click.option(
+    '--compute-influence',
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help=(
+        'Emit per-CpG max sample leverage (mt_h_max = max_i ||Q_i||^2) as an '
+        'additive column. Single-point influence screen; deletion point is the '
+        'max-leverage subject. No residual tensor is materialized. mlr-method qr only.'
+    ),
+)
 @click.pass_context
 def mlr(
     ctx: click.Context,
@@ -1014,6 +1025,7 @@ def mlr(
     ig_baseline: str,
     ig_covariates: bool,
     ig_covariates_list: Optional[str],
+    compute_influence: bool,
     pairs_file: Optional[str],
     master_parquet: Optional[str],
     bootstrap_iterations: int,
@@ -1186,6 +1198,11 @@ def mlr(
         logger.error(error)
         raise click.UsageError(error)
 
+    if compute_influence and compute_ig_deep:
+        error = 'Cannot use --compute-influence with --compute-ig-deep (column-order collision; joint support deferred).'
+        logger.error(error)
+        raise click.UsageError(error)
+
     if compute_ig_deep and p_thresh is None:
         error = '--compute-ig-deep requires a --p-thresh to be set to avoid computational collapse.'
         logger.error(error)
@@ -1237,6 +1254,7 @@ def mlr(
         'prefetch_chunks': prefetch_chunks,
         'aggressive_gc': aggressive_gc,
         'output_format': output_format,
+        'compute_influence': compute_influence,
     }
 
     logger.info(
@@ -1358,6 +1376,9 @@ def mlr(
         kwargs.pop('compute_ig_deep', None)
         kwargs.pop('ig_baseline', None)
         kwargs.pop('ig_covariates_filter', None)
+        if compute_influence:
+            logger.warning('--compute-influence is only supported for mlr-method qr. It will be ignored.')
+        kwargs.pop('compute_influence', None)
         output = regression_full(**kwargs, **logger)
     if not chunking:
         save_dataframes([output], output_path, [data['output']], clear_dir=False, **logger)

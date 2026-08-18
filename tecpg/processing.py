@@ -151,6 +151,7 @@ def tecpg_mlr_qr(
     permute_label_test: bool = False,
     compute_ig: bool = False,
     compute_ig_deep: bool = False,
+    compute_influence: bool = False,
     ig_baseline: str = 'mean',
     ig_covariates_filter: Optional[list] | str = None,
     prefetch_chunks: int = 0,
@@ -187,7 +188,7 @@ def tecpg_mlr_qr(
             gene_loci_per_chunk, meth_loci_per_chunk, p_thresh, output_dir,
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
             file_format, reservoir_count, subsample_mt_count, subsample_g_count, seed,
-            permute_label_test, compute_ig, compute_ig_deep, ig_baseline,
+            permute_label_test, compute_ig, compute_ig_deep, compute_influence, ig_baseline,
             ig_covariates_filter, prefetch_chunks, aggressive_gc, pool, max_workers,
             output_format=output_format, logger=logger, chunking=chunking
         )
@@ -219,6 +220,7 @@ def _tecpg_mlr_qr_inner(
     permute_label_test: bool = False,
     compute_ig: bool = False,
     compute_ig_deep: bool = False,
+    compute_influence: bool = False,
     ig_baseline: str = 'mean',
     ig_covariates_filter: Optional[list] | str = None,
     prefetch_chunks: int = 0,
@@ -353,6 +355,13 @@ def _tecpg_mlr_qr_inner(
     elif region != 'all':
         logger.info("After region filtering: Testing {0} CpGs x {1} Genes = {2} total tests", len(M), len(G), len(M) * len(G))
 
+    if compute_influence:
+        logger.info(
+            'Influence diagnostic enabled: emitting mt_h_max (per-CpG max sample '
+            'leverage, max_i ||Q_i||^2). Deletion point = max-leverage subject. '
+            'No residual tensor is materialized.'
+        )
+
     # Initializes some constants
     logger.info(
         'Running tecpg_mlr_qr with options: {0}',
@@ -441,6 +450,9 @@ def _tecpg_mlr_qr_inner(
 
         ig_columns = [col + '_ig' for col in ig_categories]
         columns.extend(ig_columns)
+
+    if compute_influence:
+        columns.append('mt_h_max')
 
     # Create covariate tensor
     Ct_base: torch.Tensor = torch.tensor(
@@ -621,6 +633,11 @@ def _tecpg_mlr_qr_inner(
             # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
             # We need the diagonal elements.
             Q, R = torch.linalg.qr(X, mode='reduced')
+
+            if compute_influence:
+                # Per-sample leverage h_i = ||Q_i||^2 (row norms of Q, reduce over K),
+                # then max over samples S -> per-CpG (M_chunk,). Gene-independent.
+                h_max = (Q * Q).sum(dim=2).amax(dim=1)
 
             # K is ncols + 1 (because X is cat(ones, Mt, Ct)). Mt adds 1 column. Ct adds ncols - 1 (since ncols is C.shape[1] + 1)
             # Actually, C.shape[1] is number of covariates.
@@ -950,6 +967,12 @@ def _tecpg_mlr_qr_inner(
 
                 if compute_ig:
                     current_results = torch.cat((current_results, IG_analytical), dim=1)
+
+                if compute_influence:
+                    h_max_rows = h_max.unsqueeze(1).expand(-1, chunk_len).permute(1, 0).reshape(-1)
+                    if region != 'all':
+                        h_max_rows = h_max_rows[region_mask]
+                    current_results = torch.cat((current_results, h_max_rows.unsqueeze(1)), dim=1)
 
                 if do_reservoir:
                     # Collect batch results for reservoir sampling BEFORE p-value filtration
