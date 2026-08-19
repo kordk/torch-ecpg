@@ -170,3 +170,50 @@ def build_symbol_to_model(loci_dict):
         f"dropped {n_dropped} ambiguous (>=2 distinct models)."
     )
     return resolved
+
+
+#### Resolve probes to gene models via their Re-Annotator symbol ##############
+def build_probe_to_model(probe_symbol_pairs, symbol_to_model):
+    """Return {probe_id: {'chrom','chromStart','chromEnd','strand'}} by resolving
+    each probe's Re-Annotator Gene_symbol against a symbol_to_model map (from
+    build_symbol_to_model). Drop-if-ambiguous is applied at the probe level:
+
+      * no symbol                              -> dropped
+      * two or more symbols (comma/semicolon)  -> dropped
+      * one symbol, unmatched in symbol_to_model -> dropped
+      * one symbol, matched                     -> emitted with that gene model
+
+    A dropped probe is simply absent from the result, so downstream lookup treats
+    it as unannotated (region=None). probe_symbol_pairs is an iterable of
+    (probe_id, gene_symbol_field); gene_symbol_field is the raw Re-Annotator
+    string (possibly '', 'NA', or 'A,B'). No pandas here, so the module stays
+    stdlib-only and importable without side effects.
+    """
+    resolved = {}
+    n_no_symbol = 0
+    n_multi = 0
+    n_unmatched = 0
+    for probe_id, symbol_field in probe_symbol_pairs:
+        raw = (symbol_field or "").replace(";", ",")
+        tokens = [t.strip() for t in raw.split(",")]
+        tokens = [t for t in tokens if t and t.upper() not in ("NA", ".", "-")]
+
+        if len(tokens) == 0:
+            n_no_symbol += 1
+            continue
+        if len(tokens) > 1:
+            n_multi += 1
+            continue
+
+        model = symbol_to_model.get(tokens[0])
+        if model is None:
+            n_unmatched += 1
+            continue
+
+        resolved[probe_id] = model
+
+    logger.info(
+        f"[build_probe_to_model] Resolved {len(resolved)} probes; dropped "
+        f"{n_no_symbol} no-symbol, {n_multi} multi-symbol, {n_unmatched} unmatched."
+    )
+    return resolved

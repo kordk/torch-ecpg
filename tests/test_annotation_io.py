@@ -1,4 +1,4 @@
-from tools.annotation_io import readAnnotationFileToDict, build_symbol_to_model
+from tools.annotation_io import readAnnotationFileToDict, build_symbol_to_model, build_probe_to_model
 
 
 def test_gff_captures_gene_model_and_gene_name(tmp_path):
@@ -67,3 +67,24 @@ def test_symbol_resolver_end_to_end_from_gtf(tmp_path):
     # AAA unique -> kept; BBB maps to two distinct gene features -> dropped.
     assert set(resolved) == {"AAA"}
     assert resolved["AAA"]["chromStart"] == 100  # GFF 1-based -> 0-based
+
+def test_probe_resolver_drops_and_keeps():
+    symbol_to_model = {
+        "AAA": {"chrom": "chr1", "chromStart": 100, "chromEnd": 500, "strand": "+"},
+        "CCC": {"chrom": "chr4", "chromStart": 7, "chromEnd": 9, "strand": "-"},
+    }
+    pairs = [
+        ("ILMN_1", "AAA"),      # single, matched -> kept
+        ("ILMN_2", "BBB"),      # single, unmatched (dropped by K2) -> dropped
+        ("ILMN_3", "AAA,BBB"),  # multi-symbol -> dropped (must NOT take-first)
+        ("ILMN_4", ""),         # no symbol -> dropped
+        ("ILMN_5", "ZZZ"),      # single, not in GTF -> dropped
+        ("ILMN_6", "CCC"),      # single, matched -> kept
+        ("ILMN_7", "NA"),       # NA token -> dropped
+    ]
+    resolved = build_probe_to_model(pairs, symbol_to_model)
+
+    assert set(resolved) == {"ILMN_1", "ILMN_6"}
+    # A matched probe carries the kb-scale gene model, not a probe footprint.
+    assert resolved["ILMN_1"] == {"chrom": "chr1", "chromStart": 100, "chromEnd": 500, "strand": "+"}
+    assert resolved["ILMN_6"]["chromEnd"] == 9
