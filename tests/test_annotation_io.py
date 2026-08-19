@@ -88,3 +88,24 @@ def test_probe_resolver_drops_and_keeps():
     # A matched probe carries the kb-scale gene model, not a probe footprint.
     assert resolved["ILMN_1"] == {"chrom": "chr1", "chromStart": 100, "chromEnd": 500, "strand": "+"}
     assert resolved["ILMN_6"]["chromEnd"] == 9
+
+
+def test_parser_reads_gzip_transparently(tmp_path):
+    import gzip as _gz
+    content = (
+        'chr1\tHAVANA\tgene\t101\t500\t.\t+\t.\tgene_id "ENSG00000000001.3"; gene_name "AAA";\n'
+        'chr2\tHAVANA\tgene\t1001\t2000\t.\t-\t.\tgene_id "ENSG00000000002.1"; gene_name "BBB";\n'
+    )
+    plain = tmp_path / "mini.gtf"
+    plain.write_text(content)
+    gz = tmp_path / "mini.gtf.gz"
+    with _gz.open(str(gz), "wt") as fh:
+        fh.write(content)
+
+    from_plain = readAnnotationFileToDict(str(plain))
+    from_gz = readAnnotationFileToDict(str(gz))
+
+    # Gzip path yields the identical parse as the plain path.
+    assert from_gz == from_plain
+    assert set(from_gz) == {"ENSG00000000001", "ENSG00000000002"}
+    assert from_gz["ENSG00000000001"]["gene_name"] == "AAA"
