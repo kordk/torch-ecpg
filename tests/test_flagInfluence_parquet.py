@@ -275,6 +275,13 @@ def test_multiindex_master_with_null_row(run_tool, setup_data):
     null_flag = out_df.loc[("g1", "cg_null"), "mt_influence_flag"]
     assert pd.isna(null_flag)
 
+    with open(os.path.join(setup_data["out_dir"], "influence_qc.json")) as f:
+        rep = json.load(f)
+
+    top25 = rep["top25"]
+    null_entry = next(r for r in top25 if r["mt_id"] == "cg_null")
+    assert null_entry["flagged"] is None
+
 def test_sweep_tables_present_and_monotone(run_tool, setup_data):
     res = run_tool("-i", setup_data["pq_path"], "-c", setup_data["C_path"], "--report-dir", setup_data["out_dir"])
     assert res.returncode == 0

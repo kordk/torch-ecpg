@@ -304,7 +304,9 @@ def main():
                 "n_sig_rows": int(row["n_sig_rows"]) if has_fdr else None,
             }
             if args.output:
-                if args.rule == "abs":
+                if pd.isna(row["mt_h_max"]):
+                    r["flagged"] = None
+                elif args.rule == "abs":
                     r["flagged"] = bool(row["mt_h_max"] > args.threshold)
                 else:
                     r["flagged"] = bool(row["h_excess"] > args.threshold)
@@ -495,11 +497,14 @@ def main():
         md_lines.append("| " + " | ".join(tcols) + " |")
         md_lines.append("|---" * len(tcols) + "|")
         for r in top25:
-            row = f"| {r['mt_id']} | {r['mt_h_max']:.4f} | {r['h_excess'] if r['h_excess'] is not None else 'None'} | {r['n_rows']} |"
+            h_exc = f"{r['h_excess']:.4f}" if r['h_excess'] is not None else "None"
+            h_max_val = f"{r['mt_h_max']:.4f}" if r['mt_h_max'] is not None else "nan"
+            row = f"| {r['mt_id']} | {h_max_val} | {h_exc} | {r['n_rows']} |"
             if has_fdr:
                 row += f" {r['n_sig_rows']} |"
             if args.output:
-                row += f" {r['flagged']} |"
+                flag_str = str(r['flagged']).lower() if r['flagged'] is not None else "null"
+                row += f" {flag_str} |"
             md_lines.append(row)
     md_lines.append("")
 
