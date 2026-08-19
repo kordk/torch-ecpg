@@ -238,7 +238,10 @@ if [ "$MLR_IG_COVARIATES" = "all" ]; then
 elif [ -n "$MLR_IG_COVARIATES" ] && [ "$MLR_IG_COVARIATES" != "none" ]; then
     MLR_IG_ARGS+=(--ig-covariates-list "$MLR_IG_COVARIATES")
 fi
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr --$MAPPING -p "$MAP_P_THRESH" "${MLR_CHUNK_ARGS[@]}" --compute-ig "${MLR_IG_ARGS[@]}" 2>&1 | tee "mlr_run_${DATASET}.log"
+# --compute-influence: emit per-CpG max sample leverage (mt_h_max) as an additive column.
+# Diagnostic only; mapping output is otherwise unchanged. Propagates through merge ->
+# assignRegion -> recalc -> summarize -> bootstrap/permute masters (left-join). Cost ~nil.
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr --$MAPPING -p "$MAP_P_THRESH" "${MLR_CHUNK_ARGS[@]}" --compute-ig "${MLR_IG_ARGS[@]}" --compute-influence 2>&1 | tee "mlr_run_${DATASET}.log"
 set +o pipefail
 fi
 
