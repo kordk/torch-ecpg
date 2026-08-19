@@ -428,7 +428,7 @@ if [ $CIS_ENRICH -eq 1 ] && [ "$START_STAGE" == "all" ]; then
     python3 -u -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$CIS_MAP_DIR" \
         run mlr --mlr-method qr --cis \
         -w 0 -u "$CIS_WINDOW" -d "$CIS_WINDOW" \
-        -p 1.0 --output-format parquet "${CIS_MAP_ARGS[@]}" 2>&1 | tee "cis_map_run_${DATASET}.log"
+        -p 1.0 --output-format parquet "${CIS_MAP_ARGS[@]}" --compute-influence 2>&1 | tee "cis_map_run_${DATASET}.log"
     set +o pipefail
 
     python3 -u tools/mergeOutputs.py --format parquet --pattern "*.*" \
