@@ -8,6 +8,7 @@
 ## importing it never pulls in pyarrow/torch.
 
 import sys
+import gzip
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,8 @@ logger = logging.getLogger(__name__)
 def readAnnotationFileToDict(my_annotFile):
     my_lociH = {}
 
-    with open(my_annotFile, "r") as fp:
+    opener = gzip.open if str(my_annotFile).endswith(".gz") else open
+    with opener(my_annotFile, "rt") as fp:
         ng = 0 ## number of genes/loci processed
         nskip = 0 ## number of loci with missing data
         for line in fp:
