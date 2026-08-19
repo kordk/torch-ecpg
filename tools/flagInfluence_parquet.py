@@ -87,6 +87,8 @@ def main():
 
     for batch in pq_file.iter_batches(batch_size=args.chunk_size):
         df = batch.to_pandas()
+        if df.index.names != [None]:
+            df = df.reset_index()
         n_rows_total += len(df)
 
         null_mask = df["mt_h_max"].isna()
@@ -401,7 +403,57 @@ def main():
     if report['header']['threshold'] is not None:
          md_lines.append(f"**Threshold**: {report['header']['threshold']}")
     md_lines.append(f"**h_C_max**: {report['header']['h_C_max']}")
+    if report['frac_cpgs_at_floor'] is not None:
+        md_lines.append(f"**frac_cpgs_at_floor**: {report['frac_cpgs_at_floor']:.4f}")
     md_lines.append("")
+
+    md_lines.append("## Distributions")
+    if h_max_dist:
+        md_lines.append("### mt_h_max")
+        md_lines.append("| min | q01 | q05 | q25 | q50 | q75 | q95 | q99 | q999 | max |")
+        md_lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        d = h_max_dist
+        md_lines.append(f"| {d['min']:.4f} | {d['q01']:.4f} | {d['q05']:.4f} | {d['q25']:.4f} | {d['q50']:.4f} | {d['q75']:.4f} | {d['q95']:.4f} | {d['q99']:.4f} | {d['q999']:.4f} | {d['max']:.4f} |")
+        md_lines.append("")
+
+    if h_excess_dist:
+        md_lines.append("### h_excess")
+        md_lines.append("| min | q01 | q05 | q25 | q50 | q75 | q95 | q99 | q999 | max |")
+        md_lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        d = h_excess_dist
+        md_lines.append(f"| {d['min']:.4f} | {d['q01']:.4f} | {d['q05']:.4f} | {d['q25']:.4f} | {d['q50']:.4f} | {d['q75']:.4f} | {d['q95']:.4f} | {d['q99']:.4f} | {d['q999']:.4f} | {d['max']:.4f} |")
+        md_lines.append("")
+
+    md_lines.append("## Per-Region")
+    cols = ["Region", "n_rows", "n_cpgs", "median_mt_h_max"]
+    if has_fdr:
+        cols.extend(["n_sig_rows", "n_sig_cpgs"])
+    md_lines.append("| " + " | ".join(cols) + " |")
+    md_lines.append("|---" * len(cols) + "|")
+    for reg in region_list:
+        rs = per_region_stats[reg]
+        row = f"| {reg} | {rs['n_rows']} | {rs['n_cpgs']} | {rs.get('median_mt_h_max') or 'None'} |"
+        if has_fdr:
+            row += f" {rs['n_sig_rows']} | {rs['n_sig_cpgs']} |"
+        md_lines.append(row)
+    md_lines.append("")
+
+    if chosen_stats:
+        md_lines.append("## Chosen Rule Stats")
+        md_lines.append(f"**n_cpgs_flagged**: {chosen_stats['n_cpgs_flagged']}")
+        md_lines.append("")
+        ccols = ["Region", "n_rows_flagged", "frac_rows_flagged", "n_cpgs_flagged"]
+        if has_fdr:
+            ccols.append("frac_sig_rows_flagged")
+        md_lines.append("| " + " | ".join(ccols) + " |")
+        md_lines.append("|---" * len(ccols) + "|")
+        for reg in region_list:
+            cs = chosen_stats["per_region"][reg]
+            row = f"| {reg} | {cs['n_rows_flagged']} | {cs['frac_rows_flagged']:.4f} | {cs['n_cpgs_flagged']} |"
+            if has_fdr:
+                row += f" {cs.get('frac_sig_rows_flagged', 0.0):.4f} |"
+            md_lines.append(row)
+        md_lines.append("")
 
     md_lines.append("## Sweep Abs")
     if sweep_abs:
@@ -433,6 +485,24 @@ def main():
             md_lines.append(row)
     md_lines.append("")
 
+    md_lines.append("## Top 25 CpGs by mt_h_max")
+    if top25:
+        tcols = ["mt_id", "mt_h_max", "h_excess", "n_rows"]
+        if has_fdr:
+            tcols.append("n_sig_rows")
+        if args.output:
+            tcols.append("flagged")
+        md_lines.append("| " + " | ".join(tcols) + " |")
+        md_lines.append("|---" * len(tcols) + "|")
+        for r in top25:
+            row = f"| {r['mt_id']} | {r['mt_h_max']:.4f} | {r['h_excess'] if r['h_excess'] is not None else 'None'} | {r['n_rows']} |"
+            if has_fdr:
+                row += f" {r['n_sig_rows']} |"
+            if args.output:
+                row += f" {r['flagged']} |"
+            md_lines.append(row)
+    md_lines.append("")
+
     with open(os.path.join(args.report_dir, "influence_qc.md"), "w") as f:
         f.write("\n".join(md_lines) + "\n")
 
@@ -457,11 +527,10 @@ def main():
             with pq.ParquetWriter(tmp_out, new_schema, compression="snappy") as writer:
                 for batch in pq_file.iter_batches(batch_size=args.chunk_size):
                     df = batch.to_pandas()
+                    if df.index.names != [None]:
+                        df = df.reset_index()
 
-                    if args.rule == "abs":
-                        flag_series = df["mt_h_max"] > args.threshold
-                    else:
-                        flag_series = (df["mt_h_max"] - h_C_max) > args.threshold
+                    flag_series = df["mt_id"].isin(flagged_mt_ids)
 
                     flag_series = flag_series.astype(object)
                     flag_series[df["mt_h_max"].isna()] = None

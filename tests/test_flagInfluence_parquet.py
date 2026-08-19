@@ -250,6 +250,31 @@ def test_floor_requires_covariates(run_tool, setup_data):
     assert res.returncode == 1
     assert "requires -c" in res.stderr
 
+def test_multiindex_master_with_null_row(run_tool, setup_data):
+    df = pd.DataFrame([
+        {"gt_id": "g1", "mt_id": "cg_null", "mt_h_max": None},
+        {"gt_id": "g1", "mt_id": "cg1", "mt_h_max": 0.5},
+    ])
+    df = df.set_index(["gt_id", "mt_id"])
+
+    bad_pq = os.path.join(setup_data["tmp_path"], "multi.parquet")
+    df.to_parquet(bad_pq)
+
+    out_pq = os.path.join(setup_data["tmp_path"], "multi_out.parquet")
+
+    res1 = run_tool("-i", bad_pq, "--report-dir", setup_data["out_dir"])
+    assert res1.returncode == 0
+
+    res2 = run_tool("-i", bad_pq, "-o", out_pq, "--report-dir", setup_data["out_dir"],
+                    "--rule", "abs", "--threshold", "0.2")
+    assert res2.returncode == 0
+
+    out_df = pd.read_parquet(out_pq)
+    assert out_df.index.names == ["gt_id", "mt_id"]
+
+    null_flag = out_df.loc[("g1", "cg_null"), "mt_influence_flag"]
+    assert pd.isna(null_flag)
+
 def test_sweep_tables_present_and_monotone(run_tool, setup_data):
     res = run_tool("-i", setup_data["pq_path"], "-c", setup_data["C_path"], "--report-dir", setup_data["out_dir"])
     assert res.returncode == 0
