@@ -124,3 +124,49 @@ def readAnnotationFileToDict(my_annotFile):
     logger.info(f"[readAnnotationFileToDict] Skipped (NA) {nskip} loci from {my_annotFile}")
     logger.info(f"[readAnnotationFileToDict] Processed {len(my_lociH)} loci from {my_annotFile}")
     return my_lociH
+
+
+#### Invert a parsed GFF loci dict into a symbol -> gene-model map #############
+def build_symbol_to_model(loci_dict):
+    """Return {gene_name: {'chrom','chromStart','chromEnd','strand'}} from a
+    parsed GFF loci dict (keyed by Ensembl gene id, each entry carrying a
+    'gene_name' from readAnnotationFileToDict's GFF branch).
+
+    Precedence rule: drop-if-ambiguous. A symbol that resolves to two or more
+    DISTINCT gene models -- differing in any of chrom/chromStart/chromEnd/strand
+    -- is omitted from the map, so a probe carrying that symbol finds nothing and
+    falls to region=None. Multiple entries with identical coordinates collapse to
+    the single shared model and are kept. Entries lacking a 'gene_name' (e.g.
+    BED6-parsed) are skipped.
+    """
+    by_symbol = {}
+    for entry in loci_dict.values():
+        symbol = entry.get("gene_name")
+        if not symbol:
+            continue
+        model = {
+            "chrom": entry["chrom"],
+            "chromStart": entry["chromStart"],
+            "chromEnd": entry["chromEnd"],
+            "strand": entry["strand"],
+        }
+        by_symbol.setdefault(symbol, []).append(model)
+
+    resolved = {}
+    n_dropped = 0
+    for symbol, models in by_symbol.items():
+        distinct = {
+            (m["chrom"], m["chromStart"], m["chromEnd"], m["strand"])
+            for m in models
+        }
+        if len(distinct) == 1:
+            resolved[symbol] = models[0]
+        else:
+            # Ambiguous symbol: >=2 distinct gene models. Dropped by policy.
+            n_dropped += 1
+
+    logger.info(
+        f"[build_symbol_to_model] Resolved {len(resolved)} symbols; "
+        f"dropped {n_dropped} ambiguous (>=2 distinct models)."
+    )
+    return resolved
