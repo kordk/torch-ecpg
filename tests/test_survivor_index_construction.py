@@ -96,8 +96,15 @@ def _assert_matches_oracle(tmp_path, *, region, p_thresh, expect_empty=False):
     )
     assert list(chunked.index) == list(oracle.index)
     assert list(chunked.columns) == list(oracle.columns)
+    # Value tolerance is calibrated to float32 GPU batch-shape divergence:
+    # the chunked path factorizes/multiplies in different batch shapes than
+    # the unchunked oracle (e.g. QR over 100-row vs 300-row batches), so
+    # reduction order differs and isolated elements deviate by up to ~1.5e-5
+    # absolute on klabdev's L4. The index equality above is the exact guard
+    # this file exists for; the value check only needs to catch gross
+    # misalignment (which exceeds this tolerance by orders of magnitude).
     np.testing.assert_allclose(
-        chunked.to_numpy(), oracle.to_numpy(), rtol=1e-5, atol=1e-6
+        chunked.to_numpy(), oracle.to_numpy(), rtol=1e-4, atol=2e-5
     )
 
 
