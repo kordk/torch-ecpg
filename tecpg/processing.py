@@ -1192,47 +1192,47 @@ def _tecpg_mlr_qr_inner(
                     # issued here, together, so that prof_d2h_time measures the
                     # transfers (and the implicit stream sync) and prof_post_time
                     # below measures host index construction only.
-                    mask_np = region_indices_list[-1].cpu().numpy() if region != 'all' else None
-                    p_mask_np = p_indices_list[-1].cpu().numpy() if p_thresh is not None else None
+                    #
+                    # P1: when any filter is active, compose the survivors'
+                    # flat indices into the (G, M) grid on device and copy only
+                    # that int64 vector, instead of copying full-grid boolean
+                    # masks and building two (chunk_len * mt_count) host string
+                    # arrays only to discard all but the survivors. Row order
+                    # is unchanged: chunk_results rows are the True positions
+                    # of the composed mask in ascending order, which is exactly
+                    # torch.nonzero order.
+                    if region != 'all':
+                        flat_dev = torch.nonzero(region_indices_list[-1]).squeeze(1)
+                        if p_thresh is not None:
+                            flat_dev = flat_dev[p_indices_list[-1]]
+                    elif p_thresh is not None:
+                        flat_dev = torch.nonzero(p_indices_list[-1]).squeeze(1)
+                    else:
+                        flat_dev = None  # unfiltered: full-grid index path below
+                    flat_np = flat_dev.cpu().numpy() if flat_dev is not None else None
+                    del flat_dev
                     results_host = torch.cat(results).cpu().numpy()
+
                     prof_t4 = time.perf_counter()
                     prof_d2h_time += (prof_t4 - prof_t3)
 
-                    # If region == 'all' and no p_thresh
-                    # We have (G_chunk * M_chunk) results.
-                    # M sites are same for all G in this chunk.
-
-                    # Generate full indices for the block. At this point, any filtration
-                    # has already been applied to the data; indexing is identical for
-                    # filtered and non-filtered cases.
-                    # Generate full indices for the block
-                    # gt_chunk_names (G_chunk)
-                    # mt_site_names (M_chunk)
-
-                    # Repeat G for each M
-                    gt_sites = numpy.repeat(gt_chunk_names, mt_count) # [g1, g1, ..., g2, g2, ...]
-                    mt_sites = numpy.tile(mt_site_names, chunk_len) # [m1, m2, ..., m1, m2, ...]
-
-                    # Apply region mask
-                    if region != 'all':
-                        # region_mask was (G, M) then flattened.
-                        # It corresponds to the order of gt_sites/mt_sites above?
-                        # B = B.permute(1, 0, 2).reshape(-1, ncols) -> (G, M, K) -> (G*M, K).
-                        # Yes.
-                        # region_mask is on CPU/GPU?
-                        # region_mask was tensor.
-                        # Need numpy mask.
-                        del region_indices_list[:]
-
-                        gt_sites = gt_sites[mask_np]
-                        mt_sites = mt_sites[mask_np]
-
-                    # Apply p-value mask
-                    if p_thresh is not None:
-                        del p_indices_list[:]
-
-                        gt_sites = gt_sites[p_mask_np]
-                        mt_sites = mt_sites[p_mask_np]
+                    # Index construction. Flatten order is
+                    # B.permute(1, 0, 2).reshape(-1, K): G outer, M inner, so a
+                    # survivor's flat grid index f decomposes as
+                    # gene = f // mt_count, meth = f % mt_count.
+                    if flat_np is not None:
+                        # O(survivors): index the name arrays directly.
+                        gt_sites = gt_chunk_names[flat_np // mt_count]
+                        mt_sites = mt_site_names[flat_np % mt_count]
+                        if region != 'all':
+                            del region_indices_list[:]
+                        if p_thresh is not None:
+                            del p_indices_list[:]
+                    else:
+                        # Unfiltered output keeps the full-grid construction:
+                        # every pair is emitted, so there is nothing to skip.
+                        gt_sites = numpy.repeat(gt_chunk_names, mt_count) # [g1, g1, ..., g2, g2, ...]
+                        mt_sites = numpy.tile(mt_site_names, chunk_len) # [m1, m2, ..., m1, m2, ...]
 
                     index_chunk = [gt_sites, mt_sites]
 
