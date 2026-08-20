@@ -1171,6 +1171,15 @@ def _tecpg_mlr_qr_inner(
                 else:
                     results.append(chunk_results)
 
+                # End of the device compute stage (solve, T/P, masks, threshold
+                # gather). Synchronised under TECPG_PROFILE=1 so that
+                # prof_gpu_time measures queued device work rather than kernel
+                # launch latency, mirroring the prep/h2d stamps above.
+                if inner_logger.carry_data.get('profile') and torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                prof_t3 = time.perf_counter()
+                prof_gpu_time += (prof_t3 - prof_t2)
+
                 # Save output if gene chunking is used
                 # In regression_full, saving happens inside the loop if gene_loci_per_chunk is set.
                 if gene_loci_per_chunk:
@@ -1178,6 +1187,16 @@ def _tecpg_mlr_qr_inner(
                     # We need indices for the current gene chunk.
                     # G_chunk names:
                     gt_chunk_names = gt_site_names[gene_start_index:gene_end_index]
+
+                    # D2H stage: every device-to-host copy this chunk needs is
+                    # issued here, together, so that prof_d2h_time measures the
+                    # transfers (and the implicit stream sync) and prof_post_time
+                    # below measures host index construction only.
+                    mask_np = region_indices_list[-1].cpu().numpy() if region != 'all' else None
+                    p_mask_np = p_indices_list[-1].cpu().numpy() if p_thresh is not None else None
+                    results_host = torch.cat(results).cpu().numpy()
+                    prof_t4 = time.perf_counter()
+                    prof_d2h_time += (prof_t4 - prof_t3)
 
                     # If region == 'all' and no p_thresh
                     # We have (G_chunk * M_chunk) results.
@@ -1203,17 +1222,13 @@ def _tecpg_mlr_qr_inner(
                         # region_mask is on CPU/GPU?
                         # region_mask was tensor.
                         # Need numpy mask.
-                        mask_np = region_indices_list[-1].cpu().numpy()
                         del region_indices_list[:]
 
                         gt_sites = gt_sites[mask_np]
                         mt_sites = mt_sites[mask_np]
-                    else:
-                        mask_np = None # implied all True
 
                     # Apply p-value mask
                     if p_thresh is not None:
-                        p_mask_np = p_indices_list[-1].cpu().numpy()
                         del p_indices_list[:]
 
                         gt_sites = gt_sites[p_mask_np]
@@ -1232,8 +1247,16 @@ def _tecpg_mlr_qr_inner(
                     )
                     file_path = os.path.join(output_dir, file_name)
 
+                    # End of the host post-processing stage (index construction
+                    # and output path). What follows, up to prof_t6, is the
+                    # save-payload construction and is reported as `write`
+                    # (write_enqueue_ms); pool.submit and the save-queue
+                    # back-pressure wait remain in the next chunk's idle gap.
+                    prof_t5 = time.perf_counter()
+                    prof_post_time += (prof_t5 - prof_t4)
+
                     out = pandas.DataFrame(
-                        torch.cat(results).cpu().numpy(),
+                        results_host,
                         index=index_chunk,
                         columns=columns,
                     )
@@ -1298,7 +1321,7 @@ def _tecpg_mlr_qr_inner(
                         output_format=output_format,
                         **dict(mc_logger),
                     ))
-                    del out, gt_sites, mt_sites, index_chunk
+                    del out, gt_sites, mt_sites, index_chunk, results_host
                     del results[:]
 
                     # Force GC
