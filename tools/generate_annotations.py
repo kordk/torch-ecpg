@@ -1,9 +1,17 @@
 import os
+import sys
 import GEOparse
 import pandas as pd
 from pyliftover import LiftOver
 import warnings
 import logging
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from annotation_io import (  # noqa: E402
+    readAnnotationFileToDict,
+    build_symbol_to_model,
+    build_probe_to_model,
+)
 warnings.filterwarnings('ignore')
  
  
@@ -455,5 +463,55 @@ df_ge_hg38 = pd.DataFrame(ge_hg38)
 write_bed6(df_ge_hg19, "demo/annoHT12_comprehensive.hg19.bed6")
 write_bed6(df_ge_hg38, "demo/annoHT12_comprehensive.hg38.bed6")
  
+# ---------------------------------------------------------------------------
+# ILMN-keyed GENE-MODEL BED for REGION ASSIGNMENT (not cis/trans mapping).
+# Resolve each probe -> GENCODE gene model via its Re-Annotator Gene_symbol and
+# write a separate BED. The probe-coordinate BEDs above are untouched; the
+# cis/trans/distal mapping continues to use them. Region assignment (K4) points
+# at the file written here.
+# The GTF path is a setting (env var) with a sensible default.
+# ---------------------------------------------------------------------------
+GENCODE_GTF = os.environ.get(
+    "TECPG_GENCODE_GTF", "encode_beds/gencode.v49lift37.annotation.gtf.gz"
+)
+print(f"Building ILMN-keyed gene-model BED from {GENCODE_GTF} ...")
+
+gene_loci = readAnnotationFileToDict(GENCODE_GTF)
+symbol_to_model = build_symbol_to_model(gene_loci)
+
+# Probe -> Gene_symbol from the Re-Annotator, read independently so the
+# probe-coordinate merge above is not disturbed.
+reann_sym = pd.read_csv("demo/reannotator_humanHt12v4.txt", sep="\t")
+reann_sym = reann_sym[['X.PROBE_ID', 'Gene_symbol']].drop_duplicates(subset=['X.PROBE_ID'])
+probe_pairs = zip(
+    reann_sym['X.PROBE_ID'].astype(str),
+    reann_sym['Gene_symbol'].fillna('').astype(str),
+)
+probe_to_model = build_probe_to_model(probe_pairs, symbol_to_model)
+
+# Emit 1-BASED coordinates to match M.bed6 and the probe BEDs. The GFF branch of
+# readAnnotationFileToDict stores chromStart 0-based (start-1); add 1 back so the
+# gene-model BED shares the pipeline's 1-based convention.
+print(
+    "[gene-model BED] Emitting 1-based coordinates (chromStart = GFF 0-based + 1) "
+    "to match M.bed6 / the probe BEDs."
+)
+gene_rows = []
+for probe_id, m in probe_to_model.items():
+    gene_rows.append({
+        'chrom': m['chrom'],
+        'chromStart': int(m['chromStart']) + 1,   # 0-based -> 1-based
+        'chromEnd': int(m['chromEnd']),
+        'name': probe_id,
+        'score': 0,
+        'strand': m['strand'],
+    })
+
+df_ge_genemodel = pd.DataFrame(
+    gene_rows, columns=['chrom', 'chromStart', 'chromEnd', 'name', 'score', 'strand']
+)
+print(f"[gene-model BED] {len(df_ge_genemodel)} probes resolved to gene models.")
+write_bed6(df_ge_genemodel, "demo/annoHT12_genemodel.hg19.bed6")
+
 print("Done generating annotations.")
 
