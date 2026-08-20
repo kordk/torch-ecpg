@@ -344,7 +344,7 @@ for f in M.csv G.csv C.csv; do
     [ -s "$DATA_DIR/$f" ] || { log "Error: $DATA_DIR/$f missing or empty. Run ./pipelinePre.sh --dataset $DATASET first."; exit 1; }
 done
 
-for f in G.bed6 M.bed6; do
+for f in G.bed6 G_genemodel.bed6 M.bed6; do
     [ -s "$ANNOT_DIR/$f" ] || { log "Error: $ANNOT_DIR/$f missing or empty. Run ./pipelinePre.sh --dataset $DATASET first."; exit 1; }
 done
 
@@ -458,7 +458,7 @@ if [ $EXECUTE -eq 1 ]; then
             log "[1/5] Assigning canonical regions ($MASTER_PARQUET -> $REGION_MASTER)..."
             python3 -u tools/assignRegionToEcpg_parquet.py \
                 -d "$MASTER_PARQUET" \
-                -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" \
+                -g "$ANNOT_DIR/G_genemodel.bed6" -m "$ANNOT_DIR/M.bed6" \
                 -o "$REGION_MASTER"
             MASTER_PARQUET="$REGION_MASTER"
             log "      Read the 'eCpgs Counts by Region' line above: it is the coverage gate for the per-region eval."

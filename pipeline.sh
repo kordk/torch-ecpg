@@ -158,7 +158,7 @@ for f in M.csv G.csv C.csv; do
     [ -s "$DATA_DIR/$f" ] || { log "Error: $DATA_DIR/$f missing or empty. Run ./pipelinePre.sh --dataset $DATASET first."; exit 1; }
 done
 
-for f in G.bed6 M.bed6; do
+for f in G.bed6 G_genemodel.bed6 M.bed6; do
     [ -s "$ANNOT_DIR/$f" ] || { log "Error: $ANNOT_DIR/$f missing or empty. Run ./pipelinePre.sh --dataset $DATASET first."; exit 1; }
 done
 
@@ -295,7 +295,7 @@ if [ $EXECUTE -eq 1 ]; then
 log "[5/9] Annotating regions..."
 log "Mapping eCpG and Gene coordinates to determine regional categories (e.g., CIS, TRANS)."
 log "Input Parquet: $MERGED_PARQUET, Output Parquet: $ANNOTATED_PARQUET"
-python3 tools/assignRegionToEcpg_parquet.py -d "$MERGED_PARQUET" -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" -o "$ANNOTATED_PARQUET"
+python3 tools/assignRegionToEcpg_parquet.py -d "$MERGED_PARQUET" -g "$ANNOT_DIR/G_genemodel.bed6" -m "$ANNOT_DIR/M.bed6" -o "$ANNOTATED_PARQUET"
 fi
 
 if [ "$START_STAGE" == "precise_p" ]; then EXECUTE=1; fi
