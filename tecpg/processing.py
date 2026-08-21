@@ -978,16 +978,18 @@ def _tecpg_mlr_qr_inner(
                     # Collect batch results for reservoir sampling BEFORE p-value filtration
                     batch_size = len(current_results)
                     if batch_size > 0:
-                        # Construct indices for reservoir
+                        # P1b: names are constructed sample-then-index — only
+                        # for rows the reservoir actually keeps — instead of
+                        # building two (chunk_len * mt_count) string arrays
+                        # every chunk and discarding ~all of them (~200 ms per
+                        # 10,000x512 tile, the CLI-pathway 'gpu floor').
+                        # Row r of current_results maps to flat grid index
+                        # nonzero(region_mask)[r] (or r when region == 'all');
+                        # gene = flat // mt_count, meth = flat % mt_count.
+                        # Name construction consumes no RNG, so the
+                        # reservoir_rng stream (rand, then randint) is
+                        # byte-identical to the previous implementation.
                         gt_chunk_names_res = gt_site_names[gene_start_index:gene_end_index]
-                        gt_sites_res = numpy.repeat(gt_chunk_names_res, mt_count)
-                        mt_sites_res = numpy.tile(mt_site_names, chunk_len)
-
-                        if region != 'all':
-                            # region_mask was applied, we need the numpy mask
-                            mask_np_res = region_indices_list[-1].cpu().numpy()
-                            gt_sites_res = gt_sites_res[mask_np_res]
-                            mt_sites_res = mt_sites_res[mask_np_res]
 
                         # Generate random rolls for reservoir
                         rolls = torch.rand(
@@ -999,7 +1001,17 @@ def _tecpg_mlr_qr_inner(
                         # If roll < P_j, we keep it. Where does it go? Random index in [0, reservoir_count - 1]
 
                         if reservoir_processed + batch_size <= reservoir_count:
-                            # If buffer is not full, just append everything
+                            # Buffer not full: append everything. Full-batch
+                            # names via the arithmetic map (identical values
+                            # to the former repeat/tile construction).
+                            if region != 'all':
+                                flat_res = torch.nonzero(
+                                    region_indices_list[-1]
+                                ).squeeze(1).cpu().numpy()
+                            else:
+                                flat_res = numpy.arange(batch_size)
+                            gt_sites_res = gt_chunk_names_res[flat_res // mt_count]
+                            mt_sites_res = mt_site_names[flat_res % mt_count]
                             reservoir_buffer.append((current_results.clone(), gt_sites_res, mt_sites_res))
                             reservoir_processed += batch_size
                         else:
@@ -1023,8 +1035,15 @@ def _tecpg_mlr_qr_inner(
 
                             if len(kept_indices) > 0:
                                 kept_results = current_results[kept_indices]
-                                kept_gt = gt_sites_res[kept_indices.cpu().numpy()]
-                                kept_mt = mt_sites_res[kept_indices.cpu().numpy()]
+                                kept_cpu = kept_indices.cpu().numpy()
+                                if region != 'all':
+                                    flat_res = torch.nonzero(
+                                        region_indices_list[-1]
+                                    ).squeeze(1)[kept_indices].cpu().numpy()
+                                else:
+                                    flat_res = kept_cpu
+                                kept_gt = gt_chunk_names_res[flat_res // mt_count]
+                                kept_mt = mt_site_names[flat_res % mt_count]
 
                                 # Where to place them in the buffer?
                                 # For each kept item, if its total index <= reservoir_count, we append it
@@ -1037,38 +1056,68 @@ def _tecpg_mlr_qr_inner(
                                     generator=reservoir_rng,
                                 )
 
-                                # Process the kept items
-                                for idx, kept_idx in enumerate(kept_indices):
-                                    total_idx = reservoir_processed + kept_idx.item() + 1
-                                    if total_idx <= reservoir_count:
-                                        # Buffer is not full, we just append
-                                        reservoir_buffer.append((kept_results[idx:idx+1].clone(), kept_gt[idx:idx+1], kept_mt[idx:idx+1]))
-                                    else:
-                                        # Buffer is full, replace an existing element
-                                        target_idx = replace_indices[idx].item()
+                                # P1b: vectorized placement. kept_indices is
+                                # ascending, so every append (total index <=
+                                # reservoir_count) precedes every replacement,
+                                # exactly as the former per-item loop ordered
+                                # them. Duplicate replacement targets keep the
+                                # LAST written item, matching the sequential
+                                # loop; numpy fancy assignment guarantees
+                                # last-write-wins, and the tensor assignment
+                                # is deduplicated to unique targets first so
+                                # CUDA nondeterminism cannot reorder it.
+                                total_idx = (
+                                    reservoir_processed
+                                    + kept_indices
+                                    + 1
+                                )
+                                n_append = int(
+                                    (total_idx <= reservoir_count).sum().item()
+                                )
+                                if n_append > 0:
+                                    reservoir_buffer.append((
+                                        kept_results[:n_append].clone(),
+                                        kept_gt[:n_append],
+                                        kept_mt[:n_append],
+                                    ))
+                                if n_append < len(kept_indices):
+                                    # Flatten buffer if not already flattened
+                                    if isinstance(reservoir_buffer, list):
+                                        if sum(len(x[1]) for x in reservoir_buffer) > 0:
+                                            res_res_cat = torch.cat([x[0] for x in reservoir_buffer])
+                                            res_gt_cat = numpy.concatenate([x[1] for x in reservoir_buffer])
+                                            res_mt_cat = numpy.concatenate([x[2] for x in reservoir_buffer])
+                                            reservoir_buffer = (res_res_cat, res_gt_cat, res_mt_cat)
 
-                                        # Since reservoir_buffer is a list of tensors of varying sizes,
-                                        # replacing by index requires finding which tensor/element it belongs to.
-                                        # This can be slow. To optimize, if the buffer gets complex, we flatten it.
-                                        # Instead of full flattening, we'll store individual replacements in a list
-                                        # and flatten later, or we can flatten the reservoir buffer once it reaches capacity.
-
-                                        # Flatten buffer if not already flattened
-                                        if isinstance(reservoir_buffer, list):
-                                            if sum(len(x[1]) for x in reservoir_buffer) > 0:
-                                                res_res_cat = torch.cat([x[0] for x in reservoir_buffer])
-                                                res_gt_cat = numpy.concatenate([x[1] for x in reservoir_buffer])
-                                                res_mt_cat = numpy.concatenate([x[2] for x in reservoir_buffer])
-                                                reservoir_buffer = (res_res_cat, res_gt_cat, res_mt_cat)
-                                            else:
-                                                # Handle empty buffer weirdness
-                                                pass
-
-                                        if isinstance(reservoir_buffer, tuple):
-                                            res_res_cat, res_gt_cat, res_mt_cat = reservoir_buffer
-                                            res_res_cat[target_idx] = kept_results[idx]
-                                            res_gt_cat[target_idx] = kept_gt[idx]
-                                            res_mt_cat[target_idx] = kept_mt[idx]
+                                    if isinstance(reservoir_buffer, tuple):
+                                        res_res_cat, res_gt_cat, res_mt_cat = reservoir_buffer
+                                        rep_np = replace_indices[n_append:].cpu().numpy()
+                                        rep_gt = kept_gt[n_append:]
+                                        rep_mt = kept_mt[n_append:]
+                                        # numpy fancy assignment: last write wins
+                                        res_gt_cat[rep_np] = rep_gt
+                                        res_mt_cat[rep_np] = rep_mt
+                                        # tensor side: dedup to last occurrence
+                                        # per target, then assign unique targets
+                                        rev = rep_np[::-1]
+                                        _, first_rev = numpy.unique(
+                                            rev, return_index=True
+                                        )
+                                        last_pos = (len(rep_np) - 1) - first_rev
+                                        uniq_targets = rep_np[last_pos]
+                                        res_res_cat[
+                                            torch.as_tensor(
+                                                uniq_targets.copy(),
+                                                device=device,
+                                                dtype=torch.long,
+                                            )
+                                        ] = kept_results[n_append:][
+                                            torch.as_tensor(
+                                                last_pos.copy(),
+                                                device=device,
+                                                dtype=torch.long,
+                                            )
+                                        ]
 
                             reservoir_processed += batch_size
 
