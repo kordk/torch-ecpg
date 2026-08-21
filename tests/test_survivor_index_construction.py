@@ -94,8 +94,31 @@ def _assert_matches_oracle(tmp_path, *, region, p_thresh, expect_empty=False):
     assert chunked is not None and oracle is not None, (
         'one path produced no rows'
     )
-    assert list(chunked.index) == list(oracle.index)
     assert list(chunked.columns) == list(oracle.columns)
+    if p_thresh is None:
+        # Survivor set is deterministic (region mask is integer arithmetic):
+        # index labels must match pair-for-pair. This is the exact guard this
+        # file exists for.
+        assert list(chunked.index) == list(oracle.index)
+        common = chunked.index
+    else:
+        # fp32 noise between the two computation geometries can flip rows
+        # whose p sits at the threshold (observed on both CPU BLAS stacks and
+        # GPU). The survivor sets may differ ONLY by such boundary rows;
+        # everything else must agree on both sides.
+        sym = chunked.index.symmetric_difference(oracle.index)
+        for idx in sym:
+            src = chunked if idx in chunked.index else oracle
+            p_val = float(src.loc[idx, 'mt_p'])
+            assert abs(p_val - p_thresh) <= 1e-4, (
+                f'{idx} differs between paths but is not a threshold-'
+                f'boundary row (mt_p={p_val}, p_thresh={p_thresh})'
+            )
+        common = chunked.index.intersection(oracle.index)
+        assert len(common) > 0, 'no common survivors to compare'
+        assert list(chunked.loc[common].index) == list(oracle.loc[common].index)
+        chunked = chunked.loc[common]
+        oracle = oracle.loc[common]
     # Value tolerance is calibrated to float32 GPU batch-shape divergence:
     # the chunked path factorizes/multiplies in different batch shapes than
     # the unchunked oracle (e.g. QR over 100-row vs 300-row batches), so
