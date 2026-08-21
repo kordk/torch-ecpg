@@ -1011,3 +1011,38 @@ def test_version_lookup_never_raises(monkeypatch):
     v = _resolve_tecpg_version()
     assert v == 'unknown'
     assert isinstance(v, str) and v
+def test_influence_stratified_analysis():
+    from tools.benchmark_kennedy import influence_stratified_analysis
+    import pandas as pd
+
+    # 10 low-leverage rows: effect/t agree, all concordant (both significant).
+    # 10 high-leverage rows: effect anti-correlated, Kennedy-sig but tecpg NOT sig.
+    rows = []
+    for i in range(10):
+        rows.append({'mt_h_max': 0.10 + i * 0.001, 'mt_est': float(i), 'beta': float(i),
+                     'mt_t': float(i), 'T.stat': float(i),
+                     'precise_mt_p': 1e-20, 'p.val': 1e-20})
+    for i in range(10):
+        rows.append({'mt_h_max': 0.50 + i * 0.001, 'mt_est': float(i), 'beta': float(9 - i),
+                     'mt_t': float(i), 'T.stat': float(9 - i),
+                     'precise_mt_p': 1e-2, 'p.val': 1e-20})
+    df = pd.DataFrame(rows)
+
+    r = influence_stratified_analysis(df, 'precise_mt_p', 'p.val', 'beta', 'T.stat', 1e-11, 1e-11)
+
+    assert r['skipped'] is False
+    cc = r['concordance_low_high']
+    # Concordance degrades from low- to high-leverage half.
+    assert cc['effect_spearman_low'] > cc['effect_spearman_high']
+    assert cc['effect_delta_low_minus_high'] > 0
+    # Recovery falls as leverage rises (low deciles ~1.0, high deciles ~0.0).
+    assert r['recovery_trend_spearman'] is not None
+    assert r['recovery_trend_spearman'] < 0
+
+
+def test_influence_stratified_analysis_skips_without_h_max():
+    from tools.benchmark_kennedy import influence_stratified_analysis
+    import pandas as pd
+    df = pd.DataFrame({'mt_est': [1.0, 2.0], 'beta': [1.0, 2.0]})
+    r = influence_stratified_analysis(df, 'precise_mt_p', 'p.val', 'beta', 'T.stat', 1e-11, 1e-11)
+    assert r['skipped'] is True

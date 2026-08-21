@@ -107,7 +107,7 @@ def stream_catalog_and_match(args, schema, tecpg_p_col, kennedy_pairs,
 
     desired_cols = [
         'mt_id', 'gt_id', tecpg_p_col, 'mt_est', 'mt_t',
-        'region', 'fdr_est', 'mt_chrom', 'gt_chrom'
+        'region', 'fdr_est', 'mt_chrom', 'gt_chrom', 'mt_h_max'
     ]
     seen = set()
     cols_to_load = []
@@ -1050,6 +1050,82 @@ def build_trans_fraction_module(args) -> QCModule:
     )
 
 
+def _safe_spearman(a, b):
+    """Spearman rho on aligned non-null pairs; None if <3 usable pairs or no variance."""
+    if a is None or b is None:
+        return None
+    d = pd.DataFrame({'a': a, 'b': b}).dropna()
+    if len(d) < 3 or d['a'].nunique() < 2 or d['b'].nunique() < 2:
+        return None
+    rho, _ = stats.spearmanr(d['a'], d['b'])
+    return float(rho) if rho == rho else None
+
+
+def influence_stratified_analysis(df_merged, tecpg_p_col, kennedy_p_col,
+                                  beta_col, tstat_col, tecpg_thresh, kennedy_thresh,
+                                  n_bins=10):
+    """Stratify the tecpg<->Kennedy overlap by per-CpG leverage (mt_h_max).
+    Returns a JSON-native dict; {'skipped': True, ...} if mt_h_max is absent."""
+    if 'mt_h_max' not in df_merged.columns or df_merged['mt_h_max'].isna().all():
+        return {'skipped': True, 'reason': 'mt_h_max absent from catalog'}
+
+    df = df_merged[df_merged['mt_h_max'].notna()].copy()
+    result = {
+        'skipped': False,
+        'n_pairs': int(len(df)),
+        'median_mt_h_max': float(df['mt_h_max'].median()),
+    }
+
+    # (2) concordance low vs high (median split on mt_h_max)
+    med = float(df['mt_h_max'].median())
+    low = df[df['mt_h_max'] <= med]
+    high = df[df['mt_h_max'] > med]
+    ce_lo = _safe_spearman(low.get('mt_est'), low.get(beta_col)) if beta_col else None
+    ce_hi = _safe_spearman(high.get('mt_est'), high.get(beta_col)) if beta_col else None
+    ct_lo = _safe_spearman(low.get('mt_t'), low.get(tstat_col)) if tstat_col else None
+    ct_hi = _safe_spearman(high.get('mt_t'), high.get(tstat_col)) if tstat_col else None
+    result['concordance_low_high'] = {
+        'median_split': med,
+        'n_low': int(len(low)),
+        'n_high': int(len(high)),
+        'effect_spearman_low': ce_lo,
+        'effect_spearman_high': ce_hi,
+        'effect_delta_low_minus_high': (ce_lo - ce_hi) if (ce_lo is not None and ce_hi is not None) else None,
+        't_spearman_low': ct_lo,
+        't_spearman_high': ct_hi,
+        't_delta_low_minus_high': (ct_lo - ct_hi) if (ct_lo is not None and ct_hi is not None) else None,
+    }
+
+    # (1) recovery by mt_h_max decile
+    try:
+        df['_decile'] = pd.qcut(df['mt_h_max'], n_bins, labels=False, duplicates='drop')
+    except (ValueError, IndexError):
+        df['_decile'] = 0
+    deciles = []
+    ranks, recs = [], []
+    for d in sorted(df['_decile'].dropna().unique()):
+        sub = df[df['_decile'] == d]
+        ksig = sub[sub[kennedy_p_col] < kennedy_thresh]
+        n_elig = int(len(ksig))
+        n_conc = int((ksig[tecpg_p_col] < tecpg_thresh).sum())
+        rec = (n_conc / n_elig) if n_elig > 0 else None
+        deciles.append({
+            'decile': int(d),
+            'h_max_lo': float(sub['mt_h_max'].min()),
+            'h_max_hi': float(sub['mt_h_max'].max()),
+            'n_kennedy_sig': n_elig,
+            'n_concordant': n_conc,
+            'recovery': rec,
+        })
+        if rec is not None:
+            ranks.append(int(d))
+            recs.append(rec)
+    result['recovery_by_decile'] = deciles
+    result['recovery_trend_spearman'] = _safe_spearman(pd.Series(ranks), pd.Series(recs))
+
+    return result
+
+
 def build_concordance_module(args, figs) -> QCModule:
     purpose = "Venn diagram and effect-size scatter."
     interpretation = (
@@ -1207,6 +1283,18 @@ def main():
 
     if beta_col is None or tstat_col is None:
         logging.warning("Optional beta or T.stat column absent. Dependent concordance metrics will be skipped.")
+
+    # Influence-stratified overlap: does replication fall / concordance degrade with CpG leverage?
+    influence_stats = influence_stratified_analysis(
+        df_merged, tecpg_p_col, cols['pval'], beta_col, tstat_col,
+        args.tecpg_thresh, args.kennedy_thresh
+    )
+    with open(os.path.join(args.outdir, 'influence_stratified.json'), 'w') as _f:
+        json.dump(influence_stats, _f, indent=2)
+    logging.info(
+        "Influence-stratified analysis -> influence_stratified.json "
+        f"(skipped={influence_stats.get('skipped')})"
+    )
 
     pearson_r_beta = spearman_r_beta = r2_beta = 0.0
     pearson_r_t = spearman_r_t = r2_t = 0.0
