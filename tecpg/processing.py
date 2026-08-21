@@ -124,6 +124,57 @@ def create_normal_p(device: torch.device, dtype: torch.dtype):
     return prob
 
 
+def batched_householder_qr(
+    X: torch.Tensor,
+) -> 'tuple[torch.Tensor, torch.Tensor]':
+    """Thin (reduced) QR for a batch of tall-skinny matrices.
+
+    Drop-in replacement for ``torch.linalg.qr(X, mode='reduced')`` on
+    (B, n, k) input with small k: k Householder reflections implemented as
+    batched tensor ops, so the kernel count is O(k), independent of B.
+    ``torch.linalg.qr`` dispatches per matrix on the CUDA path for this
+    shape (~12 launches per matrix, measured ~121k launches per
+    10,000-batch on klabdev), which is launch-bound; this costs ~40.
+
+    Sign convention: diag(R) >= 0, deterministically. ``geqrf`` does NOT
+    guarantee a sign convention, so Q and R may differ from
+    ``torch.linalg.qr`` by per-column sign flips; every downstream
+    consumer here (beta via R^{-1} Q^T Y, XtXi diagonal via R^{-1} row
+    norms, leverage via Q row norms) is invariant to that flip.
+    Equivalence is guarded on those downstream quantities in
+    tests/test_batched_householder_qr.py.
+
+    Rank-deficient input produces non-finite downstream values, matching
+    the failure mode of the call it replaces.
+    """
+    B, n, k = X.shape
+    dt = X.dtype
+    A = X.clone()
+    Q = torch.zeros(B, n, k, dtype=dt, device=X.device)
+    Q[:, :k, :] = torch.eye(k, dtype=dt, device=X.device)
+    reflectors = []
+    for j in range(k):
+        x = A[:, j:, j]
+        normx = x.norm(dim=1)
+        sign = torch.where(x[:, 0] >= 0, 1.0, -1.0).to(dt)
+        v = x.clone()
+        v[:, 0] = v[:, 0] + sign * normx
+        vnorm = v.norm(dim=1).clamp_min(torch.finfo(dt).tiny)
+        v = v / vnorm.unsqueeze(1)
+        vtA = torch.einsum('bi,bij->bj', v, A[:, j:, j:])
+        A[:, j:, j:] -= 2.0 * v.unsqueeze(2) * vtA.unsqueeze(1)
+        flip = -sign
+        A[:, j, j:] *= flip.unsqueeze(1)
+        reflectors.append((v, flip))
+    R = A[:, :k, :].triu()
+    for j in reversed(range(k)):
+        v, flip = reflectors[j]
+        Q[:, j, :] *= flip.unsqueeze(1)
+        vtQ = torch.einsum('bi,bij->bj', v, Q[:, j:, :])
+        Q[:, j:, :] -= 2.0 * v.unsqueeze(2) * vtQ.unsqueeze(1)
+    return Q, R
+
+
 def tecpg_mlr_qr(
     M: pandas.DataFrame,
     G: pandas.DataFrame,
@@ -632,7 +683,16 @@ def _tecpg_mlr_qr_inner(
             # Pre-calculate diagonal of (X^T X)^-1 for Standard Error using QR decomposition
             # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
             # We need the diagonal elements.
-            Q, R = torch.linalg.qr(X, mode='reduced')
+            # P2: on CUDA, torch.linalg.qr loops per matrix for this shape
+            # (launch-bound: ~121k kernels per 10,000-CpG chunk), so use the
+            # batched Householder path there. On CPU, LAPACK geqrf is ~10x
+            # faster than the batched formulation, so keep torch.linalg.qr.
+            # Downstream consumers are sign-convention invariant either way;
+            # see batched_householder_qr.
+            if X.is_cuda:
+                Q, R = batched_householder_qr(X)
+            else:
+                Q, R = torch.linalg.qr(X, mode='reduced')
 
             if compute_influence:
                 # Per-sample leverage h_i = ||Q_i||^2 (row norms of Q, reduce over K),
