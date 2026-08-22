@@ -120,7 +120,7 @@ def test_eligibility_classification(tmp_path):
         'precise_mt_p': [1e-6, 1e-2, 1e-6],
         'mt_est': [1.0, 1.0, 1.0],
         'mt_t': [1.0, 1.0, 1.0],
-        'region': ['cis', 'trans', 'cis'],
+        'region': ['CIS5', 'TRANS', 'CIS5'],
         'fdr_est': [0.01, 0.5, 0.01]
     })
     kennedy_df = pd.DataFrame({
@@ -155,7 +155,7 @@ def test_recovery_confirmation_arithmetic(tmp_path):
         'mt_id': ['c1', 'c2', 'c3', 'c4', 'c5'],
         'gt_id': ['p1', 'p2', 'p3', 'p4', 'p5'],
         'precise_mt_p': [1e-10, 1e-10, 1e-4, 1e-4, 1e-10],
-        'mt_est': [1.0]*5, 'mt_t': [1.0]*5, 'region': ['cis']*5, 'fdr_est': [0.1]*5
+        'mt_est': [1.0]*5, 'mt_t': [1.0]*5, 'region': ['CIS5']*5, 'fdr_est': [0.1]*5
     })
     kennedy_df = pd.DataFrame({
         'CpG.probe': ['c1', 'c3', 'cx', 'c2'],
@@ -194,7 +194,7 @@ def test_counts_reconstruct_rates():
         'mt_id': ['c1', 'c2', 'c3', 'c4', 'c5'],
         'gt_id': ['p1', 'p2', 'p3', 'p4', 'p5'],
         'precise_mt_p': [1e-10, 1e-10, 1e-4, 1e-4, 1e-10],
-        'mt_est': [1.0]*5, 'mt_t': [1.0]*5, 'region': ['cis']*5, 'fdr_est': [0.1]*5
+        'mt_est': [1.0]*5, 'mt_t': [1.0]*5, 'region': ['CIS5']*5, 'fdr_est': [0.1]*5
     })
     kennedy_df = pd.DataFrame({
         'CpG.probe': ['c1', 'c3', 'cx', 'c2'],
@@ -267,7 +267,7 @@ def test_export_schema(tmp_path):
         'mt_id': ['c1', 'c2'],
         'gt_id': ['p1', 'p2'],
         'precise_mt_p': [1e-10, 1e-10],
-        'mt_est': [1.0, 1.0], 'mt_t': [1.0, 1.0], 'region': ['cis', 'trans'], 'fdr_est': [0.1, 0.1]
+        'mt_est': [1.0, 1.0], 'mt_t': [1.0, 1.0], 'region': ['CIS5', 'TRANS'], 'fdr_est': [0.1, 0.1]
     })
     kennedy_df = pd.DataFrame({
         'CpG.probe': ['c1', 'c3'],
@@ -471,7 +471,7 @@ def test_eligibility_column_disambiguation(tmp_path):
         'mt_id': ['cg1'],
         'gt_id': ['pr1'],
         'precise_mt_p': [1e-10],
-        'mt_est': [1.0], 'mt_t': [1.0], 'region': ['cis'], 'fdr_est': [0.1]
+        'mt_est': [1.0], 'mt_t': [1.0], 'region': ['CIS5'], 'fdr_est': [0.1]
     })
     kennedy_df = pd.DataFrame({
         'CpG.probe': ['cg2'],
@@ -537,7 +537,7 @@ def test_o7_tsv_long_form(tmp_path):
     import json
 
     catalog_df = pd.DataFrame({'mt_id': ['c1'], 'gt_id': ['p1'], 'precise_mt_p': [
-                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['cis'], 'fdr_est': [0.1]})
+                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['CIS5'], 'fdr_est': [0.1]})
     kennedy_df = pd.DataFrame({'CpG.probe': ['c1'], 'exp.Probe': ['p1'], 'p.val': [
                               1e-10], 'status': ['IN'], 'distance': [10]})
 
@@ -565,7 +565,7 @@ def test_o6_json_no_numpy(tmp_path):
     import pandas as pd
 
     catalog_df = pd.DataFrame({'mt_id': ['c1', 'c2'], 'gt_id': ['p1', 'p2'], 'precise_mt_p': [
-                              1e-10, 0.5], 'mt_est': [1.0, 0.5], 'mt_t': [1.0, 0.5], 'region': ['cis', 'trans'], 'fdr_est': [0.1, 0.9]})
+                              1e-10, 0.5], 'mt_est': [1.0, 0.5], 'mt_t': [1.0, 0.5], 'region': ['CIS5', 'TRANS'], 'fdr_est': [0.1, 0.9]})
     kennedy_df = pd.DataFrame({'CpG.probe': ['c1', 'c3'], 'exp.Probe': ['p1', 'p3'], 'p.val': [
                               1e-10, 0.5], 'status': ['IN', 'TRANS'], 'distance': [10, 100], 'exp.probe.chrm': ['1', '2']})
 
@@ -592,7 +592,7 @@ def test_o6_json_no_numpy(tmp_path):
         'mt_chroms': set(), 'gt_chroms': set(), 'chrom_pairs': set()
     }
 
-    cat_profile = profile_catalog_post_stream(args, str(fake_path), cat_metrics, list(catalog_df.columns), set(['c1', 'c2']), set(['p1', 'p2']), Counter({'cis': 1, 'trans': 1}))
+    cat_profile = profile_catalog_post_stream(args, str(fake_path), cat_metrics, list(catalog_df.columns), set(['c1', 'c2']), set(['p1', 'p2']), Counter({'CIS5': 1, 'TRANS': 1}))
 
     distinct_mt = set(['c1', 'c2'])
     distinct_gt = set(['p1', 'p2'])
@@ -629,7 +629,7 @@ def test_p8_p9_execution(tmp_path):
         'precise_mt_p': [1e-10, 1e-10],
         'mt_est': [1.0, -1.0],
         'mt_t': [1.0, -1.0],
-        'region': ['trans', 'trans'],
+        'region': ['TRANS', 'TRANS'],
         'fdr_est': [0.1, 0.1]
     })
 
@@ -666,7 +666,7 @@ def test_p8_p9_execution(tmp_path):
         'precise_mt_p': [1e-10, 1e-10],
         'mt_est': [1.0, -1.0],
         'mt_t': [1.0, -1.0],
-        'region': ['cis', 'cis'],
+        'region': ['CIS5', 'CIS5'],
         'fdr_est': [0.1, 0.1]
     })
 
@@ -726,7 +726,7 @@ def test_p6_panel_count(tmp_path):
         'gt_id': ['p1', 'p2'],
         'precise_mt_p': [1e-10, 1e-10],
         'mt_est': [1.0, -1.0],
-        'region': ['cis', 'trans'],
+        'region': ['CIS5', 'TRANS'],
         'fdr_est': [0.1, 0.1]
     })
     kennedy_df = pd.DataFrame({
@@ -791,7 +791,7 @@ def test_o1_chunked_equals_projected(tmp_path):
     random.seed(42)
     for _ in range(5000):
         rows.append({'mt_id': random.choice(mts), 'gt_id': random.choice(gts), 'precise_mt_p': random.random(
-        ) * 1e-4, 'mt_est': 1.0, 'mt_t': 1.0, 'region': 'cis', 'fdr_est': 0.1, 'mt_chrom': '1', 'gt_chrom': '1'})
+        ) * 1e-4, 'mt_est': 1.0, 'mt_t': 1.0, 'region': 'CIS5', 'fdr_est': 0.1, 'mt_chrom': '1', 'gt_chrom': '1'})
 
     df_cat = pd.DataFrame(rows)
     table = pa.Table.from_pandas(df_cat)
@@ -829,7 +829,7 @@ def test_o1_chunked_equals_projected(tmp_path):
 
 def test_o13_html_self_contained(tmp_path):
     catalog_df = pd.DataFrame({'mt_id': ['c1'], 'gt_id': ['p1'], 'precise_mt_p': [
-                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['cis'], 'fdr_est': [0.1]})
+                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['CIS5'], 'fdr_est': [0.1]})
     kennedy_df = pd.DataFrame({'CpG.probe': ['c1'], 'exp.Probe': ['p1'], 'p.val': [
                               1e-10], 'status': ['IN'], 'distance': [10]})
 
@@ -856,7 +856,7 @@ def test_o13_html_self_contained(tmp_path):
 def test_o4_runtime_computation(tmp_path):
     import json
     catalog_df = pd.DataFrame({'mt_id': ['c1'], 'gt_id': ['p1'], 'precise_mt_p': [
-                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['cis'], 'fdr_est': [0.1]})
+                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['CIS5'], 'fdr_est': [0.1]})
     kennedy_df_a = pd.DataFrame({'CpG.probe': ['c1'], 'exp.Probe': ['p1'], 'p.val': [
                                 1e-10], 'status': ['IN'], 'distance': [10]})
     kennedy_df_b = pd.DataFrame({'CpG.probe': ['c1', 'c2'], 'exp.Probe': ['p1', 'p2'], 'p.val': [
@@ -912,7 +912,7 @@ def test_o10_load_catalog_ordering():
 
 def test_o11_grid_no_set_retention(tmp_path):
     catalog_df = pd.DataFrame({'mt_id': ['c1'], 'gt_id': ['p1'], 'precise_mt_p': [
-                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['cis'], 'fdr_est': [0.1]})
+                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['CIS5'], 'fdr_est': [0.1]})
     kennedy_df = pd.DataFrame({'CpG.probe': ['c1'], 'exp.Probe': ['p1'], 'p.val': [
                               1e-10], 'status': ['IN'], 'distance': [10]})
 
@@ -940,7 +940,7 @@ def test_o12_html_uses_shared_framework():
 
 def test_o15_html_no_fail_status(tmp_path):
     catalog_df = pd.DataFrame({'mt_id': ['c1'], 'gt_id': ['p1'], 'precise_mt_p': [
-                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['cis'], 'fdr_est': [0.1]})
+                              1e-10], 'mt_est': [1.0], 'mt_t': [1.0], 'region': ['CIS5'], 'fdr_est': [0.1]})
     kennedy_df = pd.DataFrame({'CpG.probe': ['c1'], 'exp.Probe': ['p1'], 'p.val': [
                               1e-10], 'status': ['IN'], 'distance': [10]})
 
@@ -1046,3 +1046,83 @@ def test_influence_stratified_analysis_skips_without_h_max():
     df = pd.DataFrame({'mt_est': [1.0, 2.0], 'beta': [1.0, 2.0]})
     r = influence_stratified_analysis(df, 'precise_mt_p', 'p.val', 'beta', 'T.stat', 1e-11, 1e-11)
     assert r['skipped'] is True
+
+# --- C4: region-composition crosswalk -----------------------------------------
+
+def test_rollup_region_to_kennedy_maps_seven_labels():
+    """G1: all seven UPPERCASE labels roll up to Kennedy's four categories."""
+    from tools.benchmark_kennedy import rollup_region_to_kennedy
+    c = rollup_region_to_kennedy(
+        ['PROMOTER', 'CIS5', 'CIS3', 'GENEBODY', 'DISTAL5', 'DISTAL3', 'TRANS'])
+    assert c['cis'] == 3
+    assert c['gene body'] == 1
+    assert c['distal'] == 2
+    assert c['trans'] == 1
+    assert c['unlabeled'] == 0
+
+
+def test_rollup_region_case_sensitive():
+    """G2: stale lowercase labels are NOT counted as a real category (bug #1)."""
+    from tools.benchmark_kennedy import rollup_region_to_kennedy
+    c = rollup_region_to_kennedy(['trans', 'cis', 'TRANS'])
+    assert c['trans'] == 1          # only the UPPERCASE one
+    assert c['unlabeled'] == 2      # lowercase 'trans' and 'cis' fall through
+
+
+def test_rollup_region_conserves_count():
+    """G3: NULL/NaN/unknown fall to 'unlabeled'; nothing is silently dropped."""
+    from tools.benchmark_kennedy import rollup_region_to_kennedy
+    import math
+    inp = ['TRANS', 'GENEBODY', 'weird', None, float('nan'), 'CIS5']
+    c = rollup_region_to_kennedy(inp)
+    assert sum(c.values()) == len(inp)
+    assert c['unlabeled'] == 3
+
+
+def test_region_composition_module_renders(tmp_path):
+    """End-to-end: the crosswalk section renders with the four categories and
+    the sec 6.1 method-difference caveat, at the matched tier."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import subprocess
+    import sys
+    import re
+
+    catalog_df = pd.DataFrame({
+        'mt_id': ['c1', 'c2', 'c3', 'c4'],
+        'gt_id': ['p1', 'p2', 'p3', 'p4'],
+        'precise_mt_p': [1e-10, 1e-10, 1e-10, 1e-10],
+        'mt_est': [1.0, -1.0, 1.0, -1.0],
+        'mt_t': [1.0, -1.0, 1.0, -1.0],
+        'region': ['CIS5', 'GENEBODY', 'DISTAL5', 'TRANS'],
+        'fdr_est': [0.1, 0.1, 0.1, 0.1],
+    })
+    kennedy_df = pd.DataFrame({
+        'CpG.probe': ['c1', 'c2', 'c3', 'c4'],
+        'exp.Probe': ['p1', 'p2', 'p3', 'p4'],
+        'p.val': [1e-10, 1e-10, 1e-10, 1e-10],
+        'status': ['IN', 'IN', 'IN', 'TRANS'],
+        'distance': [10, 10, 10, float('nan')],
+        'beta': [1.0, 1.0, 1.0, 1.0],
+        'T.stat': [1.0, 1.0, 1.0, 1.0],
+    })
+    path_k = tmp_path / "k.tsv"
+    kennedy_df.to_csv(path_k, sep='\t', index=False)
+    path_t = tmp_path / "t.parquet"
+    pq.write_table(pa.Table.from_pandas(catalog_df), path_t)
+
+    subprocess.run([sys.executable, 'tools/benchmark_kennedy.py', '-t', str(path_t),
+                    '-k', str(path_k), '--tecpg-thresh', '1e-9', '--kennedy-thresh',
+                    '1e-9', '-o', str(tmp_path)], capture_output=True, text=True, check=True)
+
+    with open(tmp_path / 'benchmark_report.html', 'r') as f:
+        html = f.read()
+    sec = re.search(r'<section id="region-composition".*?</section>', html, re.DOTALL)
+    assert sec is not None, "region-composition section missing"
+    sec = sec.group(0)
+    for cat in ('cis', 'gene body', 'distal', 'trans'):
+        assert cat in sec, f"category {cat} missing from crosswalk"
+    # sec 6.1 caveat must ride with the figure
+    assert 'METHOD difference' in sec
+    assert 'per pair' in sec

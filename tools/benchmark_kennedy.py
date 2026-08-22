@@ -75,6 +75,36 @@ def resolve_tecpg_pvalue_column(columns, override=None):
     return 'precise_mt_p'
 
 
+# --- C4: region-composition crosswalk to Kennedy's four categories -----------
+# docs/annotation.md sec 6.2: tecpg's seven UPPERCASE region labels roll up to
+# Kennedy's cis / gene body / distal / trans without remainder. Labels are
+# UPPERCASE as emitted by assignRegionToEcpg_parquet.py; a stale lowercase
+# label (the pre-C4 defect) or a NULL region must fall to 'unlabeled', never be
+# silently dropped and never be miscounted as a real category.
+KENNEDY_ROLLUP = {
+    'PROMOTER': 'cis', 'CIS5': 'cis', 'CIS3': 'cis',
+    'GENEBODY': 'gene body',
+    'DISTAL5': 'distal', 'DISTAL3': 'distal',
+    'TRANS': 'trans',
+}
+KENNEDY_CATEGORIES = ('cis', 'gene body', 'distal', 'trans', 'unlabeled')
+
+
+def rollup_region_to_kennedy(regions):
+    """Roll tecpg region labels up to Kennedy's four categories (annotation.md
+    sec 6.2). Returns a dict over KENNEDY_CATEGORIES. NULL/NaN and any label
+    outside the seven-label UPPERCASE vocabulary fall to 'unlabeled'. The count
+    is conserved: sum(result.values()) == len(regions) for any input."""
+    import math
+    counts = {c: 0 for c in KENNEDY_CATEGORIES}
+    for r in regions:
+        if r is None or (isinstance(r, float) and math.isnan(r)):
+            counts['unlabeled'] += 1
+        else:
+            counts[KENNEDY_ROLLUP.get(r, 'unlabeled')] += 1
+    return counts
+
+
 def resolve_thresholds(p_thresh, kennedy_thresh, tecpg_thresh):
     if p_thresh is not None and kennedy_thresh is not None:
         raise ValueError("Cannot provide both --p-thresh and --kennedy-thresh.")
@@ -800,6 +830,7 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
                 build_confirmation_grid_module(grid_results, [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]),
                 build_diagonal_summary_module(diag_results),
                 build_trans_fraction_module(args),
+                build_region_composition_module(args),
                 build_concordance_module(args, figs)
             ])
 
@@ -1048,6 +1079,71 @@ def build_trans_fraction_module(args) -> QCModule:
         purpose=purpose, interpretation=interpretation,
         figure_b64=b64
     )
+
+
+# Kennedy et al. 2018 published GTP composition after per-pair probe-location
+# selection (annotation.md sec 6.1 / paper text, NOT the supplement file).
+# gene body / distal are not itemised in the doc, so only cis and trans are
+# stamped as fixed reference constants; the rest is left None on purpose
+# (a missing reference is preferable to a fabricated one).
+KENNEDY_PAPER_GTP_COMPOSITION = {'cis': 0.473, 'gene body': None, 'distal': None, 'trans': 0.389}
+
+
+def build_region_composition_module(args) -> QCModule:
+    comp = getattr(args, 'region_composition_data', None)
+    purpose = ("Region-composition crosswalk at the matched tier. tecpg's seven "
+               "labels roll up to Kennedy's cis / gene body / distal / trans "
+               "(annotation.md sec 6.2); Kennedy's supplement resolves only IN vs "
+               "TRANS, so the file-derived like-for-like is near-gene (IN) vs trans.")
+    if not comp or comp.get('tecpg_rollup') is None:
+        return QCModule(
+            anchor="region-composition", title="Region Composition Crosswalk",
+            status="INFO", purpose=purpose,
+            interpretation="No region column in the catalog; crosswalk skipped.",
+            table_html="")
+
+    ru = comp['tecpg_rollup']
+    tn = comp['tecpg_n']
+    labeled = tn - ru['unlabeled']
+    # tecpg near-gene (Kennedy IN-equivalent) = cis + gene body + distal
+    t_near = ru['cis'] + ru['gene body'] + ru['distal']
+    t_trans = ru['trans']
+    kn = comp.get('kennedy_n', 0)
+    frac = lambda x, d: (x / d) if d > 0 else 0.0
+
+    headers = ['Category', 'tecpg n', 'tecpg frac (of labeled)', 'Kennedy paper GTP (per-pair)']
+    rows = []
+    for cat in ('cis', 'gene body', 'distal', 'trans'):
+        ref = KENNEDY_PAPER_GTP_COMPOSITION.get(cat)
+        ref_s = f"{ref:.3f}" if ref is not None else "n/a"
+        rows.append([cat, str(ru[cat]), f"{frac(ru[cat], labeled):.3f}", ref_s])
+    rows.append(['unlabeled (no gene model / no coords)', str(ru['unlabeled']),
+                 f"{frac(ru['unlabeled'], tn):.3f} (of all)", 'n/a'])
+
+    # File-derived like-for-like: near-gene vs trans, both sides.
+    ll_headers = ['Side', 'near-gene (IN)', 'trans', 'trans fraction']
+    ll_rows = [
+        ['tecpg (labeled)', str(t_near), str(t_trans), f"{frac(t_trans, t_near + t_trans):.3f}"],
+        ['Kennedy (supplement)', str(comp['kennedy_in']), str(comp['kennedy_trans']),
+         f"{frac(comp['kennedy_trans'], kn):.3f}"],
+    ]
+
+    interpretation = (
+        f"Matched tier: tecpg p < {comp['tecpg_thresh']:g}, Kennedy p < {comp['kennedy_thresh']:g}. "
+        "Read the tecpg trans fraction as expected to run HIGHER than Kennedy's: Kennedy select "
+        "each probe's genomic location per pair (annotation.md sec 6.1), preferring the location "
+        "that places the CpG in or near the gene, which moves pairs from trans into cis. tecpg "
+        "uses one fixed position per probe, so this is a documented METHOD difference, not a "
+        "discrepancy in findings. The Kennedy paper GTP column is the post-selection published "
+        "composition (cis and trans only; gene body / distal are not itemised in the source). "
+        "The unlabeled row is the population with coordinates but no resolved gene model "
+        "(annotation.md sec 5.2) and is excluded from the labeled fractions."
+    )
+    table_html = render_table(headers, rows) + render_table(ll_headers, ll_rows)
+    return QCModule(
+        anchor="region-composition", title="Region Composition Crosswalk",
+        status="INFO", purpose=purpose, interpretation=interpretation,
+        table_html=table_html)
 
 
 def _safe_spearman(a, b):
@@ -1478,11 +1574,30 @@ def main():
                 t_mask = df_matched[tecpg_p_col] < t
                 t_sub = df_matched[t_mask]
                 t_n = len(t_sub)
-                t_trans = (t_sub['region'] == 'trans').sum()
+                t_trans = (t_sub['region'] == 'TRANS').sum()
                 t_data[t] = t_trans / t_n if t_n > 0 else 0.0
 
         args.trans_fraction_data = t_data
         args.kennedy_trans_fraction_data = k_data
+
+        # C4: region-composition crosswalk at the matched (diagonal) tier.
+        # Kennedy percentages are over their significant set (annotation.md sec 6.2),
+        # so this is pinned to the matched tier, not the full test space.
+        tt = args.tecpg_thresh
+        kt = args.kennedy_thresh
+        comp = {'tecpg_rollup': None, 'tecpg_n': 0,
+                'kennedy_in': 0, 'kennedy_trans': 0, 'kennedy_n': 0,
+                'tecpg_thresh': tt, 'kennedy_thresh': kt}
+        if 'region' in df_matched.columns and tecpg_p_col in df_matched.columns:
+            t_sig = df_matched[df_matched[tecpg_p_col] < tt]
+            comp['tecpg_rollup'] = rollup_region_to_kennedy(t_sig['region'])
+            comp['tecpg_n'] = int(len(t_sig))
+        if cols['status'] in df_kennedy.columns and cols['pval'] in df_kennedy.columns:
+            k_sig = df_kennedy[df_kennedy[cols['pval']] < kt]
+            comp['kennedy_trans'] = int((k_sig[cols['status']] == 'TRANS').sum())
+            comp['kennedy_in'] = int((k_sig[cols['status']] == 'IN').sum())
+            comp['kennedy_n'] = int(len(k_sig))
+        args.region_composition_data = comp
 
     write_provenance_and_reports(
         args, num_merged, diag_results, grid_results, df_kennedy, cols,
