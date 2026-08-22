@@ -149,21 +149,6 @@ else
     fi
 fi
 
-# Derive the ILMN-keyed gene-model BED for REGION assignment (derived, not committed).
-# Uses the local GENCODE GTF + committed Re-Annotator symbols; no downloads. The probe
-# G.bed6 staged above stays the cis/trans mapping annotation.
-if [ -s "$ANNOT_DIR/G_genemodel.bed6" ]; then
-    log "Gene-model BED already exists at $ANNOT_DIR/G_genemodel.bed6. Skipping."
-else
-    GENEMODEL_GTF="${TECPG_GENCODE_GTF:-encode_beds/gencode.v49lift37.annotation.gtf.gz}"
-    [ -f "$GENEMODEL_GTF" ] || { log "Error: GENCODE GTF not found at $GENEMODEL_GTF. Set TECPG_GENCODE_GTF to the GENCODE annotation."; exit 1; }
-    log "Deriving gene-model BED for region assignment from $GENEMODEL_GTF ..."
-    python3 tools/build_gene_model_bed.py \
-        --gtf "$GENEMODEL_GTF" \
-        --reannotator demo/reannotator_humanHt12v4.txt \
-        --output "$ANNOT_DIR/G_genemodel.bed6"
-fi
-
 # Apply EPIC probe blacklist filter
 if [ -s "$DATA_DIR/M.csv" ]; then
     log "M.csv already exists. Skipping probe blacklist filtering."
