@@ -30,6 +30,17 @@ CONCORDANCE_SUMMARY="${OUT_DIR}/bootstrap_concordance_summary.json"
 # it does not define the universe.
 NETWORK_TOP_K=100000
 NETWORK_MAX_FDR=0.05
+# Stage-5 edge-weight threshold. The tool default (0.5 on mt_ig) re-truncates the
+# FDR-significant universe; 0 renders the full exported edge set.
+NETWORK_EDGE_THRESHOLD="${NETWORK_EDGE_THRESHOLD:-0}"
+
+# Influence filter (INFLUENCE_MODE=exclude|ignore, default exclude): drop rows whose
+# CpG carries mt_influence_flag == True from BOTH catalogs before any figure or
+# enrichment stage, so every panel agrees on one retained universe. Null flags
+# (CpGs with null mt_h_max) are retained. exclude requires the flag column
+# (pipeline.sh stage 7b) and fails closed without it; ignore = pre-influence behavior.
+INFLUENCE_MODE="${INFLUENCE_MODE:-exclude}"
+RETAINED_DIR="${OUT_DIR}/retained"
 
 log "======================================"
 log "Starting Pipeline Post-Processing for DATASET: ${DATASET}"
@@ -43,6 +54,105 @@ fi
 
 # Ensure output directories exist
 mkdir -p "$PLOTS_DIR" "$NETWORK_DIR" "$ENRICHMENT_DIR"
+
+# Stage 1a: Influence calibration bridge + dose-response figure (QC; report-only).
+# MUST run on the UNFILTERED catalogs: it measures bootstrap fragility among
+# flagged pairs, which the retained copies (Stage 1b) deliberately exclude.
+# set -e is active, so a hard tool failure aborts the pipeline; catalogs that
+# legitimately lack the required columns (pre-influence outputs, or bootstrap
+# not yet run) are detected up front and the stage is skipped with a warning.
+# INFLUENCE_BRIDGE=off disables the stage.
+INFLUENCE_BRIDGE="${INFLUENCE_BRIDGE:-on}"
+BRIDGE_DIR="${OUT_DIR}/calibration_bridge"
+if [ "$INFLUENCE_BRIDGE" != "off" ]; then
+    # Prefer the stage-7b flagged master when present (same rule as Stage 1b);
+    # both carry mt_h_max, but this keeps the bridge and the filter on one source.
+    BRIDGE_MASTER="$SUMMARIZED_PARQUET"
+    if [ -f "$OUT_DIR/summarized.influence.parquet" ]; then
+        BRIDGE_MASTER="$OUT_DIR/summarized.influence.parquet"
+    fi
+    BRIDGE_READY=$(python3 - "$BRIDGE_MASTER" "$PARQUET_FILE" <<'PYEOF'
+import sys
+import pyarrow.parquet as pq
+try:
+    m = set(pq.ParquetFile(sys.argv[1]).schema_arrow.names)
+    b = set(pq.ParquetFile(sys.argv[2]).schema_arrow.names)
+except Exception as e:
+    print(f'no ({e})'); sys.exit(0)
+if 'mt_h_max' not in m:
+    print('no (master lacks mt_h_max)')
+elif not {'p_boot', 'ci_low', 'ci_high'} <= b:
+    print('no (bootstrap catalog lacks p_boot/ci columns)')
+else:
+    print('yes')
+PYEOF
+)
+    if [ "$BRIDGE_READY" == "yes" ]; then
+        log "[1a/8] Influence calibration bridge (mt_h_max x bootstrap fragility, unfiltered catalogs)..."
+        mkdir -p "$BRIDGE_DIR"
+        python3 -u tools/calibration_bridge.py \
+            --master "$BRIDGE_MASTER" \
+            --boot "$PARQUET_FILE" \
+            --covariates "$DATA_DIR/C.csv" \
+            --out-dir "$BRIDGE_DIR"
+        log "[1a/8] Rendering influence figures (dose-response, SE-ratio)..."
+        python3 -u tools/fig_influence_dose_response.py \
+            --json "$BRIDGE_DIR/calibration_bridge.json" \
+            --out-dir "$BRIDGE_DIR"
+        log "Bridge report and figure written to $BRIDGE_DIR/."
+    else
+        log "[1a/8] SKIPPING calibration bridge: $BRIDGE_READY"
+    fi
+else
+    log "[1a/8] Influence calibration bridge disabled (INFLUENCE_BRIDGE=off)."
+fi
+
+# Stage 1b: Influence filter (build retained catalogs; repoint all consumers)
+if [ "$INFLUENCE_MODE" == "exclude" ]; then
+    log "[1b/8] Applying influence filter (dropping mt_influence_flag CpGs)..."
+    mkdir -p "$RETAINED_DIR"
+    # The flag column lives on the stage-7b output when present; fall back to
+    # summarized.parquet (which fails closed below unless it carries the column).
+    INFLUENCE_SRC="$OUT_DIR/summarized.influence.parquet"
+    if [ -f "$INFLUENCE_SRC" ]; then
+        log "Flag source: $INFLUENCE_SRC"
+        SUMMARIZED_PARQUET="$INFLUENCE_SRC"
+    else
+        log "Flag source: $SUMMARIZED_PARQUET (no summarized.influence.parquet found)"
+    fi
+    PARQUET_IN="$PARQUET_FILE" SUMMARIZED_IN="$SUMMARIZED_PARQUET" RETAINED_DIR="$RETAINED_DIR" \
+    python3 - <<'PYEOF'
+import os, sys
+import pandas as pd
+
+def load(path):
+    df = pd.read_parquet(path)
+    if df.index.names != [None]:
+        df = df.reset_index()
+    return df
+
+srcs = {'bootstrap_merged.parquet': os.environ['PARQUET_IN'],
+        'summarized.parquet': os.environ['SUMMARIZED_IN']}
+out_dir = os.environ['RETAINED_DIR']
+flag_src = load(srcs['summarized.parquet'])
+if 'mt_influence_flag' not in flag_src.columns:
+    sys.exit('INFLUENCE_MODE=exclude but summarized catalog lacks mt_influence_flag. '
+             'Run pipeline.sh stage 7b (influence_flag) first, point this script at '
+             'summarized.influence.parquet, or set INFLUENCE_MODE=ignore.')
+flagged = set(flag_src.loc[flag_src['mt_influence_flag'] == True, 'mt_id'].astype(str))
+print(f'flagged CpGs: {len(flagged)}')
+for name, path in srcs.items():
+    df = load(path)
+    keep = df[~df['mt_id'].astype(str).isin(flagged)]
+    print(f'{name}: {len(df):,} -> {len(keep):,} rows retained')
+    keep.to_parquet(os.path.join(out_dir, name), index=False)
+PYEOF
+    PARQUET_FILE="$RETAINED_DIR/bootstrap_merged.parquet"
+    SUMMARIZED_PARQUET="$RETAINED_DIR/summarized.parquet"
+    log "Influence filter applied. Consumers repointed to $RETAINED_DIR/."
+else
+    log "[1b/8] Influence filter disabled (INFLUENCE_MODE=$INFLUENCE_MODE)."
+fi
 
 # Stage 1: Obtain cytoBand.txt if missing
 log "[1/8] Checking for cytoBand.txt..."
@@ -74,7 +184,7 @@ python3 -u tools/exportBipartiteNetwork.py \
 
 # Stage 5: Run visualizeBipartiteNetwork.py
 log "[5/8] Running visualizeBipartiteNetwork.py..."
-python3 -u tools/visualizeBipartiteNetwork.py --edges "$NETWORK_DIR/cytoscape_edges.csv" --nodes "$NETWORK_DIR/cytoscape_nodes.csv" --out-dir "$NETWORK_DIR" --per-region
+python3 -u tools/visualizeBipartiteNetwork.py --edges "$NETWORK_DIR/cytoscape_edges.csv" --nodes "$NETWORK_DIR/cytoscape_nodes.csv" --out-dir "$NETWORK_DIR" --per-region --threshold "$NETWORK_EDGE_THRESHOLD"
 # Stage 6: Run evaluateSaliency.py
 log "[6/8] Running evaluateSaliency.py..."
 python3 -u tools/evaluateSaliency.py -i "$PARQUET_FILE" -o "$PLOTS_DIR"

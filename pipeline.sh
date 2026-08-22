@@ -94,7 +94,7 @@ if [ "$MAPPING" != "all" ] && [ "$MAPPING" != "cis" ]; then
     exit 1
 fi
 
-VALID_STAGES=("all" "map" "merge" "annotate" "precise_p" "summarize" "boot_list" "bootstrap")
+VALID_STAGES=("all" "map" "merge" "annotate" "precise_p" "summarize" "influence_flag" "boot_list" "bootstrap")
 IS_VALID_STAGE=0
 for stage in "${VALID_STAGES[@]}"; do
     if [ "$START_STAGE" == "$stage" ]; then
@@ -288,6 +288,18 @@ MERGED_PARQUET="$OUT_DIR/merged.parquet"
 ANNOTATED_PARQUET="$OUT_DIR/annotated.parquet"
 RECALC_PARQUET="$OUT_DIR/annotated_pcalc.parquet"
 SUMMARIZED_PARQUET="$OUT_DIR/summarized.parquet"
+# Influence flag stage (7b): per-CpG single-point influence screen over mt_h_max.
+# INFLUENCE_RULE=off disables the stage; then MASTER_PARQUET stays summarized.parquet.
+# The flag column is additive; downstream stages (8/9) consume the flagged file so
+# bootstrap_merged.parquet inherits mt_influence_flag for pipelinePost filtering.
+INFLUENCE_RULE="${INFLUENCE_RULE:-floor}"
+INFLUENCE_DELTA="${INFLUENCE_DELTA:-0.1}"
+INFLUENCE_PARQUET="$OUT_DIR/summarized.influence.parquet"
+if [ "$INFLUENCE_RULE" == "off" ]; then
+    MASTER_PARQUET="$SUMMARIZED_PARQUET"
+else
+    MASTER_PARQUET="$INFLUENCE_PARQUET"
+fi
 BOOTSTRAP_LIST="$OUT_DIR/bootstrap_list.csv"
 
 # Stage 5: Annotate regions
@@ -339,14 +351,32 @@ log "Moving generated plots to $OUT_DIR..."
 mv p_value_histogram.png qq_plot.png saliency_profile_top50.png "$OUT_DIR/" 2>/dev/null || true
 fi
 
+if [ "$START_STAGE" == "influence_flag" ]; then EXECUTE=1; fi
+
+# Stage 7b: Influence flag (per-CpG single-point influence screen)
+# Derives mt_influence_flag from mt_h_max under the configured rule and writes the
+# flagged catalog as a NEW file (additive; summarized.parquet is untouched). The
+# QC report (sweep tables, per-region enrichment, h_C_max) lands in
+# $OUT_DIR/influence_qc/. Skipped entirely when INFLUENCE_RULE=off.
+if [ $EXECUTE -eq 1 ] && [ "$INFLUENCE_RULE" != "off" ]; then
+log "[7b/9] Flagging single-point-influence CpGs (rule=$INFLUENCE_RULE, threshold=$INFLUENCE_DELTA)..."
+log "Input Parquet: $SUMMARIZED_PARQUET, Output Parquet: $INFLUENCE_PARQUET"
+python3 tools/flagInfluence_parquet.py \
+    -i "$SUMMARIZED_PARQUET" \
+    -c "$DATA_DIR/C.csv" \
+    -o "$INFLUENCE_PARQUET" \
+    --rule "$INFLUENCE_RULE" --threshold "$INFLUENCE_DELTA" \
+    --report-dir "$OUT_DIR/influence_qc"
+fi
+
 if [ "$START_STAGE" == "boot_list" ]; then EXECUTE=1; fi
 
 # Stage 8: Bootstrap List creation
 if [ $EXECUTE -eq 1 ]; then
 log "[8/9] Creating Bootstrap List..."
 log "Identifying top hits (ranked by p-value) to be evaluated via bootstrapping."
-log "Input Parquet: $SUMMARIZED_PARQUET, Output List: $BOOTSTRAP_LIST"
-python3 tools/createBootstrapList.py --input "$SUMMARIZED_PARQUET" --output "$BOOTSTRAP_LIST" --rank-by p-value --min-per-region 4500 --max-per-region 10000
+log "Input Parquet: $MASTER_PARQUET, Output List: $BOOTSTRAP_LIST"
+python3 tools/createBootstrapList.py --input "$MASTER_PARQUET" --output "$BOOTSTRAP_LIST" --rank-by p-value --min-per-region 4500 --max-per-region 10000
 fi
 
 if [ "$START_STAGE" == "bootstrap" ]; then EXECUTE=1; fi
@@ -355,14 +385,14 @@ if [ "$START_STAGE" == "bootstrap" ]; then EXECUTE=1; fi
 if [ $EXECUTE -eq 1 ]; then
 log "[9/9] Bootstrapping top hits..."
 log "Running bootstrap analysis on the top candidates to validate association robustness."
-log "Pairs File: $BOOTSTRAP_LIST, Master Parquet: $SUMMARIZED_PARQUET"
+log "Pairs File: $BOOTSTRAP_LIST, Master Parquet: $MASTER_PARQUET"
 BOOTSTRAP_IG_ARGS=()
 if [ "$BOOTSTRAP_IG_COVARIATES" = "all" ]; then
     BOOTSTRAP_IG_ARGS+=(--ig-covariates)
 elif [ -n "$BOOTSTRAP_IG_COVARIATES" ] && [ "$BOOTSTRAP_IG_COVARIATES" != "none" ]; then
     BOOTSTRAP_IG_ARGS+=(--ig-covariates-list "$BOOTSTRAP_IG_COVARIATES")
 fi
-python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$SUMMARIZED_PARQUET" --bootstrap-iterations 1000 --bootstrap-batch-size 10 --compute-ig "${BOOTSTRAP_IG_ARGS[@]}"
+python3 -m tecpg -i "$DATA_DIR" -a "$ANNOT_DIR" -o "$OUT_DIR" run mlr --mlr-method qr_bootstrap --pairs-file "$BOOTSTRAP_LIST" --master-parquet "$MASTER_PARQUET" --bootstrap-iterations 1000 --bootstrap-batch-size 10 --compute-ig "${BOOTSTRAP_IG_ARGS[@]}"
 fi
 
 log "======================================"
