@@ -223,10 +223,16 @@ if [ $IS_VALID_DATASET -eq 0 ]; then
     exit 1
 fi
 
+if [ "$DATASET" == "gtp" ]; then
+    CIS_MAP_M_CHUNK=138000
+    CIS_MAP_G_CHUNK=128
+fi
+
 if [ "$DATASET" == "mesa" ]; then
     CIS_MAP_M_CHUNK=20000
     CIS_MAP_G_CHUNK=1000
 fi
+
 
 log "============================================================"
 log "Starting tecpg Permute Pipeline"
