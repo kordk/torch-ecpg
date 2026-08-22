@@ -454,11 +454,12 @@ if [ $EXECUTE -eq 1 ]; then
         if python3 -c "import pyarrow.parquet as pq, sys; sys.exit(0 if 'region' in pq.read_schema('$MASTER_PARQUET').names else 1)"; then
             log "[1/5] Master already carries a 'region' column; skipping annotation."
         else
+            [ -s "$ANNOT_DIR/probe_gene_model.tsv" ] || { log "Error: $ANNOT_DIR/probe_gene_model.tsv missing. It is derived by pipeline.sh stage [5/9]; run pipeline.sh for this dataset first, or pass --no-assign-regions."; exit 1; }
             REGION_MASTER="${MASTER_PARQUET%.parquet}.region.parquet"
             log "[1/5] Assigning canonical regions ($MASTER_PARQUET -> $REGION_MASTER)..."
             python3 -u tools/assignRegionToEcpg_parquet.py \
                 -d "$MASTER_PARQUET" \
-                -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" \
+                -g "$ANNOT_DIR/G.bed6" --gene-model "$ANNOT_DIR/probe_gene_model.tsv" -m "$ANNOT_DIR/M.bed6" \
                 -o "$REGION_MASTER"
             MASTER_PARQUET="$REGION_MASTER"
             log "      Read the 'eCpgs Counts by Region' line above: it is the coverage gate for the per-region eval."

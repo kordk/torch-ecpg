@@ -291,11 +291,26 @@ SUMMARIZED_PARQUET="$OUT_DIR/summarized.parquet"
 BOOTSTRAP_LIST="$OUT_DIR/bootstrap_list.csv"
 
 # Stage 5: Annotate regions
+PROBE_GENE_MAP="$ANNOT_DIR/probe_gene_model.tsv"
 if [ $EXECUTE -eq 1 ]; then
+# Derive the probe->gene map here rather than in pipelinePre.sh: it is a derived
+# artifact of the stage that consumes it, not a staged input. The header records
+# the GTF it came from, so a map built against a different GTF is re-derived.
+GENEMODEL_GTF="${TECPG_GENCODE_GTF:-encode_beds/gencode.v49lift37.annotation.gtf.gz}"
+if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "$(basename "$GENEMODEL_GTF")"; then
+    log "[5/9] Reusing probe-gene map at $PROBE_GENE_MAP (matches $GENEMODEL_GTF)."
+else
+    [ -f "$GENEMODEL_GTF" ] || { log "Error: GENCODE GTF not found at $GENEMODEL_GTF. Set TECPG_GENCODE_GTF."; exit 1; }
+    log "[5/9] Deriving probe-gene map from $GENEMODEL_GTF ..."
+    python3 tools/build_probe_gene_model.py \
+        --gtf "$GENEMODEL_GTF" \
+        --probe-bed "$ANNOT_DIR/G.bed6" \
+        --output "$PROBE_GENE_MAP"
+fi
 log "[5/9] Annotating regions..."
 log "Mapping eCpG and Gene coordinates to determine regional categories (e.g., CIS, TRANS)."
 log "Input Parquet: $MERGED_PARQUET, Output Parquet: $ANNOTATED_PARQUET"
-python3 tools/assignRegionToEcpg_parquet.py -d "$MERGED_PARQUET" -g "$ANNOT_DIR/G.bed6" -m "$ANNOT_DIR/M.bed6" -o "$ANNOTATED_PARQUET"
+python3 tools/assignRegionToEcpg_parquet.py -d "$MERGED_PARQUET" -g "$ANNOT_DIR/G.bed6" --gene-model "$PROBE_GENE_MAP" -m "$ANNOT_DIR/M.bed6" -o "$ANNOTATED_PARQUET"
 fi
 
 if [ "$START_STAGE" == "precise_p" ]; then EXECUTE=1; fi
