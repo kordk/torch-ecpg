@@ -100,9 +100,17 @@ def render_table(headers: list, rows: list, aligns: list = None) -> str:
     return '\n'.join(html_out)
 
 
-def render_html(dataset: str, meta: dict, modules: list) -> str:
-    """Assemble the full self-contained document."""
+def render_html(dataset: str, meta: dict, modules: list,
+                report_title: str = "qr_permute QC",
+                generator: str = "tools/permute_qc_report.py") -> str:
+    """Assemble the full self-contained document.
+
+    report_title / generator default to the qr_permute values so existing
+    callers are unchanged; other reports pass their own.
+    """
     escaped_dataset = html.escape(str(dataset))
+    escaped_title = html.escape(str(report_title))
+    escaped_generator = html.escape(str(generator))
     timestamp = html.escape(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
     css = """
@@ -178,14 +186,14 @@ def render_html(dataset: str, meta: dict, modules: list) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>qr_permute QC Report \u2014 {escaped_dataset}</title>
+<title>{escaped_title} Report \u2014 {escaped_dataset}</title>
 <style>
 {css}
 </style>
 </head>
 <body>
 <nav id="qc-nav">
-  <h1>qr_permute QC</h1>
+  <h1>{escaped_title}</h1>
   <p class="dataset">{escaped_dataset}</p>
   <ul>
 {chr(10).join(nav_items)}
@@ -193,7 +201,7 @@ def render_html(dataset: str, meta: dict, modules: list) -> str:
 </nav>
 <main>
 {chr(10).join(body_sections)}
-  <footer>Generated {timestamp} by tools/permute_qc_report.py</footer>
+  <footer>Generated {timestamp} by {escaped_generator}</footer>
 </main>
 </body>
 </html>"""

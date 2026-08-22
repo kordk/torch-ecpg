@@ -710,7 +710,19 @@ def test_p8_and_p9_and_p10_and_p11(tmp_path):
     with open('tools/benchmark_kennedy.py', 'r') as b:
         code = b.read()
 
-    assert "The raw denominator is a LOWER BOUND" in code
+    # Behavioral, not source-text: the confirmation module must actually carry the
+    # both-bounds caveat in its rendered interpretation. Asserting on source literals
+    # here previously concealed breakage and broke on harmless rewording.
+    from tools.benchmark_kennedy import build_confirmation_grid_module
+    _thresholds = [1e-5, 1e-11]
+    _grid = {(tk, tt): {'confirmation_raw': 0.5}
+             for tk in _thresholds for tt in _thresholds}
+    _mod = build_confirmation_grid_module(_grid, _thresholds)
+    _interp = _mod.interpretation.lower()
+    assert 'too low' in _interp and 'too high' in _interp, \
+        "confirmation module must explain that the raw and testable rates bracket the truth"
+    assert 'between' in _interp
+
     assert 'status="FAIL"' not in code
     assert 'status = "FAIL"' not in code
 
@@ -1125,4 +1137,40 @@ def test_region_composition_module_renders(tmp_path):
         assert cat in sec, f"category {cat} missing from crosswalk"
     # sec 6.1 caveat must ride with the figure
     assert 'METHOD difference' in sec
-    assert 'per pair' in sec
+    # the substance of the caveat: Kennedy chose probe positions separately per pair
+    assert 'separately for each pair' in sec
+
+
+def test_report_has_no_permute_leftovers(tmp_path):
+    """The Kennedy report shares render_html with qr_permute; it must not inherit
+    that report's title, heading, or generator line."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import subprocess
+    import sys
+
+    cat = pd.DataFrame({
+        'mt_id': ['c1', 'c2'], 'gt_id': ['p1', 'p2'],
+        'precise_mt_p': [1e-12, 1e-12], 'mt_est': [1.0, -1.0], 'mt_t': [1.0, -1.0],
+        'region': ['CIS5', 'TRANS'], 'fdr_est': [0.1, 0.1],
+    })
+    ken = pd.DataFrame({
+        'CpG.probe': ['c1', 'c2'], 'exp.Probe': ['p1', 'p2'],
+        'p.val': [1e-12, 1e-12], 'status': ['IN', 'TRANS'],
+        'distance': [10, float('nan')], 'beta': [1.0, 1.0], 'T.stat': [1.0, 1.0],
+    })
+    pt = tmp_path / "t.parquet"
+    pq.write_table(pa.Table.from_pandas(cat), pt)
+    pk = tmp_path / "k.tsv"
+    ken.to_csv(pk, sep='\t', index=False)
+
+    subprocess.run([sys.executable, 'tools/benchmark_kennedy.py', '-t', str(pt),
+                    '-k', str(pk), '--tecpg-thresh', '1e-11', '--kennedy-thresh',
+                    '1e-11', '-o', str(tmp_path)], capture_output=True, text=True, check=True)
+    html = (tmp_path / 'benchmark_report.html').read_text()
+
+    assert 'qr_permute' not in html
+    assert 'permute_qc_report.py' not in html
+    assert '<h1>Kennedy Benchmark</h1>' in html
+    assert 'tools/benchmark_kennedy.py' in html

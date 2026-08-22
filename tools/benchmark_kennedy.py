@@ -834,14 +834,24 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
                 build_concordance_module(args, figs)
             ])
 
-        html_report = render_html("benchmark_kennedy", {}, modules)
+        html_report = render_html(
+            "benchmark_kennedy", {}, modules,
+            report_title="Kennedy Benchmark",
+            generator="tools/benchmark_kennedy.py")
         with open(os.path.join(args.outdir, 'benchmark_report.html'), 'w') as f:
             f.write(html_report)
 
 
 def build_provenance_module(prov) -> QCModule:
-    purpose = "Records the environment, configuration, and exact input files used."
-    interpretation = 'What to check before trusting anything downstream: input SHA256s match the intended files; both thresholds are the intended ones; git SHA corresponds to a known commit. Note that `tecpg version: unknown` currently appears and should be fixed via importlib.metadata or the package __version__.'
+    purpose = "Records exactly which files, settings, and code version produced this report."
+    interpretation = (
+        "Check this before trusting anything below it. The SHA256 values identify the exact "
+        "input files this report was built from, so they should match the catalog and "
+        "reference file you intended to compare. Confirm both thresholds are the ones you "
+        "meant to set, and that the git SHA corresponds to a known commit. If you are "
+        "comparing two reports, these are the fields that tell you whether the runs are "
+        "actually comparable."
+    )
 
     table_rows = [
         ["tecpg version", prov['tecpg_version']],
@@ -865,8 +875,19 @@ def build_provenance_module(prov) -> QCModule:
 
 
 def build_reference_file_profile_module(prof) -> QCModule:
-    purpose = "Profiles the reference file structure, composition, and expected dimensions."
-    interpretation = 'The Kennedy file is a SUGGESTIVE tier (p < 1e-5), not a hit list: roughly 88% of GTP rows are TRANS and at 1e-5 that stratum is close to what the test-space geometry alone would produce. Overlap statistics computed at 1e-5 against this file are therefore dominated by chance agreement in TRANS. The genome-wide significant tier is p < 1e-11 (2,466 GTP pairs), which is the comparable set. State that NA in `distance` is class-conditional (NA exactly for TRANS) and is not missing data.'
+    purpose = "Describes what is in the Kennedy reference file before any comparison is made."
+    interpretation = (
+        "This file is Kennedy's suggestive tier (p < 1e-5), not their final hit list. "
+        "About 88% of the GTP rows are trans, which at this loose threshold is roughly "
+        "what you would get from the shape of the test space alone -- there are vastly "
+        "more possible trans pairs than cis pairs, so trans dominates by counting, not "
+        "by biology. That means any overlap computed at 1e-5 is mostly chance agreement "
+        "in trans and should not be read as replication. Compare at p < 1e-11 instead "
+        "(2,466 GTP pairs); that is the genome-wide significant tier and the honest "
+        "like-for-like set. One column note: blank values in `distance` are not missing "
+        "data. Distance is undefined for trans pairs, so those blanks are exactly the "
+        "trans rows."
+    )
 
     status = "INFO"
 
@@ -891,8 +912,18 @@ def build_reference_file_profile_module(prof) -> QCModule:
 
 
 def build_catalog_profile_module(prof) -> QCModule:
-    purpose = "Profiles the tecpg catalog stream."
-    interpretation = 'precise_mt_p is float64 and usable to ~1e-118; mt_p is float32-saturated with a block of exact zeros below roughly 1e-7 and must not be used for thresholding. If region shows GENEBODY far below the other near-gene classes, flag it as a known open question (gt_chromEnd is absent from the catalog schema, so gene-body assignment cannot be evaluated from a start coordinate alone) and state that the near-gene strata should be read with caution pending C4.'
+    purpose = "Describes what is in this run's tecpg results catalog."
+    interpretation = (
+        "Two things to check here. First, use `precise_mt_p` for any thresholding: it is "
+        "float64 and holds resolution down to about 1e-118. Do NOT threshold on `mt_p` -- "
+        "it is float32 and saturates to exact zero below roughly 1e-7, so every pair past "
+        "that point looks identical and cannot be ranked. Second, the region counts show "
+        "how the catalog's CpG-gene pairs were classified. Pairs with no region are those "
+        "where the probe's coordinates resolved but no gene model overlapped, which is a "
+        "real and expected population rather than a failure. A large unlabeled fraction is "
+        "worth confirming against the annotation coverage before reading the region "
+        "breakdown as biology."
+    )
 
     status = "INFO"
     if prof.get('chrom_span_observation'):
@@ -916,22 +947,29 @@ def build_catalog_profile_module(prof) -> QCModule:
 
 
 def build_eligibility_decomposition_module(df_kennedy, cols) -> QCModule:
-    purpose = "Decomposes the eligibility of Kennedy pairs in the tecpg universe."
+    purpose = "Shows how many Kennedy pairs this run was actually able to test."
 
     total = len(df_kennedy)
     eligible = df_kennedy['eligible'].sum()
 
     if total > 0 and eligible == total:
-        interp_dynamic = ("Eligibility is 100%. Every non-overlap is a genuine method "
-                          "disagreement rather than a coverage gap, which strengthens "
-                          "interpretation of everything below.")
+        interp_dynamic = ("Here eligibility is 100%: every Kennedy pair was testable. "
+                          "So wherever we fail to find one of their hits, that is a real "
+                          "disagreement between the two methods and not simply a pair we "
+                          "never looked at. That makes everything below easier to trust.")
     else:
-        interp_dynamic = ("Eligibility is below 100%. The recovery denominator is "
-                          "conditioned on it and cross-cohort comparisons of recovery "
-                          "are not like-for-like.")
+        interp_dynamic = ("Here eligibility is below 100%, so some Kennedy pairs were "
+                          "never testable in this run. Recovery is measured only over the "
+                          "testable ones. Because each cohort has its own eligibility, "
+                          "recovery values from two different cohorts are not directly "
+                          "comparable -- compare eligibility first.")
 
-    interpretation = ("This is the ceiling on recovery, and it must be read BEFORE "
-                      "the recovery numbers. " + interp_dynamic)
+    interpretation = (
+        "Read this before the recovery numbers -- it sets the ceiling on them. A Kennedy "
+        "pair can only be recovered if this run actually tested it: both the CpG and the "
+        "expression probe have to survive our filtering. Pairs that were never tested are "
+        "excluded from the recovery denominator rather than counted as misses, so recovery "
+        "measures method disagreement, not coverage. " + interp_dynamic)
 
     rows = [
         ["Total Kennedy Pairs", str(total)],
@@ -947,13 +985,17 @@ def build_eligibility_decomposition_module(df_kennedy, cols) -> QCModule:
 
 
 def build_recovery_grid_module(grid_results, thresholds) -> QCModule:
-    purpose = "Displays the fraction of eligible Kennedy hits found in tecpg."
+    purpose = "How many of Kennedy's hits did we find? (across every threshold combination)"
     interpretation = (
-        "Read along the Kennedy axis: recovery should RISE as their threshold tightens, "
-        "because their strongest hits should be the ones we recover best. A flat or "
-        "falling profile in that direction would suggest we are matching their noise "
-        "rather than their signal, and is the main thing to look for. Recovery falls as "
-        "OUR threshold tightens, which is expected and not informative."
+        "Recovery is the share of Kennedy's testable hits that this run also found. "
+        "The one pattern to look for: read ACROSS a row, left to right, as Kennedy's "
+        "threshold gets stricter. Recovery should climb. That means the stronger their "
+        "evidence for a pair, the more likely we found it too -- which is what genuine "
+        "agreement between two methods looks like. A flat or declining row would be the "
+        "warning sign, suggesting we were matching their weakest, noisiest calls rather "
+        "than their real signal. Reading DOWN a column, recovery falls as our own "
+        "threshold tightens. That is just arithmetic -- we report fewer pairs, so we "
+        "match fewer of theirs -- and carries no information."
     )
 
     headers = ["tecpg \\ Kennedy"] + [f"{tk:g}" for tk in thresholds]
@@ -972,13 +1014,18 @@ def build_recovery_grid_module(grid_results, thresholds) -> QCModule:
 
 
 def build_confirmation_grid_module(grid_results, thresholds) -> QCModule:
-    purpose = "Displays the fraction of tecpg hits found in Kennedy."
+    purpose = "How many of our hits did Kennedy also report? (across every threshold combination)"
     interpretation = (
-        "The raw denominator is a LOWER BOUND. Kennedy's tested universe (483,399 CpGs "
-        "x 13,933 transcripts) is not recoverable from the supplement, which contains "
-        "only CpGs that produced at least one suggestive hit. The kennedy_testable "
-        "variant is the opposing bound and is biased UPWARD for the same reason. The "
-        "two bracket the truth; neither is the answer."
+        "Confirmation is the reverse direction: the share of our hits that Kennedy also "
+        "reported. It cannot be measured exactly, and the reason is worth understanding. "
+        "Kennedy's published file lists only CpGs that produced at least one suggestive "
+        "hit -- it is not a record of everything they tested. So when one of our pairs is "
+        "absent from their file, we cannot tell whether they tested it and found nothing, "
+        "or never tested it at all. The raw number shown here divides by ALL our hits, "
+        "which counts untested pairs as failures and therefore reads too LOW. The "
+        "kennedy-testable variant divides only by pairs we can confirm they could have "
+        "seen, which reads too HIGH. The true value lies between the two. Report them as "
+        "a range; neither one alone is the answer."
     )
 
     headers = ["tecpg \\ Kennedy"] + [f"{tk:g}" for tk in thresholds]
@@ -997,14 +1044,17 @@ def build_confirmation_grid_module(grid_results, thresholds) -> QCModule:
 
 
 def build_diagonal_summary_module(diag) -> QCModule:
-    purpose = "Summary of matched p-value threshold overlap."
+    purpose = "The headline numbers, with both methods held to the same threshold."
     interpretation = (
-        "The like-for-like line. Note for context that Kennedy's own GTP-to-MESA "
-        "replication was 44% cis / 30% distal / 27% trans using a single method across "
-        "two cohorts; a cross-METHOD recovery within that range is a reasonable result, "
-        "not a poor one. Jaccard is reported for the diagonal only and is dominated by "
-        "the size ratio when the two hit sets differ substantially in size — it is "
-        "secondary and should not be read as the headline."
+        "This is the headline like-for-like comparison, with both methods held to the "
+        "same threshold. For a sense of scale: when Kennedy replicated their OWN GTP "
+        "results in their MESA cohort -- same method, same team, just a second cohort -- "
+        "they recovered 44% of cis, 30% of distal, and 27% of trans pairs. Replication in "
+        "this field is partial even under the most favourable conditions. A recovery in "
+        "that range here is a reasonable result, not a poor one, and it is a harder test: "
+        "different method AND different analysis. Treat Jaccard as secondary. It divides "
+        "the overlap by the combined size of both hit sets, so when one set is far larger "
+        "than the other it is driven mostly by that size gap rather than by agreement."
     )
     rows = [
         ["Recovery", f"{diag['recovery']:.3f}"],
@@ -1019,7 +1069,7 @@ def build_diagonal_summary_module(diag) -> QCModule:
 
 
 def build_trans_fraction_module(args) -> QCModule:
-    purpose = "Compares the trans fraction curves."
+    purpose = "Compares how many hits fall far from genes, ours versus Kennedy's."
 
     thresholds = [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]
 
@@ -1053,11 +1103,16 @@ def build_trans_fraction_module(args) -> QCModule:
         dyn_interp = f"The direction inverts at threshold(s): {', '.join(inversions)}."
 
     interpretation = (
-        "The reference file's own trans fraction is measured across log10(p). " + dyn_interp +
-        " Above means less cis enrichment than the reference at equal stringency; below "
-        "means more. Note that GTP and MESA agree to three decimals at 1e-5 despite "
-        "differing 3.6x in sample size, which indicates the suggestive-tier trans fraction "
-        "reflects test-space geometry rather than biology."
+        "Trans pairs are those where the CpG and the gene are far apart or on different "
+        "chromosomes. This curve tracks what share of each method's hits are trans as the "
+        "p-value threshold tightens. " + dyn_interp +
+        " Running above the reference means our hits are less concentrated near genes at "
+        "the same stringency; running below means more concentrated. One caution about "
+        "the loose end of the curve: Kennedy's GTP and MESA trans fractions agree to two "
+        "decimals at 1e-5 even though the two cohorts differ 3.6-fold in sample size. "
+        "Two cohorts that different should not land that close if the number reflected "
+        "biology, so at the suggestive tier this is being driven by the shape of the test "
+        "space -- there are simply far more possible trans pairs to find."
     )
 
     # Generate the curve figure
@@ -1129,15 +1184,22 @@ def build_region_composition_module(args) -> QCModule:
     ]
 
     interpretation = (
-        f"Matched tier: tecpg p < {comp['tecpg_thresh']:g}, Kennedy p < {comp['kennedy_thresh']:g}. "
-        "Read the tecpg trans fraction as expected to run HIGHER than Kennedy's: Kennedy select "
-        "each probe's genomic location per pair (annotation.md sec 6.1), preferring the location "
-        "that places the CpG in or near the gene, which moves pairs from trans into cis. tecpg "
-        "uses one fixed position per probe, so this is a documented METHOD difference, not a "
-        "discrepancy in findings. The Kennedy paper GTP column is the post-selection published "
-        "composition (cis and trans only; gene body / distal are not itemised in the source). "
-        "The unlabeled row is the population with coordinates but no resolved gene model "
-        "(annotation.md sec 5.2) and is excluded from the labeled fractions."
+        f"Both sides are held to the same thresholds here (tecpg p < {comp['tecpg_thresh']:g}, "
+        f"Kennedy p < {comp['kennedy_thresh']:g}). This table asks where our significant pairs "
+        "sit relative to genes, compared with where Kennedy's sat.\n\n"
+        "Expect our trans share to come out HIGHER than theirs, and do not read that as a "
+        "contradiction. When a probe could map to more than one spot in the genome, Kennedy "
+        "chose the location separately for each pair, favouring the one that placed the CpG in "
+        "or near the gene. That choice moves pairs out of trans and into cis. We assign one "
+        "fixed position per probe and use it everywhere. So the gap between the two trans "
+        "numbers is a documented METHOD difference in how positions were assigned -- not a "
+        "disagreement about which pairs are associated.\n\n"
+        "Two notes on reading the columns. The Kennedy reference column is their published "
+        "composition after that per-pair selection, and only cis and trans are listed because "
+        "their source does not break out gene body and distal separately. The unlabeled row "
+        "counts pairs whose probe coordinates resolved but which overlapped no gene model; "
+        "these are excluded from the other fractions so the four categories sum to the labeled "
+        "pairs only."
     )
     table_html = render_table(headers, rows) + render_table(ll_headers, ll_rows)
     return QCModule(
@@ -1223,17 +1285,20 @@ def influence_stratified_analysis(df_merged, tecpg_p_col, kennedy_p_col,
 
 
 def build_concordance_module(args, figs) -> QCModule:
-    purpose = "Venn diagram and effect-size scatter."
+    purpose = "Do the two methods agree on effect size and direction, not just on significance?"
     interpretation = (
-        "The diagnostic pattern: if Spearman EXCEEDS Pearson on effect size while falling "
-        "BELOW it on the test statistic, the two coefficient scales are monotonically "
-        "related but not commensurate, which is expected given a mixed model versus "
-        "fixed-effect QR and is why the effect-size panel carries no y=x line. High "
-        "test-statistic concordance with lower effect-size concordance is therefore a "
-        "scale artifact and not a disagreement about which pairs are associated. Sign "
-        "agreement in the quadrant annotation is the scale-invariant quantity and is the "
-        "one to read. Note that a standardized-effect comparison using mt_err and beta.sd "
-        "is planned for C3 and will resolve the scale question directly."
+        "These panels ask whether the two methods agree on the size and direction of each "
+        "association, not just on which pairs are significant. Pearson measures agreement "
+        "on the raw values; Spearman measures agreement on the RANKING. The pattern to "
+        "watch for is Spearman higher than Pearson on effect size, with the reverse on the "
+        "test statistic. That combination means the two methods rank the pairs the same "
+        "way but express effects on different scales -- expected here, because Kennedy fit "
+        "a mixed model and we fit a fixed-effect regression, so the coefficients are not "
+        "in the same units. It is a units mismatch, not a disagreement about which pairs "
+        "are associated, and it is why the effect-size panel deliberately has no y=x line: "
+        "the points are not supposed to fall on it. The most trustworthy quantity here is "
+        "sign agreement in the quadrant annotation, since agreeing on direction means the "
+        "same thing regardless of scale."
     )
 
     b64s = []
