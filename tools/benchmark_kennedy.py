@@ -218,9 +218,26 @@ def stream_catalog_and_match(args, schema, tecpg_p_col, kennedy_pairs,
 
 def compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols):
     df = kennedy_df.copy()
-    df['cpg_in_tecpg_universe'] = df[cols['cpg']].isin(set(distinct_mt))
-    df['probe_in_tecpg_universe'] = df[cols['probe']].isin(set(distinct_gt))
+    mt_universe = set(distinct_mt)
+    gt_universe = set(distinct_gt)
+    df['cpg_in_tecpg_universe'] = df[cols['cpg']].isin(mt_universe)
+    df['probe_in_tecpg_universe'] = df[cols['probe']].isin(gt_universe)
     df['eligible'] = df['cpg_in_tecpg_universe'] & df['probe_in_tecpg_universe']
+
+    # Distinct-ENTITY coverage, distinct from the pair-level flags above: how many
+    # of the reference file's individual CpG loci and expression probes exist in
+    # this run's test space at all. Attached as an attribute so the eligibility
+    # module renders the same numbers rather than recomputing them.
+    k_cpgs = set(df[cols['cpg']].dropna().unique())
+    k_probes = set(df[cols['probe']].dropna().unique())
+    df.attrs['entity_coverage'] = {
+        'kennedy_distinct_cpg': len(k_cpgs),
+        'kennedy_distinct_probe': len(k_probes),
+        'cpg_overlap': len(k_cpgs & mt_universe),
+        'cpg_missing': len(k_cpgs - mt_universe),
+        'probe_overlap': len(k_probes & gt_universe),
+        'probe_missing': len(k_probes - gt_universe),
+    }
     return df
 
 
@@ -551,6 +568,8 @@ def profile_kennedy(path, df, sep, cols, thresholds):
     # Must use dropna to match valid pairs
     valid = df.dropna(subset=[cpg_col, query_col])
     profile['unique_pair_count'] = int(len(set(zip(valid[cpg_col], valid[query_col]))))
+    profile['distinct_mt_id_count'] = int(valid[cpg_col].nunique())
+    profile['distinct_gt_id_count'] = int(valid[query_col].nunique())
     assert profile['row_count'] == profile['unique_pair_count'], \
         "Kennedy row count does not equal unique pair count!"
 
@@ -789,6 +808,14 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
             'num_merged': num_merged
         }
 
+    # Distinct-entity coverage is an input property, not a threshold result: emit it
+    # alongside the profiles so the eligibility table's numbers are reconcilable from
+    # the JSON rather than readable only in the HTML.
+    if df_kennedy is not None and getattr(df_kennedy, 'attrs', None):
+        ec = df_kennedy.attrs.get('entity_coverage')
+        if ec:
+            out_json['entity_coverage'] = ec
+
     class NpEncoder(json.JSONEncoder):
         def default(self, obj):
             import numpy as np
@@ -901,6 +928,8 @@ def build_reference_file_profile_module(prof) -> QCModule:
         ["Path", prof['path']],
         ["Rows", str(prof['row_count'])],
         ["Unique Pairs", str(prof['unique_pair_count'])],
+        ["Distinct mt_id (CpG loci)", str(prof.get('distinct_mt_id_count', 'N/A'))],
+        ["Distinct gt_id (expression probes)", str(prof.get('distinct_gt_id_count', 'N/A'))],
         ["Columns", ", ".join(prof['column_list'])]
     ]
 
@@ -969,14 +998,39 @@ def build_eligibility_decomposition_module(df_kennedy, cols) -> QCModule:
         "pair can only be recovered if this run actually tested it: both the CpG and the "
         "expression probe have to survive our filtering. Pairs that were never tested are "
         "excluded from the recovery denominator rather than counted as misses, so recovery "
-        "measures method disagreement, not coverage. " + interp_dynamic)
+        "measures method disagreement, not coverage. " + interp_dynamic +
+        " The table reports this at two levels. The pair rows count reference PAIRS. The "
+        "distinct rows below them count individual CpG loci and expression probes, and "
+        "show how many of each the reference used that this run has no measurement for. "
+        "That is where a coverage gap actually originates: a single missing CpG removes "
+        "every pair it appears in, so a small number of missing loci can account for a "
+        "large number of untestable pairs.")
+
+    ec = df_kennedy.attrs.get('entity_coverage', {})
+
+    def _pct(n, d):
+        return f"{n} ({n / d:.1%})" if d else str(n)
 
     rows = [
-        ["Total Kennedy Pairs", str(total)],
-        ["CpG in tecpg", str(df_kennedy['cpg_in_tecpg_universe'].sum())],
-        ["Probe in tecpg", str(df_kennedy['probe_in_tecpg_universe'].sum())],
-        ["Pair in tecpg (Eligible)", str(eligible)]
+        ["Pairs \u2014 total in reference", str(total)],
+        ["Pairs \u2014 CpG present in tecpg", str(df_kennedy['cpg_in_tecpg_universe'].sum())],
+        ["Pairs \u2014 probe present in tecpg", str(df_kennedy['probe_in_tecpg_universe'].sum())],
+        ["Pairs \u2014 both present (eligible)", _pct(int(eligible), total)],
     ]
+
+    if ec:
+        rows += [
+            ["Distinct CpG loci \u2014 in reference", str(ec['kennedy_distinct_cpg'])],
+            ["Distinct CpG loci \u2014 also in tecpg",
+             _pct(ec['cpg_overlap'], ec['kennedy_distinct_cpg'])],
+            ["Distinct CpG loci \u2014 missing from tecpg",
+             _pct(ec['cpg_missing'], ec['kennedy_distinct_cpg'])],
+            ["Distinct genes/probes \u2014 in reference", str(ec['kennedy_distinct_probe'])],
+            ["Distinct genes/probes \u2014 also in tecpg",
+             _pct(ec['probe_overlap'], ec['kennedy_distinct_probe'])],
+            ["Distinct genes/probes \u2014 missing from tecpg",
+             _pct(ec['probe_missing'], ec['kennedy_distinct_probe'])],
+        ]
     return QCModule(
         anchor="eligibility", title="Eligibility Decomposition", status="INFO",
         purpose=purpose, interpretation=interpretation,

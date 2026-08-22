@@ -1174,3 +1174,69 @@ def test_report_has_no_permute_leftovers(tmp_path):
     assert 'permute_qc_report.py' not in html
     assert '<h1>Kennedy Benchmark</h1>' in html
     assert 'tools/benchmark_kennedy.py' in html
+
+
+def test_entity_coverage_counts_distinct_not_pairs():
+    """Distinct-entity coverage: overlap/missing are counted over unique CpGs and
+    probes, not over pairs, and the two always sum to the distinct total."""
+    import pandas as pd
+    from tools.benchmark_kennedy import compute_eligibility
+
+    # c0..c2 in tecpg, k0/k1 absent; p0/p1 in tecpg, q0 absent.
+    # CpG c0 repeats across rows -- distinct counting must not double it.
+    ken = pd.DataFrame({
+        'CpG.probe': ['c0', 'c0', 'c1', 'c2', 'k0', 'k1'],
+        'exp.Probe': ['p0', 'p1', 'p0', 'q0', 'p0', 'q0'],
+    })
+    cols = {'cpg': 'CpG.probe', 'probe': 'exp.Probe'}
+    df = compute_eligibility(['c0', 'c1', 'c2'], ['p0', 'p1'], ken, cols)
+    ec = df.attrs['entity_coverage']
+
+    assert ec['kennedy_distinct_cpg'] == 5      # c0,c1,c2,k0,k1 -- c0 counted once
+    assert ec['cpg_overlap'] == 3
+    assert ec['cpg_missing'] == 2
+    assert ec['kennedy_distinct_probe'] == 3    # p0,p1,q0
+    assert ec['probe_overlap'] == 2
+    assert ec['probe_missing'] == 1
+    # conservation: overlap + missing == distinct total, both axes
+    assert ec['cpg_overlap'] + ec['cpg_missing'] == ec['kennedy_distinct_cpg']
+    assert ec['probe_overlap'] + ec['probe_missing'] == ec['kennedy_distinct_probe']
+
+
+def test_eligibility_and_reference_profile_render_distinct_rows(tmp_path):
+    """Both tables surface the distinct-entity counts in the rendered report."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import subprocess
+    import sys
+    import re
+
+    cat = pd.DataFrame({
+        'mt_id': ['c1', 'c2'], 'gt_id': ['p1', 'p2'],
+        'precise_mt_p': [1e-12, 1e-12], 'mt_est': [1.0, -1.0], 'mt_t': [1.0, -1.0],
+        'region': ['CIS5', 'TRANS'], 'fdr_est': [0.1, 0.1],
+    })
+    ken = pd.DataFrame({
+        'CpG.probe': ['c1', 'cX'], 'exp.Probe': ['p1', 'pX'],
+        'p.val': [1e-12, 1e-12], 'status': ['IN', 'TRANS'],
+        'distance': [10, float('nan')], 'beta': [1.0, 1.0], 'T.stat': [1.0, 1.0],
+    })
+    pt = tmp_path / "t.parquet"
+    pq.write_table(pa.Table.from_pandas(cat), pt)
+    pk = tmp_path / "k.tsv"
+    ken.to_csv(pk, sep='\t', index=False)
+
+    subprocess.run([sys.executable, 'tools/benchmark_kennedy.py', '-t', str(pt),
+                    '-k', str(pk), '--tecpg-thresh', '1e-11', '--kennedy-thresh',
+                    '1e-11', '-o', str(tmp_path)], capture_output=True, text=True, check=True)
+    html = (tmp_path / 'benchmark_report.html').read_text()
+
+    elig = re.search(r'<section id="eligibility".*?</section>', html, re.DOTALL).group(0)
+    assert 'Distinct CpG loci' in elig
+    assert 'missing from tecpg' in elig
+    assert 'Distinct genes/probes' in elig
+
+    ref = re.search(r'<section id="reference-profile".*?</section>', html, re.DOTALL).group(0)
+    assert 'Distinct mt_id' in ref
+    assert 'Distinct gt_id' in ref
