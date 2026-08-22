@@ -116,28 +116,69 @@ def _tiny_map(**kwargs):
     ), M_ * G_
 
 
-def test_cpu_path_keeps_lapack_qr():
-    # The dispatch is device-gated: on CPU, LAPACK geqrf is ~10x faster
-    # than the batched formulation, so the CPU branch must still call
-    # torch.linalg.qr and must never call batched_householder_qr.
-    if torch.cuda.is_available():
-        pytest.skip('CPU-branch test; CUDA machine runs the CUDA test')
+def test_default_never_calls_householder():
+    # torch.linalg.qr is the shipped default on every device: qr_impl
+    # defaults to 'torch', so batched_householder_qr must never fire unless
+    # the user opts in. Patching it to raise proves the default routes to
+    # torch on whatever device the test host has (CPU or CUDA).
     with mock.patch(
         'tecpg.processing.batched_householder_qr',
-        side_effect=AssertionError('householder called on CPU path'),
+        side_effect=AssertionError('householder called under the torch default'),
     ):
         out, n = _tiny_map()
     assert len(out) == n
     assert np.isfinite(out.to_numpy()).all()
 
 
+def test_explicit_torch_never_calls_householder():
+    # Explicitly requesting qr_impl='torch' must also never reach Householder.
+    with mock.patch(
+        'tecpg.processing.batched_householder_qr',
+        side_effect=AssertionError('householder called under qr_impl=torch'),
+    ):
+        out, n = _tiny_map(qr_impl='torch')
+    assert len(out) == n
+    assert np.isfinite(out.to_numpy()).all()
+
+
+def test_householder_opt_in_is_cpu_noop_but_accepted():
+    # qr_impl='householder' is CUDA-only: the gate is
+    # `qr_impl == 'householder' and X.is_cuda`, so on a CPU host it falls
+    # through to torch.linalg.qr (Householder is ~10x slower on CPU). The
+    # flag must be accepted without error and produce a valid result.
+    if torch.cuda.is_available():
+        pytest.skip('CPU-fallthrough test; CUDA host runs the CUDA opt-in test')
+    with mock.patch(
+        'tecpg.processing.batched_householder_qr',
+        side_effect=AssertionError('householder fired on CPU despite CUDA-only gate'),
+    ):
+        out, n = _tiny_map(qr_impl='householder')
+    assert len(out) == n
+    assert np.isfinite(out.to_numpy()).all()
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='needs CUDA')
-def test_cuda_path_uses_replacement_not_torch_qr():
-    # On CUDA the launch-bound torch.linalg.qr must never fire inside the
-    # qr map: patching it to raise proves the Householder branch is wired.
+def test_householder_opt_in_fires_on_cuda():
+    # On CUDA, qr_impl='householder' must actually route through the batched
+    # path: patching torch.linalg.qr to raise proves Householder is used and
+    # torch.linalg.qr is not called in the map's QR site under opt-in.
     with mock.patch(
         'torch.linalg.qr',
-        side_effect=AssertionError('torch.linalg.qr called on CUDA path'),
+        side_effect=AssertionError('torch.linalg.qr called under householder opt-in'),
+    ):
+        out, n = _tiny_map(qr_impl='householder')
+    assert len(out) == n
+    assert np.isfinite(out.to_numpy()).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='needs CUDA')
+def test_cuda_default_uses_torch_not_householder():
+    # On CUDA the DEFAULT must be torch.linalg.qr, not Householder — the
+    # inversion that makes vendor numerics the shipped behavior. Patch
+    # Householder to raise; the default map must complete without tripping it.
+    with mock.patch(
+        'tecpg.processing.batched_householder_qr',
+        side_effect=AssertionError('householder fired under CUDA default'),
     ):
         out, n = _tiny_map()
     assert len(out) == n
