@@ -883,6 +883,16 @@ def corr(
     help='Number of tests to retain in the reservoir buffer (only for qr method)',
 )
 @click.option(
+    '--qr-impl',
+    type=click.Choice(['torch', 'householder']),
+    show_default=True,
+    default='torch',
+    help='QR decomposition backend for the mlr map (qr method only). '
+         '"torch" uses torch.linalg.qr (vendor cuSOLVER/LAPACK, the default). '
+         '"householder" uses a batched Householder path that is CUDA-only and '
+         '~28s faster on the paper grid, at the cost of bespoke numerics.',
+)
+@click.option(
     '--permutations',
     show_default=True,
     default=100,
@@ -1014,6 +1024,7 @@ def mlr(
     thermal_threshold: int,
     thermal_wait: int,
     reservoir_count: Optional[int],
+    qr_impl: str,
     permutations: int,
     subsample_mt_count: Optional[int],
     subsample_g_count: Optional[int],
@@ -1255,6 +1266,7 @@ def mlr(
         'aggressive_gc': aggressive_gc,
         'output_format': output_format,
         'compute_influence': compute_influence,
+        'qr_impl': qr_impl,
     }
 
     logger.info(
@@ -1367,6 +1379,9 @@ def mlr(
     else:
         if reservoir_count is not None:
             logger.warning('--reservoir-count is only supported for mlr-method qr')
+        if qr_impl != 'torch':
+            logger.warning('--qr-impl is only supported for mlr-method qr')
+        kwargs.pop('qr_impl', None)
         if permute_label_test:
             logger.warning('--permute-label-test is only supported for mlr-method qr')
         kwargs.pop('permute_label_test', None)

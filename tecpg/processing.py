@@ -196,6 +196,7 @@ def tecpg_mlr_qr(
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
     reservoir_count: Optional[int] = None,
+    qr_impl: Literal['torch', 'householder'] = 'torch',
     subsample_mt_count: Optional[int] = None,
     subsample_g_count: Optional[int] = None,
     seed: int = 42,
@@ -238,7 +239,7 @@ def tecpg_mlr_qr(
             M, G, C, M_annot, G_annot, region, window_base, downstream, upstream,
             gene_loci_per_chunk, meth_loci_per_chunk, p_thresh, output_dir,
             methylation_only, p_only, logit_transform, thermal_threshold, thermal_wait,
-            file_format, reservoir_count, subsample_mt_count, subsample_g_count, seed,
+            file_format, reservoir_count, qr_impl, subsample_mt_count, subsample_g_count, seed,
             permute_label_test, compute_ig, compute_ig_deep, compute_influence, ig_baseline,
             ig_covariates_filter, prefetch_chunks, aggressive_gc, pool, max_workers,
             output_format=output_format, logger=logger, chunking=chunking
@@ -265,6 +266,7 @@ def _tecpg_mlr_qr_inner(
     thermal_wait: int = 30,
     file_format: str = '{meth_chunk}-{gene_chunk}.csv',
     reservoir_count: Optional[int] = None,
+    qr_impl: Literal['torch', 'householder'] = 'torch',
     subsample_mt_count: Optional[int] = None,
     subsample_g_count: Optional[int] = None,
     seed: int = 42,
@@ -683,13 +685,16 @@ def _tecpg_mlr_qr_inner(
             # Pre-calculate diagonal of (X^T X)^-1 for Standard Error using QR decomposition
             # X = QR => X^T X = R^T R. (X^T X)^-1 = (R^T R)^-1 = R^-1 (R^-1)^T.
             # We need the diagonal elements.
-            # P2: on CUDA, torch.linalg.qr loops per matrix for this shape
-            # (launch-bound: ~121k kernels per 10,000-CpG chunk), so use the
-            # batched Householder path there. On CPU, LAPACK geqrf is ~10x
-            # faster than the batched formulation, so keep torch.linalg.qr.
-            # Downstream consumers are sign-convention invariant either way;
-            # see batched_householder_qr.
-            if X.is_cuda:
+            # QR decomposition. Default is torch.linalg.qr (vendor cuSOLVER
+            # on CUDA, LAPACK geqrf on CPU) — the vetted numerics every user
+            # gets unless they opt in otherwise. The batched Householder path
+            # (qr_impl='householder') avoids torch.linalg.qr's per-matrix
+            # CUDA dispatch (~121k kernel launches per 10,000-CpG chunk) and
+            # is ~28s faster on the paper grid, at the cost of bespoke
+            # numerics; it is CUDA-only (on CPU, LAPACK geqrf is ~10x faster
+            # than the batched form). Downstream consumers are sign-convention
+            # invariant either way; see batched_householder_qr.
+            if qr_impl == 'householder' and X.is_cuda:
                 Q, R = batched_householder_qr(X)
             else:
                 Q, R = torch.linalg.qr(X, mode='reduced')
