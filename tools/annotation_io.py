@@ -219,3 +219,59 @@ def build_probe_to_model(probe_symbol_pairs, symbol_to_model):
         f"{n_no_symbol} no-symbol, {n_multi} multi-symbol, {n_unmatched} unmatched."
     )
     return resolved
+
+
+#### Read the probe->gene map (TSV) emitted by build_probe_gene_model.py ########
+def readProbeGeneModel(my_mapFile):
+    """Parse annot_*/probe_gene_model.tsv into {probe_id: {...}}.
+
+    Only rows with status == RESOLVED enter the dict, so an unresolved probe is
+    simply absent and the caller's `probe not in map` branch handles it. Inner
+    keys match readAnnotationFileToDict (chrom/chromStart/chromEnd/strand) so
+    the region arithmetic needs no change, plus the two provenance fields.
+
+    Returns (map_dict, header_dict). header_dict carries the '#key<TAB>value'
+    provenance lines so the caller can stamp them into the output Parquet.
+    """
+    my_mapH = {}
+    headerH = {}
+    n_seen = 0
+    status_counts = {}
+
+    opener = gzip.open if str(my_mapFile).endswith(".gz") else open
+    with opener(my_mapFile, "rt") as fp:
+        cols = None
+        for line in fp:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith("#"):
+                parts = line[1:].split("\t")
+                if len(parts) >= 2:
+                    headerH[parts[0]] = "\t".join(parts[1:])
+                continue
+            dataA = line.split("\t")
+            if cols is None:
+                cols = dataA
+                continue
+            row = dict(zip(cols, dataA))
+            n_seen += 1
+            status = row.get("status", "")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status != "RESOLVED":
+                continue
+            probe = row.get("probe_id", "")
+            if not probe:
+                continue
+            my_mapH[probe] = {
+                "chrom": str(row.get("chrom", "")),
+                "chromStart": int(row["start"]),
+                "chromEnd": int(row["end"]),
+                "strand": str(row.get("strand", "")),
+                "gtf_gene_model": row.get("gtf_gene_ids", "") or None,
+                "gtf_gene_symbol": row.get("gtf_gene_symbols", "") or None,
+            }
+
+    logger.info(f"[readProbeGeneModel] Read {n_seen} probes from {my_mapFile}; "
+                f"resolved {len(my_mapH)}; status counts {status_counts}")
+    return my_mapH, headerH

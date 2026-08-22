@@ -38,6 +38,19 @@ def annotated_run(tmp_path):
         "chr1\t111000\t111001\tcgNULLISH\t0\t+\n"
     )
 
+    # The probe->gene map supplies the GENE span for the region windows; the
+    # probe BED above supplies the coordinate columns. GENE1 spans 100000-120000,
+    # so all three CpGs fall in its gene body.
+    gene_model = tmp_path / "probe_gene_model.tsv"
+    gene_model.write_text(
+        "#tecpg_probe_gene_model\tv1\n"
+        "#method\texon_overlap_gt_25bp_union_span\n"
+        "probe_id\tstatus\tchrom\tstart\tend\tstrand\tn_genes"
+        "\tgtf_gene_ids\tgtf_gene_symbols\tgtf_gene_types\n"
+        "GENE1\tRESOLVED\tchr1\t100000\t120000\t+\t1"
+        "\tENSG_TEST.1\tTESTGENE\tprotein_coding\n"
+    )
+
     in_parquet = tmp_path / "in.parquet"
     df = pd.DataFrame(
         {
@@ -55,6 +68,7 @@ def annotated_run(tmp_path):
     proc = subprocess.run(
         [sys.executable, TOOL,
          "-d", str(in_parquet), "-g", str(gene_bed),
+         "--gene-model", str(gene_model),
          "-m", str(meth_bed), "-o", str(out_parquet)],
         capture_output=True, text=True,
     )

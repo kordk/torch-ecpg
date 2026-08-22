@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 #### Shared annotation parser lives in tools/annotation_io.py #################
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from annotation_io import readAnnotationFileToDict  # noqa: E402
+from annotation_io import readAnnotationFileToDict, readProbeGeneModel  # noqa: E402
 
 #### Read through file and report on p-values #######################################
 def reportPvalues(my_ecpgDataFile, pval_col, chunk_size):
@@ -69,7 +69,7 @@ def reportPvalues(my_ecpgDataFile, pval_col, chunk_size):
     logger.info(f"[reportPvalues] P < 0.000000001: {p_lt_1e9}")
 
 #### Assign region for each eCpG #######################################
-def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
+def assignRegion(my_ecpgDataFile, gH, mH, gmH, geneModelHeader, pval_col, outFileName, chunk_size):
     my_typeCountH = {
         "trans": 0,
         "distal5": 0,
@@ -90,6 +90,9 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
 
     missing_gene_ids = {}
     missing_meth_ids = {}
+    n_coord_ok = 0    # pairs with both probe coordinates
+    n_model_ok = 0    # pairs whose gene probe resolved to a gene model
+    n_no_model = 0    # same-chromosome pairs with no gene model
 
     parquet_file = pq.ParquetFile(my_ecpgDataFile)
     writer = None
@@ -104,11 +107,21 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
         pa.field('gt_chrom', pa.string()),
         pa.field('gt_chromStart', pa.int64()),
         pa.field('gt_strand', pa.string()),
-        pa.field('region', pa.string())
+        pa.field('region', pa.string()),
+        pa.field('gtf_gene_model', pa.string()),
+        pa.field('gtf_gene_symbol', pa.string())
     ]
 
     # Append the new fields to the input schema
     schema = pa.schema(list(input_schema) + new_fields)
+
+    # Stamp the probe->gene map provenance (deriver, GTF path, sha) into the
+    # Parquet key-value metadata so the annotation source travels with the data.
+    if geneModelHeader:
+        md = dict(input_schema.metadata or {})
+        for k, v in geneModelHeader.items():
+            md[("tecpg_pgm_" + str(k)).encode()] = str(v).encode()
+        schema = schema.with_metadata(md)
 
     for batch in parquet_file.iter_batches(batch_size=chunk_size):
         df = batch.to_pandas()
@@ -129,9 +142,13 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
 
             nlp += 1
 
-            # Determine if we have annotation info
+            # Determine if we have annotation info. mH/gH are the PROBE BEDs and
+            # supply the coordinate columns; gmH is the probe->gene map and is used
+            # only to place the CpG against a gene span. A probe absent from gmH
+            # loses its region label, never its coordinates.
             has_mt_annot = mt_id in mH and "chrom" in mH[mt_id]
             has_gt_annot = gt_id in gH and "chrom" in gH[gt_id]
+            has_gene_model = gt_id in gmH
 
             if not has_mt_annot:
                 if mt_id not in mH:
@@ -150,39 +167,43 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
                         missing_gene_ids[gt_id] = "missing_chrom"
                 negx += 1
 
-            if not has_mt_annot or not has_gt_annot:
-                # Missing annotation -> just append the row with nulls for the new columns
-                cpgA = dict(base_row)
-                cpgA.update({
-                    'mt_chrom': None,
-                    'mt_chromStart': None,
-                    'mt_strand': None,
-                    'gt_chrom': None,
-                    'gt_chromStart': None,
-                    'gt_strand': None,
-                    'region': None
-                })
-                my_eqtmA.append(cpgA)
-                ne += 1
-                continue
+            # Coordinates are written from the probe BEDs whenever the id is
+            # present, independent of whether a gene model resolved.
+            mt_chrom       = mH[mt_id]["chrom"]       if has_mt_annot else None
+            mt_chromStart  = mH[mt_id]["chromStart"]  if has_mt_annot else None
+            mt_strand      = mH[mt_id]["strand"]      if has_mt_annot else None
 
-            # We have annotations
-            mt_chrom = mH[mt_id]["chrom"]
-            mt_chromStart = mH[mt_id]["chromStart"]
-            mt_strand = mH[mt_id]["strand"]
+            gt_chrom       = gH[gt_id]["chrom"]       if has_gt_annot else None
+            gt_chromStart  = gH[gt_id]["chromStart"]  if has_gt_annot else None
+            gt_strand      = gH[gt_id]["strand"]      if has_gt_annot else None
 
-            gt_chrom = gH[gt_id]["chrom"]
-            gt_chromStart = gH[gt_id]["chromStart"]
-            gt_strand = gH[gt_id]["strand"]
-
+            # Gene identity is a property of the probe, so it is written whenever
+            # the probe resolved -- including on TRANS rows, where no gene model
+            # was consulted to produce the label.
             annot_base = {
                 'mt_chrom': mt_chrom,
                 'mt_chromStart': mt_chromStart,
                 'mt_strand': mt_strand,
                 'gt_chrom': gt_chrom,
                 'gt_chromStart': gt_chromStart,
-                'gt_strand': gt_strand
+                'gt_strand': gt_strand,
+                'gtf_gene_model':  gmH[gt_id]["gtf_gene_model"]  if has_gene_model else None,
+                'gtf_gene_symbol': gmH[gt_id]["gtf_gene_symbol"] if has_gene_model else None,
             }
+
+            if has_mt_annot and has_gt_annot:
+                n_coord_ok += 1
+            if has_gene_model:
+                n_model_ok += 1
+
+            if not has_mt_annot or not has_gt_annot:
+                # No usable position for one side: the CpG cannot be placed at all.
+                cpgA = dict(base_row)
+                cpgA.update(annot_base)
+                cpgA['region'] = None
+                my_eqtmA.append(cpgA)
+                ne += 1
+                continue
 
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"[assignRegion] {nlp} mt: {mt_id} {mt_chrom} gx: {gt_id} {gt_chrom}")
@@ -201,28 +222,42 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
 
                 continue   ## Move on to the next. CpGs cannot be TRANS && another region
 
+            if not has_gene_model:
+                # Same chromosome, but no gene span to measure against.
+                cpgA = dict(base_row)
+                cpgA.update(annot_base)
+                cpgA['region'] = None
+                my_eqtmA.append(cpgA)
+                n_no_model += 1
+                continue
+
+            # The region windows are measured against the GENE MODEL span, not the
+            # expression probe footprint.
+            gm_chromStart = gmH[gt_id]["chromStart"]
+            gm_chromEnd   = gmH[gt_id]["chromEnd"]
+            gm_strand     = gmH[gt_id]["strand"]
+
             # Keep track of regions assigned for this pair
             assigned_regions = 0
 
             ## Region assignment - positive strand
-            if gt_strand == "+":
-                gt_chromEnd = gH[gt_id]["chromEnd"]
-                if mt_chromStart < gt_chromStart - 50000:
+            if gm_strand == "+":
+                if mt_chromStart < gm_chromStart - 50000:
                     region = 'DISTAL5'
                     my_typeCountH["distal5"] += 1
-                elif gt_chromStart - 50000 <= mt_chromStart < gt_chromStart - 2500:
+                elif gm_chromStart - 50000 <= mt_chromStart < gm_chromStart - 2500:
                     region = 'CIS5'
                     my_typeCountH["cis5"] += 1
-                elif gt_chromStart - 2500 <= mt_chromStart <= gt_chromStart + 2500:
+                elif gm_chromStart - 2500 <= mt_chromStart <= gm_chromStart + 2500:
                     region = 'PROMOTER'
                     my_typeCountH["promoter"] += 1
-                elif gt_chromStart + 2500 < mt_chromStart < gt_chromEnd:
+                elif gm_chromStart + 2500 < mt_chromStart < gm_chromEnd:
                     region = 'GENEBODY'
                     my_typeCountH["genebody"] += 1
-                elif gt_chromEnd <= mt_chromStart <= gt_chromEnd + 50000:
+                elif gm_chromEnd <= mt_chromStart <= gm_chromEnd + 50000:
                     region = 'CIS3'
                     my_typeCountH["cis3"] += 1
-                elif mt_chromStart > gt_chromEnd + 50000:
+                elif mt_chromStart > gm_chromEnd + 50000:
                     region = 'DISTAL3'
                     my_typeCountH["distal3"] += 1
                 else:
@@ -237,24 +272,23 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
                     assigned_regions += 1
 
             ## Region assignment - negative strand
-            if gt_strand == "-":
-                gt_chromEnd = gH[gt_id]["chromEnd"]
-                if mt_chromStart > gt_chromEnd + 50000:
+            if gm_strand == "-":
+                if mt_chromStart > gm_chromEnd + 50000:
                     region = 'DISTAL5'
                     my_typeCountH["distal5"] += 1
-                elif gt_chromEnd + 2500 < mt_chromStart <= gt_chromEnd + 50000:
+                elif gm_chromEnd + 2500 < mt_chromStart <= gm_chromEnd + 50000:
                     region = 'CIS5'
                     my_typeCountH["cis5"] += 1
-                elif gt_chromEnd - 2500 <= mt_chromStart <= gt_chromEnd + 2500:
+                elif gm_chromEnd - 2500 <= mt_chromStart <= gm_chromEnd + 2500:
                     region = 'PROMOTER'
                     my_typeCountH["promoter"] += 1
-                elif gt_chromStart < mt_chromStart < gt_chromEnd - 2500:
+                elif gm_chromStart < mt_chromStart < gm_chromEnd - 2500:
                     region = 'GENEBODY'
                     my_typeCountH["genebody"] += 1
-                elif gt_chromStart - 50000 <= mt_chromStart <= gt_chromStart:
+                elif gm_chromStart - 50000 <= mt_chromStart <= gm_chromStart:
                     region = 'CIS3'
                     my_typeCountH["cis3"] += 1
-                elif mt_chromStart < gt_chromStart - 50000:
+                elif mt_chromStart < gm_chromStart - 50000:
                     region = 'DISTAL3'
                     my_typeCountH["distal3"] += 1
                 else:
@@ -317,6 +351,10 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
     N_meth = len(missing_meth_ids)
     logger.info(f"[assignRegion] Annotation missing: {N_gene} unique genes, {N_meth} unique CpGs (full list -> {os.path.abspath(sidecar_path)})")
 
+    pct = (lambda n: (100.0 * n / nlp) if nlp else 0.0)
+    logger.info(f"[assignRegion] coverage: coordinate {n_coord_ok} ({pct(n_coord_ok):.1f}%) of {nlp} pairs")
+    logger.info(f"[assignRegion] coverage: gene-annotation {n_model_ok} ({pct(n_model_ok):.1f}%) of {nlp} pairs")
+    logger.info(f"[assignRegion] same-chromosome pairs with no gene model: {n_no_model}")
     logger.info(f"[assignRegion] eCpgs Processed: {nlp} Assigned: {assigned_total} Excluded (any): {ne}")
     logger.info(f"[assignRegion] eCpgs Excluded: p-value filter: {npvalx} p-value missing: {npskip} gx annotation: {negx} mt annotation: {nemt}")
     logger.info(f"[assignRegion] eCpgs Counts by Region: {my_typeCountH}")
@@ -324,7 +362,7 @@ def assignRegion(my_ecpgDataFile, gH, mH, pval_col, outFileName, chunk_size):
 
 
 #### Verify alignment of annotation files #######################################
-def verify_alignment(geneH, methylH, ecpgDataFile):
+def verify_alignment(geneH, methylH, geneModelH, ecpgDataFile):
     logger.info("[verify_alignment] Starting alignment verification...")
 
     # 1. Chromosome Nomenclature Test
@@ -350,6 +388,18 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
             for key, info in geneH.items():
                 if str(info["chrom"]).startswith("chr"):
                     info["chrom"] = str(info["chrom"])[3:]
+
+    # The probe->gene map is a third, independently derived annotation. Normalize
+    # it onto whatever convention the probe BEDs settled on above.
+    if geneModelH:
+        probe_has_chr = any(str(i["chrom"]).startswith("chr")
+                            for i in list(geneH.values())[:50])
+        for key, info in geneModelH.items():
+            c = str(info["chrom"])
+            if probe_has_chr and not c.startswith("chr"):
+                info["chrom"] = "chr" + c
+            elif not probe_has_chr and c.startswith("chr"):
+                info["chrom"] = c[3:]
 
     # Read first chunk of parquet file to check Ensembl ID and top 10 associations
     try:
@@ -410,6 +460,14 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
             except ValueError:
                 logger.error(f"[verify_alignment] Failed to cast chromEnd '{info['chromEnd']}' to int for {key}")
 
+    for key, info in geneModelH.items():
+        for f in ("chromStart", "chromEnd"):
+            if not isinstance(info[f], int):
+                try:
+                    info[f] = int(info[f])
+                except ValueError:
+                    logger.error(f"[verify_alignment] Failed to cast {f} '{info[f]}' to int for {key}")
+
     # 3. Coordinate "Sanity" Sample
     logger.info("[verify_alignment] Top 10 Coordinate Sanity Sample (Log Dump):")
     df_sorted = df.sort_values(by=pval_col)
@@ -438,7 +496,8 @@ def verify_alignment(geneH, methylH, ecpgDataFile):
 def main():
     parser = argparse.ArgumentParser(description="assignRegionToEcpg_parquet.py - assign a region class to eCpGs")
     parser.add_argument("-d", "--ecpgDataFile", required=True, help="<tecpg eQTM output parquet file>")
-    parser.add_argument("-g", "--geneAnnotFile", required=True, help="<gene annotation file>")
+    parser.add_argument("-g", "--geneAnnotFile", required=True, help="<expression PROBE annotation BED; supplies the gt_* coordinate columns>")
+    parser.add_argument("--gene-model", dest="geneModelFile", required=True, help="<probe->gene map TSV from build_probe_gene_model.py; supplies the gene span used for the region windows>")
     parser.add_argument("-m", "--methylAnnotFile", required=True, help="<methylation annotation file>")
     parser.add_argument("-o", "--outFileName", required=True, help="<outfile name parquet>")
     parser.add_argument("--chunk-size", type=int, default=100000, help="Number of rows to process per chunk. Default is 100,000.")
@@ -452,6 +511,7 @@ def main():
     ecpgDataFile = args.ecpgDataFile
     geneAnnotFile = args.geneAnnotFile
     methylAnnotFile = args.methylAnnotFile
+    geneModelFile = args.geneModelFile
     outFileName = args.outFileName
     chunk_size = args.chunk_size
 
@@ -464,6 +524,11 @@ def main():
         logger.error(f"[MAIN] gene annotation file not found: {geneAnnotFile}")
         sys.exit(203)
     logger.info(f"[MAIN] gene annotation file: {geneAnnotFile}")
+
+    if not os.path.exists(geneModelFile):
+        logger.error(f"[MAIN] probe->gene map not found: {geneModelFile}")
+        sys.exit(205)
+    logger.info(f"[MAIN] probe->gene map: {geneModelFile}")
 
     if not os.path.exists(methylAnnotFile):
         logger.error(f"[MAIN] methylation annotation file not found: {methylAnnotFile}")
@@ -479,8 +544,11 @@ def main():
     ## Read in the methylation annotation file to a dictionary
     methylH = readAnnotationFileToDict(methylAnnotFile)
 
+    ## Read in the probe->gene map (region windows only; never written verbatim)
+    geneModelH, geneModelHeader = readProbeGeneModel(geneModelFile)
+
         ## Verify alignment before processing
-    verify_alignment(geneH, methylH, ecpgDataFile)
+    verify_alignment(geneH, methylH, geneModelH, ecpgDataFile)
 
     ## Determine which p-value column to use
     try:
@@ -502,7 +570,7 @@ def main():
     reportPvalues(ecpgDataFile, pval_col, chunk_size)
 
     ## Annotate the pairs
-    assigned_total = assignRegion(ecpgDataFile, geneH, methylH, pval_col, outFileName, chunk_size)
+    assigned_total = assignRegion(ecpgDataFile, geneH, methylH, geneModelH, geneModelHeader, pval_col, outFileName, chunk_size)
 
     logger.info(f"[MAIN] Saving annotated data to: {outFileName}")
     logger.info("[MAIN] Done.")
