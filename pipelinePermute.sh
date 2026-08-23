@@ -83,7 +83,10 @@ while [[ "$#" -gt 0 ]]; do
             echo "                                 qr_permute's null is trans-global and Phase 2 (cis Beta)"
             echo "                                 is not implemented."
             echo "  -s, --start-stage STAGE        Specify the starting stage. Options: all, permute, eval. Default is 'all'."
-            echo "      --no-assign-regions        Skip adding a 'region' column via assignRegionToEcpg_parquet.py"
+            echo "      --no-assign-regions        Skip adding a 'region' column via assignRegionToEcpg_parquet.py."
+            echo "                                 Also waives the probe_gene_model.tsv requirement, so this is"
+            echo "                                 the way to run without a derived gene map; the eval then"
+            echo "                                 falls back to 2-way (cis/trans) strata."
             echo "      --permutations N           Passthrough to qr_permute."
             echo "      --subsample-mt-count N     Null-population CpG count. Default: 2000."
             echo "                                 NOTE: sizes the NULL only; does NOT shrink output."
@@ -463,8 +466,29 @@ if [ $EXECUTE -eq 1 ]; then
         # CRASHES if one already exists (KeyError: Column region does not exist in schema).
         # Skip re-annotation when the master already carries 'region' (re-runs, or a master
         # that is itself a prior *.region.parquet). Cheap schema read, no full load.
-        if python3 -c "import pyarrow.parquet as pq, sys; sys.exit(0 if 'region' in pq.read_schema('$MASTER_PARQUET').names else 1)"; then
-            log "[1/5] Master already carries a 'region' column; skipping annotation."
+        # A master annotated before the probe-gene-map change carries 'region' but
+        # not gtf_gene_model/gtf_gene_symbol -- its labels are the old probe-footprint
+        # annotation. Require all three before skipping, and fail loudly on the
+        # partial schema rather than silently reusing stale labels: the tool cannot
+        # re-annotate in place (it refuses to overwrite 'region').
+        SCHEMA_STATE=$(python3 -c "
+import pyarrow.parquet as pq
+n = pq.read_schema('$MASTER_PARQUET').names
+if 'region' in n and 'gtf_gene_model' in n and 'gtf_gene_symbol' in n:
+    print('current')
+elif 'region' in n:
+    print('stale')
+else:
+    print('none')")
+        if [ "$SCHEMA_STATE" == "stale" ]; then
+            log "Error: $MASTER_PARQUET carries 'region' but not gtf_gene_model/gtf_gene_symbol."
+            log "  It was annotated before the probe-gene-map change; its labels are the old"
+            log "  probe-footprint annotation and cannot be re-annotated in place."
+            log "  Rebuild the master (or point --master-parquet at an unannotated parquet)."
+            exit 1
+        fi
+        if [ "$SCHEMA_STATE" == "current" ]; then
+            log "[1/5] Master already carries 'region' + gtf_* columns; skipping annotation."
         else
             [ -s "$ANNOT_DIR/probe_gene_model.tsv" ] || { log "Error: $ANNOT_DIR/probe_gene_model.tsv missing. It is derived by pipeline.sh stage [5/9]; run pipeline.sh for this dataset first, or pass --no-assign-regions."; exit 1; }
             REGION_MASTER="${MASTER_PARQUET%.parquet}.region.parquet"
@@ -474,7 +498,9 @@ if [ $EXECUTE -eq 1 ]; then
                 -g "$ANNOT_DIR/G.bed6" --gene-model "$ANNOT_DIR/probe_gene_model.tsv" -m "$ANNOT_DIR/M.bed6" \
                 -o "$REGION_MASTER"
             MASTER_PARQUET="$REGION_MASTER"
-            log "      Read the 'eCpgs Counts by Region' line above: it is the coverage gate for the per-region eval."
+            log "      Read the '[assignRegion] coverage: gene-annotation' line above: it is the"
+            log "      coverage gate for the per-region eval. The 'Counts by Region' line gives the"
+            log "      per-stratum sizes; pairs whose probe lacks a gene model carry region=NULL."
         fi
     else
         log "[1/5] Region annotation skipped (--no-assign-regions); eval falls back to 2-way strata."
@@ -683,6 +709,13 @@ if [ $EXECUTE -eq 1 ]; then
             if ! python3 -c "import pyarrow.parquet as pq, sys; n=pq.read_schema('$TARGET').names; sys.exit(0 if ('region' in n and 'precise_mt_p' in n) else 1)"; then
                 log "Error: $TARGET_NAME lacks 'region' and/or 'precise_mt_p'."
                 log "  Both are mainline pipeline.sh products (stages 5 and 6 of 9). Refusing to annotate."
+                exit 1
+            fi
+            if ! python3 -c "import pyarrow.parquet as pq, sys; n=pq.read_schema('$TARGET').names; sys.exit(0 if ('gtf_gene_model' in n and 'gtf_gene_symbol' in n) else 1)"; then
+                log "Error: $TARGET_NAME carries 'region' but not gtf_gene_model/gtf_gene_symbol."
+                log "  It was annotated before the probe-gene-map change; its region labels are"
+                log "  the old probe-footprint annotation. Re-run pipeline.sh --start-stage annotate"
+                log "  for this dataset before annotating permutation results onto it."
                 exit 1
             fi
 
