@@ -130,8 +130,57 @@ def not_evaluated(anchor, title, purpose, reason):
 
 
 # ------------------------------------------------------------------ modules
+def mod_introduction():
+    purpose = (
+        'This report evaluates a single question: how much of this catalog of '
+        'methylation-expression associations depends on individual subjects '
+        'rather than on population-level biology? '
+        'In a cohort of a few hundred people, one subject with an extreme '
+        'methylation value at one CpG can produce a large, highly significant '
+        'regression coefficient on its own. Such a result is not wrong '
+        'arithmetically - it is simply not evidence about the population, and '
+        'it will not replicate. Because an exhaustive eQTM scan tests billions '
+        'of pairs, even a rare pattern of this kind can contribute a '
+        'substantial share of the surviving hits.')
+    interpretation = (
+        '<strong>The method.</strong> During mapping, tecpg computes for every '
+        'CpG the largest <em>leverage</em> any single subject has in that '
+        'locus\'s regression design (<code>mt_h_max</code>). Leverage is a '
+        'standard regression diagnostic: it measures how much one observation '
+        'can move its own fitted value, ranges from 0 to 1, and depends only on '
+        'the predictors - the CpG\'s methylation values and the covariates - '
+        'never on the gene being tested. It is therefore a property of the '
+        'locus, computed once and shared by every pair that CpG participates '
+        'in, at negligible cost inside the existing QR decomposition.'
+        '<br><br>'
+        '<strong>The three questions this report answers.</strong> '
+        '(1) <em>Is the diagnostic meaningful in this cohort?</em> - the '
+        'landscape and region modules establish the covariate-driven floor and '
+        'confirm leverage behaves as a locus property. '
+        '(2) <em>Does leverage actually predict unreliability?</em> - the '
+        'coverage, fragility, and external-agreement modules test that premise '
+        'against bootstrap resampling and against an independently published '
+        'catalog. '
+        '(3) <em>What should be excluded, and at what cost?</em> - the applied '
+        'flag and threshold guidance modules quantify the trade-off, without '
+        'choosing a value for you.'
+        '<br><br>'
+        '<strong>What this is not.</strong> Leverage identifies loci where a '
+        'single subject <em>could</em> dominate; it does not by itself prove '
+        'that one did, and it says nothing about whether an association is '
+        'biologically interesting. It is a screen applied before interpretation, '
+        'not a substitute for it. Nothing here modifies the underlying results: '
+        'the flag is an added column, and filtering happens only where a '
+        'downstream consumer is explicitly told to honour it.')
+    return QCModule(anchor='introduction', title='Introduction: what this '
+                    'report evaluates', status='INFO', purpose=purpose,
+                    interpretation=interpretation)
+
+
 def mod_provenance(dataset, args, qc, bridge, ki, meta):
     purpose = (
+        '<strong>Question: are the numbers in this report traceable to a '
+        'specific run, and under which flagging rule?</strong> '
         'Records exactly which files this report was computed from, and which '
         'flagging rule (if any) was in force. Influence numbers are only '
         'comparable between runs that share a mapping, an annotation, and a '
@@ -174,6 +223,9 @@ def mod_provenance(dataset, args, qc, bridge, ki, meta):
 
 def mod_landscape(qc, note):
     purpose = (
+        '<strong>Question: in this cohort, how much leverage does the '
+        'covariate design impose on every CpG, and how far above that floor do '
+        'individual loci rise?</strong> '
         'Leverage measures how much a single subject can pull the fit for one '
         'CpG. It depends only on the design matrix - the CpG\'s own methylation '
         'values plus the covariates - and not on any gene, so it is a property '
@@ -261,6 +313,8 @@ def mod_landscape(qc, note):
 
 def mod_region(qc, note):
     purpose = (
+        '<strong>Question: does leverage behave as a property of the CpG, '
+        'independent of where it sits relative to a gene?</strong> '
         'Shows how the tested pairs and the significant hits break down by '
         'genomic region, together with the median leverage of each region. '
         'Leverage is a property of the CpG, so the medians should look alike '
@@ -316,6 +370,9 @@ def mod_region(qc, note):
 
 def mod_flag(qc, note, meta):
     purpose = (
+        '<strong>Question: what did the rule in force remove, and are '
+        'high-leverage loci over-represented among the significant '
+        'results?</strong> '
         'Reports what the flagging rule actually removed. The key number is not '
         'how many CpGs were flagged but how concentrated they are among the '
         'significant results: a small set of loci carrying a large share of the '
@@ -391,6 +448,8 @@ def mod_flag(qc, note, meta):
 
 def mod_coverage(bridge, note):
     purpose = (
+        '<strong>Question: is there enough bootstrap coverage in each leverage '
+        'band for the fragility rates that follow to mean anything?</strong> '
         'The fragility checks that follow are computed only on pairs that were '
         'bootstrapped. This module shows what fraction of significant pairs in '
         'each leverage band actually have bootstrap results, because every rate '
@@ -431,7 +490,9 @@ def mod_coverage(bridge, note):
 
 def mod_dose(bridge, note):
     purpose = (
-        'Tests the premise of the whole diagnostic: if high leverage really '
+        '<strong>Question: does higher leverage actually predict that a result '
+        'will not survive resampling?</strong> This is the central premise of '
+        'the whole diagnostic: if high leverage really '
         'means a result rests on one subject, then resampling the subjects '
         'should destabilise those results more often. "Sign instability" here '
         'means the bootstrap confidence interval for the effect spans zero, so '
@@ -526,6 +587,8 @@ def mod_dose(bridge, note):
 
 def mod_kennedy(ki, note):
     purpose = (
+        '<strong>Question: does agreement with an independent published study '
+        'degrade as leverage rises?</strong> '
         'An external check that does not use the bootstrap at all. Pairs are '
         'compared against an independently published catalog (Kennedy et al.) '
         'and grouped by leverage. If high-leverage results were real biology, '
@@ -621,6 +684,8 @@ def mod_kennedy(ki, note):
 
 def mod_guidance(qc, qc_note, bridge, bridge_note):
     purpose = (
+        '<strong>Question: at each candidate threshold, how much of the catalog '
+        'is removed and how fragile is what remains?</strong> '
         'Choosing a threshold is a research decision, not a tool default, so '
         'this module lays out the trade-off rather than recommending a value. '
         'Two quantities move in opposite directions: how much of the catalog a '
@@ -697,6 +762,8 @@ def mod_guidance(qc, qc_note, bridge, bridge_note):
 
 def mod_top(qc, note):
     purpose = (
+        '<strong>Question: which specific loci carry the most extreme leverage, '
+        'and how many associations does each of them support?</strong> '
         'Lists the individual loci with the highest leverage, so that specific '
         'CpGs can be looked up, cross-checked against the raw methylation '
         'values, or excluded by name. Entries combining near-unit leverage with '
@@ -746,6 +813,8 @@ def mod_top(qc, note):
 
 def mod_caveats():
     purpose = (
+        '<strong>Question: what conclusions are not licensed by this '
+        'analysis?</strong> '
         'What this analysis does and does not establish. These limits apply to '
         'every number above and should travel with any result derived from '
         'them.')
@@ -808,6 +877,7 @@ def main():
               file=sys.stderr)
 
     modules = [
+        mod_introduction(),
         mod_provenance(args.dataset, args, qc, bridge, ki, meta),
         mod_landscape(qc, qc_note),
         mod_region(qc, qc_note),
