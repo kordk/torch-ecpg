@@ -314,7 +314,7 @@ if [ "$DATASET" == "dummy" ]; then
     # independently, so its spans are not gene models. Emit a synthetic map so the
     # wiring smoke test still exercises the real reader and the real region
     # arithmetic. The labels it produces carry no biological meaning.
-    if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "synthetic_fixed_span"; then
+    if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "synthetic_fixed_span" && head -20 "$PROBE_GENE_MAP" | grep -qF "$(sha256sum "$ANNOT_DIR/G.bed6" | cut -d' ' -f1)"; then
         log "[5/9] Reusing synthetic probe-gene map at $PROBE_GENE_MAP (dummy)."
     else
         log "[5/9] Deriving SYNTHETIC probe-gene map for dummy (span ${DUMMY_GENE_SPAN} bp). Labels are meaningless."
@@ -325,8 +325,11 @@ if [ "$DATASET" == "dummy" ]; then
     fi
 else
 GENEMODEL_GTF="${TECPG_GENCODE_GTF:-encode_beds/gencode.v49lift37.annotation.gtf.gz}"
-if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "$(basename "$GENEMODEL_GTF")"; then
-    log "[5/9] Reusing probe-gene map at $PROBE_GENE_MAP (matches $GENEMODEL_GTF)."
+# Reuse only when BOTH inputs match: the GTF (by basename in the header) and the
+# staged probe BED (by sha256 in the header). A changed G.bed6 must force
+# re-derivation, or new coordinates silently pair with old gene models.
+if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "$(basename "$GENEMODEL_GTF")" && head -20 "$PROBE_GENE_MAP" | grep -qF "$(sha256sum "$ANNOT_DIR/G.bed6" | cut -d' ' -f1)"; then
+    log "[5/9] Reusing probe-gene map at $PROBE_GENE_MAP (matches $GENEMODEL_GTF and current G.bed6)."
 else
     [ -f "$GENEMODEL_GTF" ] || { log "Error: GENCODE GTF not found at $GENEMODEL_GTF. Set TECPG_GENCODE_GTF."; exit 1; }
     log "[5/9] Deriving probe-gene map from $GENEMODEL_GTF ..."

@@ -19,6 +19,7 @@ Stdlib only. 1-based inclusive coordinates throughout, matching M.bed6/G.bed6.
 import argparse
 import csv
 import gzip
+import hashlib
 import logging
 import os
 import re
@@ -119,6 +120,15 @@ def merge_intervals(ivs):
 def overlap_bp(a_start, a_end, b_start, b_end):
     """1-based inclusive overlap length."""
     return max(0, min(a_end, b_end) - max(a_start, b_start) + 1)
+
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def read_probe_bed(path):
@@ -234,6 +244,7 @@ def derive(gtf_path, probe_bed_path, out_path):
         fh.write("#method\texon_overlap_gt_%dbp_union_span\n" % MIN_EXON_OVERLAP)
         fh.write("#gtf\t%s\n" % os.path.abspath(gtf_path))
         fh.write("#probe_bed\t%s\n" % os.path.abspath(probe_bed_path))
+        fh.write("#probe_bed_sha256\t%s\n" % _sha256_file(probe_bed_path))
         fh.write("#coords\t1-based inclusive\n")
         fh.write("#counts\t%s\n" % " ".join(f"{k}={v}" for k, v in counts.items()))
         w = csv.writer(fh, delimiter="\t", lineterminator="\n")
@@ -265,6 +276,7 @@ def derive_synthetic(probe_bed_path, out_path, span):
         fh.write("#method\tsynthetic_fixed_span_%dbp\n" % span)
         fh.write("#gtf\tNONE (synthetic; wiring smoke test only)\n")
         fh.write("#probe_bed\t%s\n" % os.path.abspath(probe_bed_path))
+        fh.write("#probe_bed_sha256\t%s\n" % _sha256_file(probe_bed_path))
         fh.write("#coords\t1-based inclusive\n")
         fh.write("#counts\t%s\n" % " ".join(f"{k}={v}" for k, v in counts.items()))
         w = csv.writer(fh, delimiter="\t", lineterminator="\n")
