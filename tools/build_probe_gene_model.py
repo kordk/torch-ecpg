@@ -245,14 +245,57 @@ def derive(gtf_path, probe_bed_path, out_path):
     return counts
 
 
+def derive_synthetic(probe_bed_path, out_path, span):
+    """Emit a well-formed map WITHOUT a GTF, for the dummy wiring smoke test.
+
+    Every positioned probe becomes a synthetic gene of `span` bp anchored at the
+    probe start, keeping the probe's chrom and strand. This exercises the real
+    reader and the real region arithmetic; the gene identities are placeholders
+    and the labels carry no biological meaning.
+    """
+    probes = read_probe_bed(probe_bed_path)
+    rows = []
+    for pid in sorted(probes):
+        chrom, start, _end, strand = probes[pid]
+        rows.append([pid, "RESOLVED", chrom, start, start + span - 1, strand, 1,
+                     "SYNTHETIC_%s" % pid, "SYN_%s" % pid, "synthetic"])
+    counts = {"RESOLVED": len(rows), "NO_OVERLAP": 0, "MULTI_CHROM": 0}
+    with open(out_path, "w", newline="") as fh:
+        fh.write("#tecpg_probe_gene_model\tv1\n")
+        fh.write("#method\tsynthetic_fixed_span_%dbp\n" % span)
+        fh.write("#gtf\tNONE (synthetic; wiring smoke test only)\n")
+        fh.write("#probe_bed\t%s\n" % os.path.abspath(probe_bed_path))
+        fh.write("#coords\t1-based inclusive\n")
+        fh.write("#counts\t%s\n" % " ".join(f"{k}={v}" for k, v in counts.items()))
+        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
+        w.writerow(HEADER_COLS)
+        w.writerows(rows)
+    logger.info("[build_probe_gene_model] SYNTHETIC map: wrote %d probes to %s "
+                "(span=%d bp). Region labels from this map are meaningless.",
+                len(rows), out_path, span)
+    return counts
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gtf", required=True)
+    ap.add_argument("--gtf")
     ap.add_argument("--probe-bed", required=True)
     ap.add_argument("--output", required=True)
+    ap.add_argument("--synthetic-span", type=int, default=None,
+                    help="Emit a synthetic map with this fixed gene span instead of "
+                         "reading a GTF. For the dummy wiring smoke test only.")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    derive(a.gtf, a.probe_bed, a.output)
+    if a.synthetic_span is not None:
+        if a.gtf:
+            ap.error("--synthetic-span and --gtf are mutually exclusive")
+        if a.synthetic_span <= 2 * 2500:
+            ap.error("--synthetic-span must exceed 5000 bp or GENEBODY is unreachable")
+        derive_synthetic(a.probe_bed, a.output, a.synthetic_span)
+    else:
+        if not a.gtf:
+            ap.error("--gtf is required unless --synthetic-span is given")
+        derive(a.gtf, a.probe_bed, a.output)
 
 
 if __name__ == "__main__":

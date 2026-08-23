@@ -308,6 +308,22 @@ if [ $EXECUTE -eq 1 ]; then
 # Derive the probe->gene map here rather than in pipelinePre.sh: it is a derived
 # artifact of the stage that consumes it, not a staged input. The header records
 # the GTF it came from, so a map built against a different GTF is re-derived.
+DUMMY_GENE_SPAN=60000
+if [ "$DATASET" == "dummy" ]; then
+    # dummy has no GENCODE annotation: its chromStart/chromEnd are drawn
+    # independently, so its spans are not gene models. Emit a synthetic map so the
+    # wiring smoke test still exercises the real reader and the real region
+    # arithmetic. The labels it produces carry no biological meaning.
+    if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "synthetic_fixed_span"; then
+        log "[5/9] Reusing synthetic probe-gene map at $PROBE_GENE_MAP (dummy)."
+    else
+        log "[5/9] Deriving SYNTHETIC probe-gene map for dummy (span ${DUMMY_GENE_SPAN} bp). Labels are meaningless."
+        python3 tools/build_probe_gene_model.py \
+            --synthetic-span "$DUMMY_GENE_SPAN" \
+            --probe-bed "$ANNOT_DIR/G.bed6" \
+            --output "$PROBE_GENE_MAP"
+    fi
+else
 GENEMODEL_GTF="${TECPG_GENCODE_GTF:-encode_beds/gencode.v49lift37.annotation.gtf.gz}"
 if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "$(basename "$GENEMODEL_GTF")"; then
     log "[5/9] Reusing probe-gene map at $PROBE_GENE_MAP (matches $GENEMODEL_GTF)."
@@ -318,6 +334,7 @@ else
         --gtf "$GENEMODEL_GTF" \
         --probe-bed "$ANNOT_DIR/G.bed6" \
         --output "$PROBE_GENE_MAP"
+fi
 fi
 log "[5/9] Annotating regions..."
 log "Mapping eCpG and Gene coordinates to determine regional categories (e.g., CIS, TRANS)."
