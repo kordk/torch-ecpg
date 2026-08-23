@@ -23,7 +23,7 @@ def load_names(*names):
     mod = ast.Module(body=keep, type_ignores=[])
     import os as _os
     ns = {"pd": pd, "logging": logging, "os": _os}
-    exec(compile(mod, SRC, "exec"), ns)
+    exec(compile(mod, SRC, "exec"), ns)  # nosec B102
     return ns
 
 # Extract needed namespace members once at module level so tests can use them.
