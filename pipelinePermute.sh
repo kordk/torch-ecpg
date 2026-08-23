@@ -19,6 +19,7 @@ CIS_ENRICH=0
 CIS_WINDOW=1000000
 TOTAL_TESTS=""
 ANNOTATE_MAINLINE=1
+QC_REPORT=1
 N_NULL_PAIRS=""
 
 PERMUTE_ARGS=()
@@ -75,6 +76,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "      --n-null-pairs N           Fallback for permutation parquets written before tecpg_perm_n_null_pairs"
             echo "                                 was stamped. Passed directly to eval_permute."
             echo "      --no-annotate-mainline     Skip stage [5/5] (mainline p_permute/fdr_permute annotation)."
+            echo "      --no-qc-report             Skip the HTML QC report rendered in stage [4/5]."
             echo "  -d, --dataset DATASET          Specify the dataset to use. Options: dummy (default), gtpsub, gtp, mesa"
             echo "  -m, --mapping MAPPING          Region flag passed to qr_permute. Options: all (default)."
             echo "                                 'cis' is accepted by the parser but rejected at runtime:"
@@ -129,6 +131,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --no-annotate-mainline)
             ANNOTATE_MAINLINE=0
+            shift
+            ;;
+        --no-qc-report)
+            QC_REPORT=0
             shift
             ;;
         -m|--mapping)
@@ -535,6 +541,36 @@ if [ $EXECUTE -eq 1 ]; then
         --g-annot "$ANNOT_DIR/G.bed6" \
         --out-dir "$OUT_DIR"
     log "Finished summarize_permute."
+
+    # QC report. permute_qc_report.py is a renderer, not an authority: every
+    # calibration statistic and the verdict come from eval_permute_report.json,
+    # which this stage does not modify. A failure here must therefore not cost
+    # the [5/5] mainline annotation, so the exit status is captured rather than
+    # allowed to trip `set -e`.
+    if [ $QC_REPORT -eq 0 ]; then
+        log "[4/5] QC report skipped by request (--no-qc-report)."
+    else
+        QC_HTML="${OUT_DIR}/permute_qc_report_${DATASET}.html"
+        log "[4/5] Rendering QC report -> ${QC_HTML}..."
+        set +e
+        python3 -u tools/permute_qc_report.py \
+            --report "${OUT_DIR}/eval_permute_report.json" \
+            --perm-output "$PERM_OUTPUT" \
+            --df "$DF" \
+            --gene-annotation "$ANNOT_DIR/G.bed6" \
+            --meth-annotation "$ANNOT_DIR/M.bed6" \
+            --dataset "$DATASET" \
+            --out "$QC_HTML"
+        QC_RC=$?
+        set -e
+        if [ $QC_RC -eq 0 ]; then
+            log "Finished permute_qc_report -> ${QC_HTML}"
+        else
+            log "WARNING: permute_qc_report.py exited $QC_RC; no QC report written."
+            log "         The eval report and verdict are unaffected. Re-run with"
+            log "         --start-stage eval to retry."
+        fi
+    fi
 fi
 
 # Stage 5: mainline annotation (p_permute + fdr_permute)
