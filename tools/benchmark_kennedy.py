@@ -218,12 +218,22 @@ def stream_catalog_and_match(args, schema, tecpg_p_col, kennedy_pairs,
 
 def load_blacklist(path):
     """Read a probe blacklist. Format follows tools/exclude_blacklisted_probes.py:
-    a CSV whose FIRST column holds probe IDs (header row present)."""
+    a CSV whose FIRST column holds probe IDs (header row present).
+
+    Returns (probes, reasons). Lists produced by tools/generateProbeBlacklist.R
+    carry a second `Reason` column (SNP / CROSSREACTIVE / SEXCHROM, ';'-joined
+    when a probe qualifies under more than one). Older single-column lists are
+    still accepted; reasons is then None and the audit omits the breakdown.
+    """
     bl = pd.read_csv(path)
-    return set(bl.iloc[:, 0].astype(str))
+    probes = set(bl.iloc[:, 0].astype(str))
+    reasons = None
+    if 'Reason' in bl.columns:
+        reasons = dict(zip(bl.iloc[:, 0].astype(str), bl['Reason'].astype(str)))
+    return probes, reasons
 
 
-def audit_blacklist(kennedy_df, cols, blacklist, distinct_mt):
+def audit_blacklist(kennedy_df, cols, blacklist, distinct_mt, reasons=None):
     """Cross-tabulate the reference file's CpGs against a probe blacklist and
     against this run's test space.
 
@@ -239,7 +249,7 @@ def audit_blacklist(kennedy_df, cols, blacklist, distinct_mt):
     listed = k_cpgs & blacklist
     missing = k_cpgs - mt_universe
 
-    return {
+    res = {
         'blacklist_size': len(blacklist),
         'kennedy_distinct_cpg': len(k_cpgs),
         'kennedy_cpg_blacklisted': len(listed),
@@ -253,6 +263,22 @@ def audit_blacklist(kennedy_df, cols, blacklist, distinct_mt):
             kennedy_df[cols['cpg']].astype(str).isin(listed).sum()),
         'kennedy_total_pairs': int(len(kennedy_df)),
     }
+
+    # Which exclusion criteria account for the reference's blacklisted CpGs?
+    # A probe may qualify under several, so these counts overlap and do not sum
+    # to kennedy_cpg_blacklisted -- that is reported separately.
+    if reasons:
+        by_reason = {}
+        for probe in listed:
+            for r in str(reasons.get(probe, '')).split(';'):
+                r = r.strip()
+                if r:
+                    by_reason[r] = by_reason.get(r, 0) + 1
+        res['blacklisted_by_reason'] = dict(sorted(by_reason.items()))
+        res['blacklisted_multi_reason'] = int(sum(
+            1 for p in listed if ';' in str(reasons.get(p, ''))))
+
+    return res
 
 
 def compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols):
@@ -1106,16 +1132,35 @@ def build_blacklist_audit_module(audit) -> QCModule:
     def pct(n, d):
         return f"{n} ({n / d:.1%})" if d else str(n)
 
+    _REASON_LABEL = {'SNP': 'on a common SNP',
+                     'CROSSREACTIVE': 'cross-reactive',
+                     'SEXCHROM': 'sex chromosome'}
+
     rows = [
         ["Blacklist size (probes)", str(a['blacklist_size'])],
         ["Reference distinct CpG loci", str(a['kennedy_distinct_cpg'])],
         ["Reference CpGs ON the blacklist", pct(a['kennedy_cpg_blacklisted'], kd)],
+    ]
+
+    # Sub-rows of "CpGs ON the blacklist": why each was flagged, then whether it
+    # actually reached the tecpg test space.
+    by_reason = a.get('blacklisted_by_reason')
+    if by_reason:
+        for r, n in by_reason.items():
+            rows.append([f"  \u2514 {_REASON_LABEL.get(r, r.lower())}",
+                         pct(n, a['kennedy_cpg_blacklisted'])])
+        if a.get('blacklisted_multi_reason'):
+            rows.append(["  \u2514 (of which, >1 criterion)",
+                         str(a['blacklisted_multi_reason'])])
+    rows += [
+        ["  \u2514 absent from tecpg (expected)",
+         str(a['blacklisted_and_absent_from_tecpg'])],
+        ["  \u2514 PRESENT in tecpg (unexpected)",
+         str(a['blacklisted_but_present_in_tecpg'])],
+
         ["Reference pairs touching a blacklisted CpG",
          pct(a['kennedy_pairs_touching_blacklisted_cpg'], tp)],
-        ["  \u2514 blacklisted and absent from tecpg (expected)",
-         str(a['blacklisted_and_absent_from_tecpg'])],
-        ["  \u2514 blacklisted but PRESENT in tecpg (unexpected)",
-         str(a['blacklisted_but_present_in_tecpg'])],
+
         ["Reference CpGs missing from tecpg", str(miss)],
         ["  \u2514 explained by the blacklist",
          pct(a['missing_explained_by_blacklist'], miss) if miss else "0"],
@@ -1141,12 +1186,27 @@ def build_blacklist_audit_module(audit) -> QCModule:
         "test space, it separates the ones we deliberately excluded from the ones missing "
         "for other reasons (array differences, QC, or upstream filtering). Only the second "
         "group is unexplained.\n\n"
-        "Two cautions. First, absence from the blacklist is not a clean bill of health: the "
-        "list is built from the EPIC manifest, so a probe on the reference study's array "
-        "with no EPIC counterpart cannot appear on it and is counted as not-blacklisted by "
-        "default. Second, the list merges its three exclusion reasons into a single column, "
-        "so this table cannot attribute a probe to SNP, cross-reactivity, or sex "
-        "chromosome.")
+        "One caution on reading it: absence from the blacklist is not a clean bill of "
+        "health. The list is scoped to one array's manifest, so a probe assayed by the "
+        "reference study that does not exist on the array configured here cannot appear "
+        "on it and is counted as not-blacklisted by default. Check that the blacklist was "
+        "built for the same array as the data before treating the not-blacklisted group "
+        "as sound.")
+
+    if not audit.get('blacklisted_by_reason'):
+        interpretation += (
+            "\n\nThis list carries no Reason column, so the table cannot say which "
+            "criterion flagged each probe. Regenerate it with "
+            "tools/generateProbeBlacklist.sh to get the SNP / cross-reactive / "
+            "sex-chromosome breakdown, which distinguishes very different findings.")
+    else:
+        interpretation += (
+            "\n\nThe indented rows attribute the blacklisted CpGs to the criterion that "
+            "flagged them. Read these as overlapping rather than additive: a probe can be "
+            "both cross-reactive and on a sex chromosome, so the rows can sum to more than "
+            "the total. The distinction matters -- a reference study reporting mostly "
+            "sex-chromosome hits is a different claim about its methods than one reporting "
+            "mostly cross-reactive probes.")
 
     if leaked:
         interpretation += (
@@ -1600,9 +1660,10 @@ def main():
     args.blacklist_audit = None
     if args.blacklist:
         try:
-            _bl = load_blacklist(args.blacklist)
+            _bl, _reasons = load_blacklist(args.blacklist)
             logging.info("Loaded blacklist: %d probes from %s", len(_bl), args.blacklist)
-            args.blacklist_audit = audit_blacklist(df_kennedy, cols, _bl, distinct_mt)
+            args.blacklist_audit = audit_blacklist(df_kennedy, cols, _bl, distinct_mt,
+                                                   reasons=_reasons)
             _leak = args.blacklist_audit['blacklisted_but_present_in_tecpg']
             logging.info(
                 "Blacklist audit: %d/%d reference CpGs blacklisted (%d present in tecpg)",

@@ -494,7 +494,7 @@ matches the value accepted by `--start-stage`.
    default comprehensive BED6 annotations into `annot_<dataset>/`
    (with a graceful fallback to the original `annoEPIC.hg19.bed6` /
    `annoHT12.hg19.bed6`), applies the EPIC probe blacklist
-   (`tools/generateEpicProbeBlacklist.sh` +
+   (`tools/generateProbeBlacklist.sh` +
    `tools/exclude_blacklisted_probes.py`) to produce `M.csv` from
    `M_orig.csv`, and runs `tools/exploreOmics.py` to write QC plots
    and an HTML report under `data_<dataset>/qc/`.
@@ -709,8 +709,17 @@ invoked standalone.
 
 Data preparation and QC:
 
-* `tools/generateEpicProbeBlacklist.sh` / `generateEpicProbeBlacklist_v2.R` —
-  build an EPIC probe blacklist from packaged Bioconductor annotations.
+* `tools/generateProbeBlacklist.sh` / `generateProbeBlacklist.R` —
+  build a probe blacklist (SNP-affected, cross-reactive, sex-chromosome) from
+  the DMRcatedata ExperimentHub lists, scoped to the array in use. Defaults to
+  **450k**; pass `epic` or `both` as the second argument, or set `METH_ARRAY`
+  for `pipelinePre.sh`. The DMRcate source lists span 450K and EPICv1; the
+  array argument selects which manifest to scope the output to. Output is
+  `probes_blacklist.csv` with columns `Probe_ID,Reason` (Reason is one or more
+  of SNP / CROSSREACTIVE / SEXCHROM, `;`-joined).
+  The superseded `generateEpicProbeBlacklist.sh` / `_v2.R` derived
+  sex-chromosome probes from the EPIC manifest alone and so missed 450K probes
+  with no EPIC counterpart.
 * `tools/exclude_blacklisted_probes.py` — drop blacklisted CpGs from
   `M_orig.csv` to produce `M.csv`.
 * `tools/exploreOmics.py` — QC metrics, plots, and a consolidated HTML

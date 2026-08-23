@@ -1341,7 +1341,54 @@ def test_blacklist_audit_renders_and_serializes(tmp_path):
     # substantive phrase, not the bare token 'EPIC' (which appears twice and so
     # cannot distinguish the caveat being present from it being gutted).
     assert 'clean bill of health' in sec.group(0)
-    assert 'EPIC manifest' in sec.group(0)
+    # The caveat is now array-agnostic: the list is scoped to whichever array
+    # manifest it was built for, so it must tell the reader to check that the
+    # blacklist and the data are for the same array.
+    assert 'same array' in sec.group(0)
 
     metrics = json.loads((tmp_path / 'benchmark_metrics.json').read_text())
     assert metrics['blacklist_audit']['kennedy_cpg_blacklisted'] == 1
+
+
+def test_audit_blacklist_reason_breakdown():
+    """A Reason column decomposes the blacklisted CpGs by criterion. Multi-reason
+    probes count under every criterion, so the rows overlap rather than sum."""
+    from tools.benchmark_kennedy import audit_blacklist
+    ken, cols = _blacklist_fixture()
+    reasons = {'b0': 'SNP;SEXCHROM', 'b1': 'CROSSREACTIVE'}
+    a = audit_blacklist(ken, cols, {'b0', 'b1'}, ['c0', 'c1'], reasons=reasons)
+
+    assert a['blacklisted_by_reason'] == {'CROSSREACTIVE': 1, 'SEXCHROM': 1, 'SNP': 1}
+    assert a['blacklisted_multi_reason'] == 1
+    # overlapping, not additive: 3 reason-counts over 2 distinct probes
+    assert sum(a['blacklisted_by_reason'].values()) > a['kennedy_cpg_blacklisted']
+
+
+def test_audit_blacklist_without_reason_column_is_backward_compatible():
+    """Single-column blacklists (the pre-450k format) still work; the breakdown
+    is simply absent rather than fabricated."""
+    from tools.benchmark_kennedy import audit_blacklist, build_blacklist_audit_module
+    ken, cols = _blacklist_fixture()
+    a = audit_blacklist(ken, cols, {'b0', 'b1'}, ['c0', 'c1'])
+    assert 'blacklisted_by_reason' not in a
+    mod = build_blacklist_audit_module(a)
+    assert 'no Reason column' in mod.interpretation
+
+
+def test_load_blacklist_reads_both_formats(tmp_path):
+    """Probe IDs come from the FIRST column either way; reasons only when present."""
+    import pandas as pd
+    from tools.benchmark_kennedy import load_blacklist
+
+    two = tmp_path / "two.csv"
+    pd.DataFrame({'Probe_ID': ['cgA', 'cgB'],
+                  'Reason': ['SNP', 'SNP;SEXCHROM']}).to_csv(two, index=False)
+    probes, reasons = load_blacklist(two)
+    assert probes == {'cgA', 'cgB'}
+    assert reasons['cgB'] == 'SNP;SEXCHROM'
+
+    one = tmp_path / "one.csv"
+    pd.DataFrame({'Probe_ID': ['cgA']}).to_csv(one, index=False)
+    probes, reasons = load_blacklist(one)
+    assert probes == {'cgA'}
+    assert reasons is None

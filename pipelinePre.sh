@@ -149,15 +149,15 @@ else
     fi
 fi
 
-# Apply EPIC probe blacklist filter
+# Apply probe blacklist filter (METH_ARRAY: 450k default, or epic/both)
 if [ -s "$DATA_DIR/M.csv" ]; then
     log "M.csv already exists. Skipping probe blacklist filtering."
 else
-    log "Generating EPIC probe blacklist..."
-    ./tools/generateEpicProbeBlacklist.sh "$DATA_DIR"
+    log "Generating probe blacklist (array: ${METH_ARRAY:-450k})..."
+    ./tools/generateProbeBlacklist.sh "$DATA_DIR" "${METH_ARRAY:-450k}"
 
     log "Applying blacklist filter to M_orig.csv..."
-    python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/epic_probes_blacklist.csv" "$DATA_DIR/M.csv"
+    python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/probes_blacklist.csv" "$DATA_DIR/M.csv"
 fi
 fi
 

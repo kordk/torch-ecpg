@@ -6,7 +6,8 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description="Exclude blacklisted probes from methylation data.")
     parser.add_argument("m_orig_file", help="Path to M_orig.csv file")
-    parser.add_argument("blacklist_file", help="Path to epic_probes_blacklist.csv file")
+    parser.add_argument("blacklist_file",
+                        help="Path to probes_blacklist.csv (first column must be probe IDs)")
     parser.add_argument("m_out_file", help="Path to output M.csv file")
     args = parser.parse_args()
 
