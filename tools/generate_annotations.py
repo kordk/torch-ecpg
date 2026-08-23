@@ -127,24 +127,36 @@ def clean_geo_chromosome(raw):
     return bare
  
  
+# A GEO Probe_Coordinates value may hold several colon-separated ranges. For a
+# probe spliced across a junction the ranges are near-adjacent and one merged
+# interval is a fair representation. For a multi-mapping probe the ranges are
+# far apart, and min/max would fabricate a "position" spanning everything
+# between two distant alignments (observed up to 167 Mb). Merge only when every
+# gap between sorted ranges is at most GEO_MAX_RANGE_GAP; otherwise decline the
+# GEO position and let the source chain fall through (UCSC, then NA).
+GEO_MAX_RANGE_GAP = 1000
+
+
 def parse_hg19_coords(val):
     if pd.isna(val) or not str(val).strip():
         return None, None
     val = str(val)
     parts = val.split(':')
-    starts = []
-    ends = []
+    ranges = []
     for p in parts:
         s_e = p.split('-')
         if len(s_e) == 2:
             try:
-                starts.append(int(s_e[0]))
-                ends.append(int(s_e[1]))
+                ranges.append((int(s_e[0]), int(s_e[1])))
             except ValueError:
                 pass
-    if starts and ends:
-        return min(starts), max(ends)
-    return None, None
+    if not ranges:
+        return None, None
+    ranges.sort()
+    for (_, a_end), (b_start, _) in zip(ranges, ranges[1:]):
+        if b_start - a_end > GEO_MAX_RANGE_GAP:
+            return None, None
+    return ranges[0][0], max(e for _, e in ranges)
  
  
 def format_chrom(chr_val):
@@ -354,8 +366,19 @@ def load_ucsc_wg6(path):
         f"with missing 'name': {_udf_before} -> {len(udf)} "
         f"({_udf_before - len(udf)} dropped)"
     )
-    # One row per probe ID (single best alignment); drop multi-mapping dupes.
-    udf = udf.drop_duplicates(subset=['name'], keep='first')
+    # A probe with several DISTINCT alignments has no single position; taking
+    # the first fabricates one (348 probes on HT-12). Collapse exact duplicate
+    # rows, then keep only probes with exactly one distinct alignment.
+    _udf_before_multi = len(udf)
+    udf = udf.drop_duplicates(subset=needed)
+    _counts = udf['name'].value_counts()
+    _multi = set(_counts[_counts > 1].index)
+    udf = udf[~udf['name'].isin(_multi)]
+    logging.info(
+        f"Drop site generate_annotations.ucsc_multi[name]: dropped multi-alignment "
+        f"UCSC probes: {_udf_before_multi} rows -> {len(udf)} "
+        f"({len(_multi)} probes with >1 distinct alignment removed)"
+    )
  
     lookup = {}
     for _, r in udf.iterrows():
