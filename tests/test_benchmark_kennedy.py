@@ -1240,3 +1240,108 @@ def test_eligibility_and_reference_profile_render_distinct_rows(tmp_path):
     ref = re.search(r'<section id="reference-profile".*?</section>', html, re.DOTALL).group(0)
     assert 'Distinct mt_id' in ref
     assert 'Distinct gt_id' in ref
+
+
+def _blacklist_fixture():
+    import pandas as pd
+    ken = pd.DataFrame({
+        'CpG.probe': ['c0', 'c1', 'b0', 'b0', 'b1', 'x0'],
+        'exp.Probe': ['p0', 'p1', 'p0', 'p1', 'p0', 'p1'],
+    })
+    return ken, {'cpg': 'CpG.probe', 'probe': 'exp.Probe'}
+
+
+def test_audit_blacklist_counts_and_conservation():
+    """Distinct-CpG accounting: blacklisted/not sums to the distinct total, and the
+    missing set splits cleanly into blacklist-explained and not."""
+    from tools.benchmark_kennedy import audit_blacklist
+    ken, cols = _blacklist_fixture()
+    # tecpg universe holds c0,c1 only; b0,b1 blacklisted-and-absent; x0 absent, clean.
+    a = audit_blacklist(ken, cols, {'b0', 'b1', 'z9'}, ['c0', 'c1'])
+
+    assert a['kennedy_distinct_cpg'] == 5          # c0,c1,b0,b1,x0 -- b0 counted once
+    assert a['kennedy_cpg_blacklisted'] == 2
+    assert a['kennedy_cpg_blacklisted'] + a['kennedy_cpg_not_blacklisted'] \
+        == a['kennedy_distinct_cpg']
+    # one blacklisted CpG spans multiple pairs: b0 x2 + b1 x1
+    assert a['kennedy_pairs_touching_blacklisted_cpg'] == 3
+    # coverage decomposition
+    assert a['cpg_missing_from_tecpg'] == 3        # b0,b1,x0
+    assert a['missing_explained_by_blacklist'] == 2
+    assert a['missing_not_explained_by_blacklist'] == 1
+    assert a['missing_explained_by_blacklist'] + a['missing_not_explained_by_blacklist'] \
+        == a['cpg_missing_from_tecpg']
+    # blacklist applied upstream, so nothing leaked into the test space
+    assert a['blacklisted_but_present_in_tecpg'] == 0
+    assert a['blacklisted_and_absent_from_tecpg'] == 2
+
+
+def test_blacklist_audit_warns_when_blacklisted_cpg_in_universe():
+    """A blacklisted CpG inside the tecpg universe means the catalog was not built
+    from a filtered M.csv; that must surface as WARN, not be smoothed over."""
+    from tools.benchmark_kennedy import audit_blacklist, build_blacklist_audit_module
+    ken, cols = _blacklist_fixture()
+    a = audit_blacklist(ken, cols, {'c0', 'c1'}, ['c0', 'c1'])
+    assert a['blacklisted_but_present_in_tecpg'] == 2
+
+    mod = build_blacklist_audit_module(a)
+    assert mod.status == "WARN"
+    assert 'blacklist-filtered' in mod.interpretation
+
+    clean = audit_blacklist(ken, cols, {'b0', 'b1'}, ['c0', 'c1'])
+    assert build_blacklist_audit_module(clean).status == "INFO"
+
+
+def test_blacklist_audit_skips_without_flag():
+    """Absent a blacklist the module renders a usable explanation, not a crash."""
+    from tools.benchmark_kennedy import build_blacklist_audit_module
+    mod = build_blacklist_audit_module(None)
+    assert mod.status == "INFO"
+    assert '--blacklist' in mod.interpretation
+
+
+def test_blacklist_audit_renders_and_serializes(tmp_path):
+    """End-to-end: --blacklist produces the report section and a JSON block."""
+    import json
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import re
+    import subprocess
+    import sys
+
+    cat = pd.DataFrame({
+        'mt_id': ['c1', 'c2'], 'gt_id': ['p1', 'p2'],
+        'precise_mt_p': [1e-12, 1e-12], 'mt_est': [1.0, -1.0], 'mt_t': [1.0, -1.0],
+        'region': ['CIS5', 'TRANS'], 'fdr_est': [0.1, 0.1],
+    })
+    ken = pd.DataFrame({
+        'CpG.probe': ['c1', 'bad1'], 'exp.Probe': ['p1', 'p2'],
+        'p.val': [1e-12, 1e-12], 'status': ['IN', 'TRANS'],
+        'distance': [10, float('nan')], 'beta': [1.0, 1.0], 'T.stat': [1.0, 1.0],
+    })
+    pt = tmp_path / "t.parquet"
+    pq.write_table(pa.Table.from_pandas(cat), pt)
+    pk = tmp_path / "k.tsv"
+    ken.to_csv(pk, sep='\t', index=False)
+    pb = tmp_path / "bl.csv"
+    pd.DataFrame({'Probe_ID': ['bad1', 'other']}).to_csv(pb, index=False)
+
+    subprocess.run([sys.executable, 'tools/benchmark_kennedy.py', '-t', str(pt),
+                    '-k', str(pk), '--blacklist', str(pb), '--tecpg-thresh', '1e-11',
+                    '--kennedy-thresh', '1e-11', '-o', str(tmp_path)],
+                   capture_output=True, text=True, check=True)
+
+    html = (tmp_path / 'benchmark_report.html').read_text()
+    sec = re.search(r'<section id="blacklist-audit".*?</section>', html, re.DOTALL)
+    assert sec is not None, "blacklist-audit section missing"
+    assert 'ON the blacklist' in sec.group(0)
+    # The caveat must ride with the numbers: absence from the blacklist is not
+    # proof a probe is sound, because the list is EPIC-derived. Assert the
+    # substantive phrase, not the bare token 'EPIC' (which appears twice and so
+    # cannot distinguish the caveat being present from it being gutted).
+    assert 'clean bill of health' in sec.group(0)
+    assert 'EPIC manifest' in sec.group(0)
+
+    metrics = json.loads((tmp_path / 'benchmark_metrics.json').read_text())
+    assert metrics['blacklist_audit']['kennedy_cpg_blacklisted'] == 1

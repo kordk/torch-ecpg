@@ -216,6 +216,45 @@ def stream_catalog_and_match(args, schema, tecpg_p_col, kennedy_pairs,
     return df_matched, tecpg_threshold_counts, distinct_mt, distinct_gt, region_counter, cat_profile_metrics
 
 
+def load_blacklist(path):
+    """Read a probe blacklist. Format follows tools/exclude_blacklisted_probes.py:
+    a CSV whose FIRST column holds probe IDs (header row present)."""
+    bl = pd.read_csv(path)
+    return set(bl.iloc[:, 0].astype(str))
+
+
+def audit_blacklist(kennedy_df, cols, blacklist, distinct_mt):
+    """Cross-tabulate the reference file's CpGs against a probe blacklist and
+    against this run's test space.
+
+    The pipeline applies the blacklist upstream (pipelinePre.sh builds M.csv by
+    dropping blacklisted probes), so a blacklisted CpG is EXPECTED to be absent
+    from the tecpg universe. Any blacklisted CpG that is nonetheless present
+    means the catalog was not built from a filtered M.csv -- a real finding
+    about the run, so it is surfaced rather than smoothed over.
+    """
+    mt_universe = set(distinct_mt)
+    k_cpgs = set(kennedy_df[cols['cpg']].dropna().astype(str).unique())
+
+    listed = k_cpgs & blacklist
+    missing = k_cpgs - mt_universe
+
+    return {
+        'blacklist_size': len(blacklist),
+        'kennedy_distinct_cpg': len(k_cpgs),
+        'kennedy_cpg_blacklisted': len(listed),
+        'kennedy_cpg_not_blacklisted': len(k_cpgs - blacklist),
+        'blacklisted_and_absent_from_tecpg': len(listed - mt_universe),
+        'blacklisted_but_present_in_tecpg': len(listed & mt_universe),
+        'cpg_missing_from_tecpg': len(missing),
+        'missing_explained_by_blacklist': len(missing & blacklist),
+        'missing_not_explained_by_blacklist': len(missing - blacklist),
+        'kennedy_pairs_touching_blacklisted_cpg': int(
+            kennedy_df[cols['cpg']].astype(str).isin(listed).sum()),
+        'kennedy_total_pairs': int(len(kennedy_df)),
+    }
+
+
 def compute_eligibility(distinct_mt, distinct_gt, kennedy_df, cols):
     df = kennedy_df.copy()
     mt_universe = set(distinct_mt)
@@ -816,6 +855,9 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
         if ec:
             out_json['entity_coverage'] = ec
 
+    if getattr(args, 'blacklist_audit', None):
+        out_json['blacklist_audit'] = args.blacklist_audit
+
     class NpEncoder(json.JSONEncoder):
         def default(self, obj):
             import numpy as np
@@ -853,6 +895,7 @@ def write_provenance_and_reports(args, num_merged, diag_results, grid_results, d
         if not args.characterize:
             modules.extend([
                 build_eligibility_decomposition_module(df_kennedy, cols),
+                build_blacklist_audit_module(getattr(args, 'blacklist_audit', None)),
                 build_recovery_grid_module(grid_results, [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]),
                 build_confirmation_grid_module(grid_results, [1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11]),
                 build_diagonal_summary_module(diag_results),
@@ -1036,6 +1079,86 @@ def build_eligibility_decomposition_module(df_kennedy, cols) -> QCModule:
         purpose=purpose, interpretation=interpretation,
         table_html=render_table(["Metric", "Count"], rows)
     )
+
+
+def build_blacklist_audit_module(audit) -> QCModule:
+    purpose = ("Checks whether the reference study evaluated CpG probes that this "
+               "pipeline excludes as unreliable.")
+
+    if not audit:
+        return QCModule(
+            anchor="blacklist-audit", title="Blacklist Audit", status="INFO",
+            purpose=purpose,
+            interpretation=("This check did not run because no blacklist was supplied. It "
+                            "reports whether the reference study evaluated CpG probes that "
+                            "this pipeline excludes as unreliable -- probes on a common SNP, "
+                            "probes that cross-hybridise elsewhere in the genome, and sex-"
+                            "chromosome probes. To enable it, pass --blacklist with the same "
+                            "probe list used to build M.csv (see "
+                            "tools/generateEpicProbeBlacklist.sh)."),
+            table_html="")
+
+    a = audit
+    kd = a['kennedy_distinct_cpg'] or 1
+    tp = a['kennedy_total_pairs'] or 1
+    miss = a['cpg_missing_from_tecpg']
+
+    def pct(n, d):
+        return f"{n} ({n / d:.1%})" if d else str(n)
+
+    rows = [
+        ["Blacklist size (probes)", str(a['blacklist_size'])],
+        ["Reference distinct CpG loci", str(a['kennedy_distinct_cpg'])],
+        ["Reference CpGs ON the blacklist", pct(a['kennedy_cpg_blacklisted'], kd)],
+        ["Reference pairs touching a blacklisted CpG",
+         pct(a['kennedy_pairs_touching_blacklisted_cpg'], tp)],
+        ["  \u2514 blacklisted and absent from tecpg (expected)",
+         str(a['blacklisted_and_absent_from_tecpg'])],
+        ["  \u2514 blacklisted but PRESENT in tecpg (unexpected)",
+         str(a['blacklisted_but_present_in_tecpg'])],
+        ["Reference CpGs missing from tecpg", str(miss)],
+        ["  \u2514 explained by the blacklist",
+         pct(a['missing_explained_by_blacklist'], miss) if miss else "0"],
+        ["  \u2514 missing for other reasons",
+         pct(a['missing_not_explained_by_blacklist'], miss) if miss else "0"],
+    ]
+
+    leaked = a['blacklisted_but_present_in_tecpg']
+    status = "WARN" if leaked else "INFO"
+
+    interpretation = (
+        "This pipeline drops CpG probes known to be unreliable before any testing: probes "
+        "sitting on a common SNP, probes that cross-hybridise to more than one place in "
+        "the genome, and probes on the sex chromosomes. The reference study did not "
+        "necessarily apply the same exclusions, so this table asks a direct question -- "
+        "did they report hits on probes we consider untrustworthy?\n\n"
+        "Reference CpGs on the blacklist are pairs the two analyses can never agree on, "
+        "and on our side that disagreement is deliberate rather than a failure to "
+        "replicate. Because one CpG appears in many pairs, a small number of blacklisted "
+        "loci can account for a disproportionate number of untestable pairs -- the pairs "
+        "row shows that leverage.\n\n"
+        "The last block connects this to coverage: of the reference CpGs absent from our "
+        "test space, it separates the ones we deliberately excluded from the ones missing "
+        "for other reasons (array differences, QC, or upstream filtering). Only the second "
+        "group is unexplained.\n\n"
+        "Two cautions. First, absence from the blacklist is not a clean bill of health: the "
+        "list is built from the EPIC manifest, so a probe on the reference study's array "
+        "with no EPIC counterpart cannot appear on it and is counted as not-blacklisted by "
+        "default. Second, the list merges its three exclusion reasons into a single column, "
+        "so this table cannot attribute a probe to SNP, cross-reactivity, or sex "
+        "chromosome.")
+
+    if leaked:
+        interpretation += (
+            f"\n\nWARN: {leaked} blacklisted CpG(s) are present in the tecpg test space. "
+            "The blacklist is applied upstream when M.csv is built, so this should be zero. "
+            "A non-zero count means this catalog was not built from a blacklist-filtered "
+            "M.csv -- check which M.csv the run used before reading the recovery numbers.")
+
+    return QCModule(
+        anchor="blacklist-audit", title="Blacklist Audit", status=status,
+        purpose=purpose, interpretation=interpretation,
+        table_html=render_table(["Metric", "Count"], rows))
 
 
 def build_recovery_grid_module(grid_results, thresholds) -> QCModule:
@@ -1401,6 +1524,10 @@ def main():
     parser.add_argument('--upset', action='store_true', help="Generate UpSet plot")
     parser.add_argument('--batch-size', type=int, default=500_000, help="Batch size for streaming catalog")
     parser.add_argument('--characterize', action='store_true', help="Profile inputs and exit without comparing")
+    parser.add_argument('--blacklist', default=None,
+                        help="Optional probe blacklist CSV (first column = probe IDs, as produced "
+                             "by tools/generateEpicProbeBlacklist.sh). Audits which reference CpGs "
+                             "are blacklisted here.")
     parser.add_argument('--no-html', action='store_true', help="Skip HTML report generation")
 
     args = parser.parse_args()
@@ -1469,6 +1596,24 @@ def main():
     args.cat_profile = cat_profile_metrics
 
     df_kennedy = compute_eligibility(distinct_mt, distinct_gt, df_kennedy, cols)
+
+    args.blacklist_audit = None
+    if args.blacklist:
+        try:
+            _bl = load_blacklist(args.blacklist)
+            logging.info("Loaded blacklist: %d probes from %s", len(_bl), args.blacklist)
+            args.blacklist_audit = audit_blacklist(df_kennedy, cols, _bl, distinct_mt)
+            _leak = args.blacklist_audit['blacklisted_but_present_in_tecpg']
+            logging.info(
+                "Blacklist audit: %d/%d reference CpGs blacklisted (%d present in tecpg)",
+                args.blacklist_audit['kennedy_cpg_blacklisted'],
+                args.blacklist_audit['kennedy_distinct_cpg'], _leak)
+            if _leak:
+                logging.warning(
+                    "%d blacklisted CpG(s) present in the tecpg universe -- catalog may not "
+                    "have been built from a blacklist-filtered M.csv", _leak)
+        except Exception as e:
+            logging.error("Could not read blacklist %s: %s", args.blacklist, e)
 
     loci_overlap = len(distinct_mt.intersection(kennedy_cpgs))
     logging.info(f"Overlapping distinct CpG loci: {loci_overlap}")
