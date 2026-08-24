@@ -31,6 +31,108 @@ REGION_REFERENCE = 'TRANS'
 # ==============================================================================
 # GPD RECOVERY (Standalone Fitter for Sidecar Arm)
 # ==============================================================================
+SIDECAR_VERSION_SUPPORTED = 1
+
+# Quantiles of the retained topk buffer at which to refit the GPD.
+XI_SWEEP_QUANTILES = (0.0, 0.25, 0.50, 0.75, 0.90)
+
+
+def load_null_sidecar(path):
+    """Load a permute null sidecar. Raises ValueError with a specific reason."""
+    with np.load(path, allow_pickle=False) as z:
+        keys = set(z.files)
+        required = {'sidecar_version', 'topk_values', 'total_count',
+                    'overflow_count', 'hist_counts', 'bin_edges'}
+        missing = required - keys
+        if missing:
+            raise ValueError(
+                "sidecar missing required keys: {0}".format(sorted(missing)))
+        version = int(z['sidecar_version'])
+        if version != SIDECAR_VERSION_SUPPORTED:
+            raise ValueError(
+                "sidecar version {0} unsupported (expected {1})".format(
+                    version, SIDECAR_VERSION_SUPPORTED))
+        out = {k: z[k] for k in z.files}
+    return out
+
+
+def xi_convergence_sweep(topk_values, total_count, quantiles=XI_SWEEP_QUANTILES):
+    """Refit the GPD at a ladder of thresholds; report xi stability."""
+    topk = np.asarray(topk_values, dtype=np.float64)
+    rows = []
+    if topk.size == 0:
+        return rows
+    for q in quantiles:
+        u = float(np.quantile(topk, q))
+        n_exc = int((topk > u).sum())
+        xi, sigma = fit_gpd(topk, u)
+        rows.append({
+            'quantile': float(q),
+            'u': u,
+            'n_exceedances': n_exc,
+            'xi': xi,
+            'sigma': sigma,
+            'tail_frac': (float(topk.size) / float(total_count)
+                          if total_count else None),
+        })
+    return rows
+
+
+def summarize_sidecar(sc):
+    """Build the eval-report block from a loaded sidecar."""
+    topk = np.asarray(sc['topk_values'], dtype=np.float64)
+    total = int(sc['total_count'])
+    overflow = int(sc['overflow_count'])
+    obs_max = float(sc['observed_max_abs_t']) if 'observed_max_abs_t' in sc else None
+
+    sweep = xi_convergence_sweep(topk, total)
+    xis = [r['xi'] for r in sweep if r['xi'] is not None]
+    xi_spread = (max(xis) - min(xis)) if len(xis) >= 2 else None
+
+    null_max = float(topk.max()) if topk.size else None
+    extrapolation_gap = ((obs_max - null_max)
+                         if (obs_max is not None and null_max is not None)
+                         else None)
+
+    return {
+        'status': 'loaded',
+        'sidecar_version': int(sc['sidecar_version']),
+        'perm_seed': int(sc['perm_seed']) if 'perm_seed' in sc else None,
+        'perm_n_perm': int(sc['perm_n_perm']) if 'perm_n_perm' in sc else None,
+        'total_null_draws': total,
+        'overflow_count': overflow,
+        'overflow_frac': (overflow / total) if total else None,
+        'empirical_floor': 1.0 / (total + 1) if total else None,
+        'null_max_abs_t': null_max,
+        'observed_max_abs_t': obs_max,
+        'extrapolation_gap': extrapolation_gap,
+        'gpd_status': str(sc['gpd_status']) if 'gpd_status' in sc else 'unknown',
+        'gpd_xi_run': float(sc['gpd_xi']) if 'gpd_xi' in sc else None,
+        'gpd_u_run': float(sc['gpd_u']) if 'gpd_u' in sc else None,
+        'xi_sweep': sweep,
+        'xi_spread': xi_spread,
+    }
+
+
+def resolve_sidecar_arm(perm_null_sidecar):
+    """Resolve the sidecar-gated eval arm. Never raises.
+
+    The 'skipped_no_sidecar' status is preserved for both the not-provided and
+    file-absent cases; the two are distinguished by the additive 'reason' key.
+    """
+    if not perm_null_sidecar:
+        print("Warning: --perm-null-sidecar not provided. Skipping sidecar-gated arms.")
+        return {'status': "skipped_no_sidecar", 'reason': "not_provided"}
+    if not os.path.exists(perm_null_sidecar):
+        warnings.warn(f"Sidecar file specified but not found: {perm_null_sidecar}")
+        return {'status': "skipped_no_sidecar", 'reason': "file_absent"}
+    try:
+        return summarize_sidecar(load_null_sidecar(perm_null_sidecar))
+    except Exception as exc:
+        warnings.warn(f"Sidecar unreadable ({exc}); skipping sidecar-gated arms.")
+        return {'status': "skipped_unreadable", 'reason': str(exc)}
+
+
 def fit_gpd(data, u):
     """
     Fits Generalized Pareto Distribution to data > u using method of moments or MLE.
@@ -552,19 +654,7 @@ def main():
     # -------------------------------------------------------------------------
     # Arm B: Sidecar-gated
     # -------------------------------------------------------------------------
-    sidecar_arm = {}
-
-    if args.perm_null_sidecar:
-        if os.path.exists(args.perm_null_sidecar):
-            # Future sidecar integration
-            sidecar_arm['status'] = "loaded"
-            # TODO: Literal null-flatness / rigorous null-shape stratify
-        else:
-            warnings.warn(f"Sidecar file specified but not found: {args.perm_null_sidecar}")
-            sidecar_arm['status'] = "skipped_no_sidecar"
-    else:
-        print("Warning: --perm-null-sidecar not provided. Skipping sidecar-gated arms.")
-        sidecar_arm['status'] = "skipped_no_sidecar"
+    sidecar_arm = resolve_sidecar_arm(args.perm_null_sidecar)
 
     report["arms"]["sidecar"] = sidecar_arm
 

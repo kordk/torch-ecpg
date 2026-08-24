@@ -14,6 +14,7 @@ from .helper import compute_region_mask
 # These dictate the memory bounds of the streaming accumulator.
 # They will be revisited/finalized in Chunk 8 based on convergence evidence.
 T_MAX = 10.0
+SIDECAR_VERSION = 1
 N_BINS = 1000
 TOPK_CAPACITY = 10_000
 
@@ -384,13 +385,17 @@ def _fit_gpd(exc):
 def _fit_tail(empirical_p, observed_stats, null_accumulator, logger):
     # CHUNK 8: generalized-Pareto tail (float64) extending p below the empirical floor.
     acc = null_accumulator
-    if acc is None or acc['total_count'] <= 0:
+    if acc is None:
+        return empirical_p
+    if acc['total_count'] <= 0:
+        acc['gpd_status'] = 'empty_accumulator'
         return empirical_p
 
     N = acc['total_count']
     topk = acc['topk_values']
 
     if topk.size == 0:
+        acc['gpd_status'] = 'no_topk'
         return empirical_p
 
     # PROVISIONAL: threshold u = min(topk) uses all retained exceedances. A higher u
@@ -401,14 +406,23 @@ def _fit_tail(empirical_p, observed_stats, null_accumulator, logger):
     exc = topk[topk > u] - u
 
     if exc.size < 50:
+        acc['gpd_status'] = 'skipped_few_exceedances'
         logger.warning("GPD tail fit skipped: only {0} exceedances above threshold (need >= 50); returning empirical p-values.", exc.size)
         return empirical_p
 
     xi, sigma = _fit_gpd(exc)
 
     if not (np.isfinite(xi) and np.isfinite(sigma)):
+        acc['gpd_status'] = 'non_finite'
         logger.warning("GPD tail fit produced non-finite parameters (xi={0}, sigma={1}); returning empirical p-values.", xi, sigma)
         return empirical_p
+
+    acc['gpd_status'] = 'ok'
+    acc['gpd_xi'] = float(xi)
+    acc['gpd_sigma'] = float(sigma)
+    acc['gpd_u'] = float(u)
+    acc['gpd_N_u'] = int(N_u)
+    acc['gpd_N'] = int(N)
 
     abs_obs = np.abs(np.asarray(observed_stats, dtype=np.float64))
 
@@ -472,6 +486,60 @@ def _verify_master_consistency(M, G, C, universe, device, logger,
         return
     logger.info("master consistency OK: {0} sampled pairs, max|dt|={1:.3e}",
                 k, float(np.nanmax(np.abs(recomputed - stored))))
+
+
+def _null_sidecar_path(output_file):
+    """Derive the sidecar path from the permute output path."""
+    if not output_file:
+        return None
+    base = output_file
+    for ext in ('.parquet', '.csv'):
+        if base.endswith(ext):
+            base = base[:-len(ext)]
+            break
+    return base + '.perm_null.npz'
+
+
+def _write_null_sidecar(accumulator, output_file, seed, permutations,
+                        observed_max_abs_t, n_reported, logger):
+    """Persist the null accumulator and GPD fit for post-hoc tail diagnostics.
+
+    Diagnostic only: never raises, never affects perm_mt_p.
+    """
+    path = _null_sidecar_path(output_file)
+    if path is None:
+        logger.warning("qr_permute: no output_file; null sidecar not written.")
+        return None
+    if accumulator is None:
+        logger.warning("qr_permute: no accumulator; null sidecar not written.")
+        return None
+    try:
+        payload = {
+            'sidecar_version': np.int64(SIDECAR_VERSION),
+            'bin_edges': np.asarray(accumulator['bin_edges'], dtype=np.float64),
+            'hist_counts': np.asarray(accumulator['hist_counts'], dtype=np.int64),
+            'topk_values': np.asarray(accumulator['topk_values'], dtype=np.float64),
+            'overflow_count': np.int64(accumulator['overflow_count']),
+            'total_count': np.int64(accumulator['total_count']),
+            'topk_capacity': np.int64(accumulator['topk_capacity']),
+            't_max': np.float64(T_MAX),
+            'perm_seed': np.int64(seed),
+            'perm_n_perm': np.int64(permutations),
+            'observed_max_abs_t': np.float64(observed_max_abs_t),
+            'n_reported': np.int64(n_reported),
+            'gpd_status': np.str_(accumulator.get('gpd_status', 'not_attempted')),
+        }
+        for k in ('gpd_xi', 'gpd_sigma', 'gpd_u'):
+            payload[k] = np.float64(accumulator.get(k, np.nan))
+        for k in ('gpd_N_u', 'gpd_N'):
+            payload[k] = np.int64(accumulator.get(k, -1))
+        np.savez(path, **payload)
+        logger.info("qr_permute: wrote null sidecar {0} ({1} bytes).",
+                    path, os.path.getsize(path))
+        return path
+    except Exception as exc:
+        logger.warning("qr_permute: failed to write null sidecar ({0}); continuing.", exc)
+        return None
 
 
 def _finalize_output(master_df, reported_pairs, perm_mt_p, seed, n_perm,
@@ -621,6 +689,12 @@ def tecpg_mlr_qr_permute(
     perm_mt_p = _fit_tail(empirical_p, observed_t, accumulator, logger)
 
     n_reported = len(reported_pairs)
+
+    _write_null_sidecar(
+        accumulator, output_file, seed, permutations,
+        float(np.abs(np.asarray(observed_t, dtype=np.float64)).max())
+        if len(observed_t) else float('nan'),
+        n_reported, logger)
 
     final_df = _finalize_output(master_df, reported_pairs, perm_mt_p, seed, permutations, output_p_threshold, logger)
 
