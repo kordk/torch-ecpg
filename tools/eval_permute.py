@@ -19,6 +19,10 @@ BULK_LO = 0.05
 BULK_HI = 1.0  # mostly-null band for divergence
 TAIL_P_ANA = 1e-4  # tail band for arm (a)
 TOLERANCE_MEDIAN_LOG10_RATIO_DIFF = 0.5  # |Δ| below this => strata agree
+DELTA_CI_RESAMPLES = 2000    # percentile bootstrap resamples for the delta CI
+DELTA_CI_ALPHA = 0.05        # 95% interval
+DELTA_CI_SEED = 20260824     # fixed: the CI must be reproducible run-to-run
+DELTA_CI_MAX_N = 200000      # per-arm subsample cap; bounds cost on big strata
 MIN_REGION_BULK_N = 100  # provisional: min bulk pairs for a region to be testable
 CANONICAL_REGIONS = ['TRANS', 'DISTAL5', 'CIS5', 'PROMOTER', 'GENEBODY', 'CIS3', 'DISTAL3']
 NEAR_GENE_REGIONS = ['CIS5', 'PROMOTER', 'GENEBODY', 'CIS3']
@@ -150,6 +154,76 @@ def fit_gpd(data, u):
 # ==============================================================================
 def compute_analytic_p(t, df):
     return 2.0 * scipy.stats.t.sf(np.abs(np.asarray(t, dtype=np.float64)), df)
+
+def bootstrap_delta_ci(region_bulk, trans_bulk,
+                       n_resamples=DELTA_CI_RESAMPLES,
+                       alpha=DELTA_CI_ALPHA,
+                       seed=DELTA_CI_SEED,
+                       max_n=DELTA_CI_MAX_N):
+    """Percentile bootstrap CI for median(region) - median(trans).
+
+    Returns (lo, hi, n_resamples_used), or (None, None, 0) if either arm is
+    empty. Deterministic for a given seed and inputs.
+    """
+    rb = np.asarray(region_bulk, dtype=np.float64)
+    tb = np.asarray(trans_bulk, dtype=np.float64)
+    if rb.size == 0 or tb.size == 0:
+        return None, None, 0
+
+    rng = np.random.default_rng(seed)
+
+    # Cap each arm so resample cost does not scale with a huge TRANS stratum.
+    # Subsampling widens the interval slightly, which is the conservative
+    # direction.
+    if rb.size > max_n:
+        rb = rng.choice(rb, size=max_n, replace=False)
+    if tb.size > max_n:
+        tb = rng.choice(tb, size=max_n, replace=False)
+
+    n_r, n_t = rb.size, tb.size
+    deltas = np.empty(n_resamples, dtype=np.float64)
+    for i in range(n_resamples):
+        r_s = rb[rng.integers(0, n_r, n_r)]
+        t_s = tb[rng.integers(0, n_t, n_t)]
+        deltas[i] = np.median(r_s) - np.median(t_s)
+
+    lo = float(np.quantile(deltas, alpha / 2.0))
+    hi = float(np.quantile(deltas, 1.0 - alpha / 2.0))
+    return lo, hi, int(n_resamples)
+
+
+def classify_delta_ci(lo, hi, tolerance=TOLERANCE_MEDIAN_LOG10_RATIO_DIFF):
+    """Read a delta CI against the equivalence band [-tolerance, +tolerance].
+
+    'equivalent'   : CI lies entirely inside the band -- confidently agreeing.
+    'divergent'    : CI lies entirely outside -- confidently disagreeing.
+    'inconclusive' : CI straddles a band edge -- not enough precision to say.
+
+    This is reported alongside, and never replaces, `divergent_regions`.
+    """
+    if lo is None or hi is None:
+        return None
+    if lo >= -tolerance and hi <= tolerance:
+        return 'equivalent'
+    if lo > tolerance or hi < -tolerance:
+        return 'divergent'
+    return 'inconclusive'
+
+
+def delta_ci_margin(lo, hi, tolerance=TOLERANCE_MEDIAN_LOG10_RATIO_DIFF):
+    """Distance from the CI to the nearer equivalence-band edge.
+
+    Positive: the CI clears the edge by this much. Negative: it has crossed.
+    Near zero: the verdict is marginal regardless of which label it received.
+
+    Reported because the three-way label collapses very different evidence --
+    a CI of (-0.49, -0.04) and one of (-0.02, 0.02) both read 'equivalent'
+    against a tolerance of 0.5, but only the second is precise.
+    """
+    if lo is None or hi is None:
+        return None
+    return float(min(tolerance - hi, lo + tolerance))
+
 
 def compute_calibration_stats(t_vals, p_perm, p_ana, is_bulk, is_tail):
     """Arm A.a: Calibration"""
@@ -552,11 +626,18 @@ def main():
                     mw_stat, mw_p = scipy.stats.mannwhitneyu(rb, trans_bulk, alternative='two-sided')
                     ks_stat2, ks_p2 = scipy.stats.kstest(rb, trans_bulk)
                     lambda_R = calculate_genomic_inflation(t[masks_R[R]])
+                    ci_lo, ci_hi, ci_n = bootstrap_delta_ci(rb, trans_bulk)
                     per_region[R] = {
                         'status': 'ok',
                         'n_bulk': len(rb),
                         'median_log10_ratio': median_R,
                         'delta_vs_trans': delta,
+                        'delta_ci_lo': ci_lo,
+                        'delta_ci_hi': ci_hi,
+                        'delta_ci_width': (None if ci_lo is None else float(ci_hi - ci_lo)),
+                        'delta_ci_resamples': ci_n,
+                        'delta_ci_verdict': classify_delta_ci(ci_lo, ci_hi),
+                        'delta_ci_margin': delta_ci_margin(ci_lo, ci_hi),
                         'mw_p': float(mw_p),
                         'ks_p': float(ks_p2),
                         'lambda': float(lambda_R)
