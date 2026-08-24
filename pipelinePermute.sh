@@ -417,6 +417,7 @@ EXECUTE=0
 if [ "$START_STAGE" == "all" ] || [ "$START_STAGE" == "permute" ]; then EXECUTE=1; fi
 
 PERM_OUTPUT="$OUT_DIR/permutation_results.parquet"
+PERM_NULL_SIDECAR="$OUT_DIR/permutation_results.perm_null.npz"
 
 # Stage 0 (--cis-enrich only): cis write-all map -> assemble gene-anchored master.
 # Runs only on a fresh run (--start-stage all); --start-stage permute/eval reuses an
@@ -549,6 +550,13 @@ if [ $EXECUTE -eq 1 ]; then
 
     if [ -n "$N_NULL_PAIRS" ]; then
         EVAL_ARGS+=( --n-null-pairs "$N_NULL_PAIRS" )
+    fi
+
+    if [ -s "$PERM_NULL_SIDECAR" ]; then
+        EVAL_ARGS+=( --perm-null-sidecar "$PERM_NULL_SIDECAR" )
+        log "      Null sidecar found: $PERM_NULL_SIDECAR (tail diagnostics enabled)."
+    else
+        log "      Null sidecar absent at $PERM_NULL_SIDECAR; tail diagnostics skipped."
     fi
 
     python3 -u tools/eval_permute.py "${EVAL_ARGS[@]}"
