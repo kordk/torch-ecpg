@@ -93,6 +93,9 @@ if ( [ -s "$DATA_DIR/M_orig.csv" ] || [ -s "$DATA_DIR/M.csv" ] ) && [ -s "$DATA_
     fi
 else
     log "Data files not found or empty. Proceeding with data generation/download for $DATASET..."
+    # A marker from a previous build would suppress the blacklist filter on the
+    # freshly downloaded M.csv.
+    rm -f "$DATA_DIR/M.csv.blacklist.meta"
     if [ "$DATASET" == "dummy" ]; then
         # Generate small synthetic data for testing
         log "Generating synthetic dummy data..."
@@ -150,14 +153,44 @@ else
 fi
 
 # Apply probe blacklist filter (METH_ARRAY: 450k default, or epic/both)
-if [ -s "$DATA_DIR/M.csv" ]; then
-    log "M.csv already exists. Skipping probe blacklist filtering."
+#
+# The guard is a stage-owned marker, not the existence of M.csv. Stage 1 writes
+# M.csv itself (tecpg data <ds> saves M.csv alongside M_orig.csv), so guarding
+# on M.csv meant the filter never executed on a fresh build: the guard was
+# satisfied by the very file this stage is supposed to produce. The marker is
+# written only on successful completion of the filter.
+#
+# The filter reads M.csv, not M_orig.csv. M_orig is the pre-dropna matrix
+# (tecpg/gtp.py takes M_orig = M.copy() before the missing-data drop), so
+# filtering M_orig into M.csv would silently reintroduce every locus stage 1
+# dropped for missing data -- 104,132 of them for GTP. Reading M.csv composes
+# the two filters instead of letting one overwrite the other.
+BLACKLIST_MARKER="$DATA_DIR/M.csv.blacklist.meta"
+if [ -s "$BLACKLIST_MARKER" ]; then
+    log "Blacklist filter already applied (see $BLACKLIST_MARKER). Skipping."
+elif [ ! -s "$DATA_DIR/M.csv" ]; then
+    log "Error: $DATA_DIR/M.csv not found; cannot apply blacklist filter."
+    exit 1
 else
     log "Generating probe blacklist (array: ${METH_ARRAY:-450k})..."
     ./tools/generateProbeBlacklist.sh "$DATA_DIR" "${METH_ARRAY:-450k}"
 
-    log "Applying blacklist filter to M_orig.csv..."
-    python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/probes_blacklist.csv" "$DATA_DIR/M.csv"
+    log "Applying blacklist filter to M.csv..."
+    BLACKLIST_TMP="$DATA_DIR/M.csv.blacklist.tmp"
+    rm -f "$BLACKLIST_TMP"
+    python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M.csv" "$DATA_DIR/probes_blacklist.csv" "$BLACKLIST_TMP"
+
+    # Move into place only after the filter succeeds, so an interrupted run
+    # leaves M.csv intact rather than truncated.
+    mv "$BLACKLIST_TMP" "$DATA_DIR/M.csv"
+
+    {
+        echo "applied=$(date +'%Y-%m-%dT%H:%M:%S')"
+        echo "array=${METH_ARRAY:-450k}"
+        echo "blacklist_rows=$(( $(wc -l < "$DATA_DIR/probes_blacklist.csv") - 1 ))"
+        echo "m_rows_after=$(( $(wc -l < "$DATA_DIR/M.csv") - 1 ))"
+    } > "$BLACKLIST_MARKER"
+    log "Blacklist filter applied; wrote $BLACKLIST_MARKER"
 fi
 fi
 
