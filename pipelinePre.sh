@@ -26,7 +26,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "Options:"
             echo "  -h, --help               Show this help message and exit"
             echo "  -d, --dataset DATASET    Specify the dataset to use. Options: dummy (default), gtp, gtpsub, mesa"
-            echo "  -s, --start-stage STAGE  Specify the starting stage. Options: all, prep, cell_prop, pca. Default is 'all'."
+            echo "  -s, --start-stage STAGE  Specify the starting stage. Options: all, prep, ancestry, cell_prop, pca. Default is 'all'."
             exit 0
             ;;
         -s|--start-stage)
@@ -45,7 +45,7 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
-VALID_STAGES=("all" "prep" "cell_prop" "pca")
+VALID_STAGES=("all" "prep" "ancestry" "cell_prop" "pca")
 IS_VALID_STAGE=0
 for stage in "${VALID_STAGES[@]}"; do
     if [ "$START_STAGE" == "$stage" ]; then
@@ -158,6 +158,59 @@ else
 
     log "Applying blacklist filter to M_orig.csv..."
     python3 tools/exclude_blacklisted_probes.py "$DATA_DIR/M_orig.csv" "$DATA_DIR/probes_blacklist.csv" "$DATA_DIR/M.csv"
+fi
+fi
+
+if [ "$START_STAGE" == "ancestry" ]; then EXECUTE=1; fi
+
+# Stage 1.4: Evaluate methylation-derived ancestry instruments
+#
+# Characterisation only at this stage: the report is written for every real
+# cohort, and whether any component is admitted as a covariate is a separate,
+# per-cohort decision made downstream. Reads M_orig.csv deliberately -- the
+# genotype-like probes this needs (rs control probes, SNP-affected CpGs) are
+# the ones the blacklist stage removes, so it wants the pre-filter matrix.
+#
+# The guard checks this stage's OWN output. That distinction matters: guarding
+# on a file an earlier stage also writes is what let the blacklist filter be
+# skipped on a fresh build.
+if [ $EXECUTE -eq 1 ]; then
+log "[1.4/9] Evaluating methylation-derived ancestry instruments..."
+if [ "$DATASET" == "dummy" ] || [ "$DATASET" == "gtpsub" ]; then
+    log "Skipping ancestry evaluation for $DATASET (no population structure to recover)."
+elif [ -s "$OUT_DIR/ancestry_probes.json" ]; then
+    log "ancestry_probes.json already exists. Skipping ancestry evaluation."
+else
+    # Grouping used only for the separation module, never as an input to the
+    # instruments themselves. MESA carries the composite; GTP drops
+    # race/ethnicity upstream, so Sex is the only categorical available.
+    ANCESTRY_GROUP=""
+    if [ "$DATASET" == "mesa" ]; then
+        ANCESTRY_GROUP="racegendersite"
+    elif [ "$DATASET" == "gtp" ]; then
+        ANCESTRY_GROUP="Sex"
+    fi
+
+    ANCESTRY_ARGS=()
+    if [ -n "$ANCESTRY_GROUP" ]; then
+        ANCESTRY_ARGS+=(--group-column "$ANCESTRY_GROUP")
+    fi
+    if [ -s "$DATA_DIR/probes_blacklist.csv" ]; then
+        ANCESTRY_ARGS+=(--blacklist "$DATA_DIR/probes_blacklist.csv")
+    else
+        log "No probes_blacklist.csv found; ancestry method C will be skipped."
+    fi
+
+    log "Running ancestry instrument evaluation (grouping: ${ANCESTRY_GROUP:-none})..."
+    python3 tools/ancestry_probes_report.py \
+        --dataset "$DATASET" \
+        --methylation "$DATA_DIR/M_orig.csv" \
+        --covariates "$DATA_DIR/C_orig.csv" \
+        "${ANCESTRY_ARGS[@]}" \
+        --out "$OUT_DIR/ancestry_probes_report.html" \
+        --json "$OUT_DIR/ancestry_probes.json" \
+        --scores-out "$DATA_DIR/ancestry_scores.csv" \
+        --probes-out "$OUT_DIR/ancestry_probes.tsv"
 fi
 fi
 
