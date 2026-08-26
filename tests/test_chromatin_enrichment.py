@@ -1,0 +1,199 @@
+"""Tests for tools/chromatinEnrichment_parquet.py (Kennedy Fig. 6 support, chunk E2).
+
+Every 2x2 cell of both panels is checked against a brute-force count over the
+synthetic universe / pair set. Guards (universe contract, coordinate drop
+site, build mismatch, missing significance column) are checked at the library
+level and at the CLI exit-code level.
+"""
+import json
+import logging
+import os
+import subprocess
+import sys
+
+import numpy as np
+import pandas as pd
+import pytest
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+import chromatin_features as cf  # noqa: E402
+import chromatinEnrichment_parquet as ce  # noqa: E402
+
+TOOL = os.path.join(REPO_ROOT, 'tools', 'chromatinEnrichment_parquet.py')
+
+
+def make_bed(path, rows):
+    pd.DataFrame(rows).to_csv(path, sep='\t', header=False, index=False)
+
+
+@pytest.fixture
+def synthetic(tmp_path):
+    """200-CpG universe on chr1/chr2 (+2 ids without coordinates), 30
+    significant CpGs across 3 regions, one CpG carrying 3 extra TRANS pairs,
+    7 non-significant rows, CGI/shore/shelf + four bed4 states + a union.
+    Seeded locally so the fixture is order-independent."""
+    rng = np.random.default_rng(20180619)
+    n = 200
+    chrom = np.where(np.arange(n) < 120, 'chr1', 'chr2')
+    pos = rng.integers(0, 100_000, n)
+    ids = [f'cg{i:05d}' for i in range(n)]
+    bed = tmp_path / 'M.bed6'
+    make_bed(bed, [dict(c=chrom[i], s=int(pos[i]), e=int(pos[i]) + 1, n=ids[i], sc=0, st='+') for i in range(n)])
+    m = tmp_path / 'M.csv'
+    pd.DataFrame({'id': ids + ['cg_nocoord_a', 'cg_nocoord_b'], 's1': 0.0, 's2': 1.0}).to_csv(m, index=False)
+    pairs = []
+    sig_cpgs = list(rng.choice(ids[:180], 30, replace=False))
+    regions = ['TRANS', 'CIS5', 'GENEBODY']
+    for k, c in enumerate(sig_cpgs):
+        pairs.append(dict(mt_id=c, gt_id=f'ILMN_{k}', region=regions[k % 3], fdr_est=0.01, mt_p=1e-12))
+    multi = sig_cpgs[0]
+    for j in range(3):
+        pairs.append(dict(mt_id=multi, gt_id=f'ILMN_multi{j}', region='TRANS', fdr_est=0.001, mt_p=1e-13))
+    for j in range(7):
+        pairs.append(dict(mt_id=ids[190 + j], gt_id=f'ILMN_ns{j}', region='DISTAL5', fdr_est=0.5, mt_p=0.01))
+    cat = tmp_path / 'summarized.parquet'
+    pd.DataFrame(pairs).to_parquet(cat, index=False)
+    isl = tmp_path / 'cgi.bed'
+    make_bed(isl, [dict(c='chr1', s=10_000, e=12_000), dict(c='chr1', s=14_500, e=15_000),
+                   dict(c='chr2', s=50_000, e=60_000)])
+    hmm = tmp_path / 'hmm.bed'
+    hmm_rows = []
+    for c in ('chr1', 'chr2'):
+        edges = np.sort(rng.choice(np.arange(0, 100_001, 500), 40, replace=False))
+        for s, e in zip(edges[:-1], edges[1:]):
+            hmm_rows.append(dict(c=c, s=int(s), e=int(e), n=f'{rng.integers(1, 16)}_State'))
+    make_bed(hmm, hmm_rows)
+    names = sorted({r['n'] for r in hmm_rows}, key=lambda x: int(x.split('_')[0]))
+    man = tmp_path / 'tracks.tsv'
+    lines = ['name\tkind\tpath\tbuild\tselect',
+             f'CGI\tbed\t{isl}\thg19\t.',
+             'CGI_shore\tderived\tCGI\thg19\tflank=1500',
+             'CGI_shelf\tderived\tCGI_shore\thg19\tflank=1500;exclude=CGI']
+    for nm in names[:4]:
+        lines.append(f'HMM_{nm.split("_")[0]}\tbed4\t{hmm}\thg19\tname={nm}')
+    lines.append(f'HMM_union\tunion\tHMM_{names[0].split("_")[0]},HMM_{names[1].split("_")[0]}\thg19\t.')
+    man.write_text('\n'.join(lines) + '\n')
+    return dict(tmp=tmp_path, bed=bed, m=m, cat=cat, man=man, multi=multi)
+
+
+def _run(synthetic):
+    tracks, _ = cf.load_tracks(synthetic['man'], 'hg19')
+    ids = ce.load_universe_ids(synthetic['m'])
+    universe, n_no = ce.build_universe(ids, ce.load_cpg_bed(synthetic['bed']))
+    sig = ce.load_significant_pairs(synthetic['cat'], 'fdr_est', 0.05)
+    ce.check_universe_contract(sig, universe)
+    ov = ce.annotate_overlaps(universe, tracks)
+    return ids, universe, n_no, sig, ov, ce.build_panel_a(sig, universe, ov), ce.build_panel_b(sig, universe, ov)
+
+
+def _cli(synthetic, out, extra=()):
+    cmd = [sys.executable, TOOL, '--catalog', str(synthetic['cat']), '--cpg-universe', str(synthetic['m']),
+           '--cpg-bed', str(synthetic['bed']), '--tracks', str(synthetic['man']), '--genome-build', 'hg19',
+           '--out-dir', str(out)] + list(extra)
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+# -------------------------------------------------------------------- T6
+def test_T6_panel_a_oracle(synthetic):
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    N = len(universe)
+    assert N == 200 and n_no == 2
+    sig_cpgs = set(sig['mt_id'])
+    for rec in pa.itertuples():
+        row_set = sig_cpgs if rec.row == 'ALL' else set(sig.loc[sig['region'] == rec.row, 'mt_id'])
+        a = sum(1 for u in universe.index if u in row_set and ov.at[u, rec.feature])
+        b = sum(1 for u in universe.index if u in row_set and not ov.at[u, rec.feature])
+        c = sum(1 for u in universe.index if u not in row_set and ov.at[u, rec.feature])
+        d = N - a - b - c
+        assert (rec.a, rec.b, rec.c, rec.d) == (a, b, c, d), rec
+        assert rec.a + rec.b + rec.c + rec.d == N
+        assert rec.n_row == len(row_set)
+    # CpG with 3 extra TRANS pairs is counted once in TRANS and once in ALL
+    assert pa.loc[pa.row == 'TRANS', 'n_row'].iloc[0] == sig.loc[sig.region == 'TRANS', 'mt_id'].nunique()
+    assert pa.loc[pa.row == 'ALL', 'n_row'].iloc[0] == 30
+    assert list(pa['row'].unique()) == ['ALL', 'GENEBODY', 'CIS5', 'TRANS']
+    assert set(pa.columns) == {'panel', 'row', 'cis', 'feature', 'n_row', 'a', 'b', 'c', 'd'}
+    assert pa.loc[pa.row.isin(['GENEBODY', 'CIS5']), 'cis'].eq(1).all() and pa.loc[pa.row == 'TRANS', 'cis'].eq(0).all()
+
+
+# -------------------------------------------------------------------- T7
+def test_T7_panel_b_oracle(synthetic):
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    P = len(sig)
+    assert P == 33
+    for rec in pb.itertuples():
+        a = sum(1 for r in sig.itertuples() if r.region == rec.row and ov.at[r.mt_id, rec.feature])
+        b = sum(1 for r in sig.itertuples() if r.region == rec.row and not ov.at[r.mt_id, rec.feature])
+        c = sum(1 for r in sig.itertuples() if r.region != rec.row and ov.at[r.mt_id, rec.feature])
+        assert (rec.a, rec.b, rec.c, rec.d) == (a, b, c, P - a - b - c), rec
+        assert rec.a + rec.b + rec.c + rec.d == P
+    n_rows = pb.drop_duplicates('row').set_index('row')['n_row']
+    assert n_rows.sum() == P
+    assert n_rows['TRANS'] == 13  # 10 single + 3 multi
+    assert 'ALL' not in set(pb['row'])
+
+
+# -------------------------------------------------------------------- T8
+def test_T8_universe_contract(synthetic, tmp_path):
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    sig2 = pd.concat([sig, pd.DataFrame([dict(mt_id='cg_alien', gt_id='ILMN_x', region='TRANS')])], ignore_index=True)
+    with pytest.raises(ce.UniverseContractError) as ei:
+        ce.check_universe_contract(sig2, universe)
+    assert 'cg_alien' in str(ei.value)
+    # CLI: a catalog carrying a CpG outside the universe exits 2
+    cat2 = tmp_path / 'alien.parquet'
+    df = pd.read_parquet(synthetic['cat'])
+    pd.concat([df, pd.DataFrame([dict(mt_id='cg_alien', gt_id='ILMN_x', region='TRANS', fdr_est=0.001, mt_p=1e-13)])]).to_parquet(cat2, index=False)
+    r = _cli(dict(synthetic, cat=cat2), tmp_path / 'o8')
+    assert r.returncode == 2 and 'cg_alien' in r.stderr
+
+
+# -------------------------------------------------------------------- T9
+def test_T9_coordinate_drop_site(synthetic, caplog):
+    caplog.set_level(logging.INFO)
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    assert len(ids) == 202 and n_no == 2 and len(universe) == 200
+    assert any('Drop site chromatin_enrichment.universe[coords]: 2 of 202' in m for m in caplog.messages)
+
+
+# ------------------------------------------------------------- guards, CLI
+def test_missing_sig_column_fails_closed(synthetic):
+    with pytest.raises(ce.UniverseContractError) as ei:
+        ce.load_significant_pairs(synthetic['cat'], 'fdr_permute', 0.05)
+    assert 'fdr_permute' in str(ei.value) and 'Refusing' in str(ei.value)
+
+
+def test_duplicate_universe_ids_fail(tmp_path):
+    m = tmp_path / 'M.csv'
+    pd.DataFrame({'id': ['cg1', 'cg2', 'cg1'], 's1': 0.0}).to_csv(m, index=False)
+    with pytest.raises(ce.UniverseContractError):
+        ce.load_universe_ids(m)
+
+
+def test_cli_end_to_end_and_metrics(synthetic, tmp_path):
+    out = tmp_path / 'out'
+    r = _cli(synthetic, out, ['--expect-n-universe', '202'])
+    assert r.returncode == 0, r.stderr
+    for f in ('chromatin_enrichment_panelA.tsv', 'chromatin_enrichment_panelB.tsv', 'chromatin_enrichment_metrics.json'):
+        assert (out / f).exists()
+    m = json.load(open(out / 'chromatin_enrichment_metrics.json'))
+    assert (m['n_universe_ids'], m['n_universe_no_coords'], m['n_universe'], m['n_sig_pairs'], m['n_sig_cpgs']) == (202, 2, 200, 33, 30)
+    assert m['genome_build'] == 'hg19' and m['sig_column'] == 'fdr_est' and len(m['catalog_sha256']) == 64
+    assert set(m['track_provenance']) == {'CGI', 'CGI_shore', 'CGI_shelf', 'HMM_union'} | {k for k in m['track_provenance'] if k.startswith('HMM_')}
+    pa = pd.read_csv(out / 'chromatin_enrichment_panelA.tsv', sep='\t')
+    assert len(m['panel_a']) == len(pa) == 4 * 8 and len(m['panel_b']) == 3 * 8
+    assert all(c['a'] + c['b'] + c['c'] + c['d'] == 200 for c in m['panel_a'])
+    assert all(c['a'] + c['b'] + c['c'] + c['d'] == 33 for c in m['panel_b'])
+
+
+def test_cli_expect_n_universe_mismatch_exits_2(synthetic, tmp_path):
+    r = _cli(synthetic, tmp_path / 'o', ['--expect-n-universe', '999'])
+    assert r.returncode == 2 and '999' in r.stderr
+
+
+def test_cli_build_mismatch_exits_2(synthetic, tmp_path):
+    bad = tmp_path / 'bad.tsv'
+    bad.write_text(synthetic['man'].read_text().replace('\thg19\t', '\thg38\t', 1))
+    r = _cli(dict(synthetic, man=bad), tmp_path / 'o')
+    assert r.returncode == 2 and 'hg38' in r.stderr
