@@ -77,6 +77,43 @@ DATA_DIR="data_${DATASET}"
 ANNOT_DIR="annot_${DATASET}"
 mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
 
+# Covariate file threaded through preprocessing. Each stage that modifies
+# covariates writes a NEW file rather than overwriting its input, and this
+# resolver picks the most advanced one present. Resolving by file existence
+# (instead of assigning inside the stage blocks) keeps --start-stage correct:
+# starting at 'pca' still picks up covariates produced by earlier stages.
+resolve_cov_file() {
+    COV_FILE="$DATA_DIR/C_orig.csv"
+    if [ -s "$DATA_DIR/C_orig.anc.csv" ]; then
+        COV_FILE="$DATA_DIR/C_orig.anc.csv"
+    fi
+    if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
+        COV_FILE="$DATA_DIR/C_post_cellTypes.csv"
+    fi
+    if [ -s "$DATA_DIR/C_post_cellTypes.encoded.csv" ]; then
+        COV_FILE="$DATA_DIR/C_post_cellTypes.encoded.csv"
+    fi
+}
+
+# Per-dataset covariate configuration. These are dataset judgements, not
+# framework rules, so they live here rather than in the tools.
+#   ANCESTRY_MERGE_COLUMNS: which ancestry components become covariates.
+#     MESA: the 65 rs control probes are the only clean genotype instrument in
+#     this matrix (mean_clusters 3.0); the data-driven gap probes came back
+#     predominantly bimodal and are not used. Two components clear the 65-probe
+#     noise floor.
+#   ENCODE_COLUMNS / ENCODE_MIN_CELL_SIZE: integer-coded categoricals that need
+#     indicator encoding, and the smallest level retained.
+ANCESTRY_MERGE_COLUMNS=""
+ANCESTRY_MERGE_NAMES=""
+ENCODE_COLUMNS=""
+ENCODE_MIN_CELL_SIZE=3
+if [ "$DATASET" == "mesa" ]; then
+    ANCESTRY_MERGE_COLUMNS="rs_PC1,rs_PC2"
+    ANCESTRY_MERGE_NAMES="Anc_PC1,Anc_PC2"
+    ENCODE_COLUMNS="racegendersite"
+fi
+
 EXECUTE=0
 if [ "$START_STAGE" == "all" ] || [ "$START_STAGE" == "prep" ]; then EXECUTE=1; fi
 
@@ -247,21 +284,78 @@ else
 fi
 fi
 
+# Stage 1.45: Merge selected ancestry components into the covariates
+#
+# Runs before cell-type estimation so the ancestry columns are present in the
+# covariate file that EpiDISH merges onto (estimateCellProportions.R merges by
+# row names and passes unrecognised columns through). Characterisation and use
+# are kept separate: stage 1.4 evaluates every instrument for both cohorts,
+# this stage admits components as covariates only where configured.
+if [ $EXECUTE -eq 1 ] && [ -n "$ANCESTRY_MERGE_COLUMNS" ]; then
+log "[1.45/9] Merging ancestry components into covariates..."
+if [ -s "$DATA_DIR/C_orig.anc.csv" ]; then
+    log "C_orig.anc.csv already exists. Skipping ancestry merge."
+elif [ ! -s "$DATA_DIR/ancestry_scores.csv" ]; then
+    log "Error: $DATA_DIR/ancestry_scores.csv not found; run the ancestry stage first."
+    exit 1
+else
+    log "Merging $ANCESTRY_MERGE_COLUMNS as $ANCESTRY_MERGE_NAMES..."
+    python3 tools/mergeCovariateColumns.py \
+        --covariates "$DATA_DIR/C_orig.csv" \
+        --sidecar "$DATA_DIR/ancestry_scores.csv" \
+        --columns "$ANCESTRY_MERGE_COLUMNS" \
+        --rename "$ANCESTRY_MERGE_NAMES" \
+        --output "$DATA_DIR/C_orig.anc.csv" \
+        --report "$DATA_DIR/ancestry_merge.json"
+fi
+fi
+
 if [ "$START_STAGE" == "cell_prop" ]; then EXECUTE=1; fi
 
 # Stage 1.5: Estimate Immune Cell Proportions
 if [ $EXECUTE -eq 1 ]; then
 log "[1.5/9] Estimating immune cell proportions using EpiDISH..."
+resolve_cov_file
+log "Using covariate file: $COV_FILE"
 if [ -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
     log "C_post_cellTypes.csv already exists. Skipping cell proportion estimation."
 else
     log "Running EpiDISH to estimate cell proportions..."
     if [ "$DATASET" == "dummy" ] || [ "$DATASET" == "gtpsub" ]; then
         log "Skipping EpiDISH for dummy data (random noise causes singular fits)."
-        cp "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv"
+        cp "$COV_FILE" "$DATA_DIR/C_post_cellTypes.csv"
     else
-        ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_orig.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATASET"
+        ./tools/estimateCellProportions.sh "$DATA_DIR/M.csv" "$COV_FILE" "$DATA_DIR/C_post_cellTypes.csv" "$DATASET"
     fi
+fi
+fi
+
+# Stage 1.6: Encode integer-coded categorical covariates
+#
+# Runs after cell-type estimation and before residualization, so the PCs are
+# computed on M and G residualized against indicator columns rather than
+# against a single slope along an arbitrary code ordering. Placing it after the
+# PC stage would leave the categorical structure in the residuals for PCA to
+# rediscover, which is the behaviour this stage exists to remove.
+if [ $EXECUTE -eq 1 ] && [ -n "$ENCODE_COLUMNS" ]; then
+log "[1.6/9] Encoding categorical covariates ($ENCODE_COLUMNS)..."
+if [ -s "$DATA_DIR/C_post_cellTypes.encoded.csv" ]; then
+    log "C_post_cellTypes.encoded.csv already exists. Skipping categorical encoding."
+elif [ ! -s "$DATA_DIR/C_post_cellTypes.csv" ]; then
+    log "Error: $DATA_DIR/C_post_cellTypes.csv not found; run the cell_prop stage first."
+    exit 1
+else
+    ENCODE_ARGS=()
+    IFS=',' read -ra _enc_cols <<< "$ENCODE_COLUMNS"
+    for _c in "${_enc_cols[@]}"; do
+        ENCODE_ARGS+=(--column "$_c")
+    done
+    python3 tools/encodeCategorical.py \
+        --input "$DATA_DIR/C_post_cellTypes.csv" \
+        --output "$DATA_DIR/C_post_cellTypes.encoded.csv" \
+        "${ENCODE_ARGS[@]}" \
+        --min-cell-size "$ENCODE_MIN_CELL_SIZE" \
+        --report "$DATA_DIR/encodeCategorical.json"
 fi
 fi
 
@@ -270,19 +364,21 @@ if [ "$START_STAGE" == "pca" ]; then EXECUTE=1; fi
 # Stage 2: Residualization & PCA
 if [ $EXECUTE -eq 1 ]; then
 log "[2/9] Generating Expression and Methylation PCs..."
+resolve_cov_file
+log "Using covariate file: $COV_FILE"
 if [ -s "$DATA_DIR/C.csv" ]; then
     log "C.csv already exists. Skipping Residualization and PCA generation."
 else
     log "Running Expression Residualization & PCA..."
-    ./tools/residualize_pca.sh "$DATA_DIR/G.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATA_DIR/G_PCs.csv" "Exp_PC"
+    ./tools/residualize_pca.sh "$DATA_DIR/G.csv" "$COV_FILE" "$DATA_DIR/G_PCs.csv" "Exp_PC"
 
     log "Running Methylation Residualization & PCA..."
-    ./tools/residualize_pca.sh "$DATA_DIR/M.csv" "$DATA_DIR/C_post_cellTypes.csv" "$DATA_DIR/M_PCs.csv" "Meth_PC"
+    ./tools/residualize_pca.sh "$DATA_DIR/M.csv" "$COV_FILE" "$DATA_DIR/M_PCs.csv" "Meth_PC"
 
     log "Merging Covariates with PCs..."
     python3 -c "
 import pandas as pd
-C = pd.read_csv('$DATA_DIR/C_post_cellTypes.csv', dtype={0: str})
+C = pd.read_csv('$COV_FILE', dtype={0: str}, float_precision='round_trip')
 C.set_index(C.columns[0], inplace=True)
 G_PCs = pd.read_csv('$DATA_DIR/G_PCs.csv', dtype={0: str})
 G_PCs.set_index(G_PCs.columns[0], inplace=True)
