@@ -1,6 +1,6 @@
 """Kennedy et al. 2018 (BMC Genomics 19:476) Figure 6: chromatin-feature
 enrichment of eCpGs. Loaders, universe contract, the two panels as 2x2
-tables with Fisher exact statistics (E2+E3); the heatmap (E4) builds on this.
+tables with Fisher exact statistics, and the two-panel heatmap (--plot).
 
   Panel A  universe = tested CpGs (the M-matrix row set that entered MLR),
            each CpG once. Rows = ALL + one per region label; a CpG is in row R
@@ -16,6 +16,11 @@ Statistics per cell: Fisher exact two-sided p; conditional-MLE odds ratio with
 exact 95% CI (scipy.stats.contingency.odds_ratio, the R fisher.test
 estimator); sample OR ad/bc; BH q within each panel (panels are separate
 families). Cells with a zero margin are flagged degenerate.
+
+Figure (--plot): rows = categories with (n), columns = features in manifest
+order, cell text = OR, fill = sign of log OR where the cell is significant
+(--color-by p or q_bh at --alpha), cis rows shaded, degenerate cells hatched,
+undefined OR rendered as n/a. Content, not layout, is what matches Kennedy.
 """
 import argparse
 import json
@@ -203,6 +208,57 @@ def metrics_json(panel_a, panel_b, extra):
     return out
 
 
+# ------------------------------------------------------------------ figure
+def _pivot(df, rows, feats, value):
+    return df.pivot(index='row', columns='feature', values=value).reindex(index=rows, columns=feats)
+
+
+def plot_fig6(panel_a, panel_b, out_path, dataset_label='', color_by='p', alpha=0.05):
+    """Two-panel heatmap in the shape of Kennedy et al. 2018 Fig. 6.
+    Returns (rows_a, rows_b, features) for callers that want to check shape."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+    feats = list(dict.fromkeys(panel_a['feature']))
+    panels = ((panel_a, 'a) among all tested CpGs'), (panel_b, 'b) among significant eCpG-transcript pairs'))
+    n_rows_total = panel_a['row'].nunique() + panel_b['row'].nunique()
+    fig, axes = plt.subplots(2, 1, figsize=(max(8.0, 0.6 * len(feats) + 3.0), 0.5 * n_rows_total + 3.0),
+                             gridspec_kw=dict(height_ratios=[max(panel_a['row'].nunique(), 1), max(panel_b['row'].nunique(), 1)]))
+    shapes = []
+    for ax, (df, title) in zip(axes, panels):
+        rows = list(dict.fromkeys(df['row']))
+        piv_or = _pivot(df, rows, feats, 'odds_ratio')
+        piv_sig = _pivot(df, rows, feats, color_by)
+        piv_deg = _pivot(df, rows, feats, 'degenerate')
+        per_row = df.drop_duplicates('row').set_index('row').reindex(rows)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            signed = np.sign(np.log(piv_or.to_numpy(dtype=float)))
+        colour = np.where(piv_sig.to_numpy(dtype=float) < alpha, signed, 0.0)
+        colour = np.nan_to_num(colour, nan=0.0, posinf=1.0, neginf=-1.0)
+        ax.imshow(colour, cmap='bwr', vmin=-1, vmax=1, aspect='auto')
+        for i, r in enumerate(rows):
+            if int(per_row.loc[r, 'cis']):
+                ax.add_patch(Rectangle((-0.5, i - 0.5), len(feats), 1, fill=True, alpha=0.12, color='grey', zorder=2))
+            for j in range(len(feats)):
+                v = piv_or.iloc[i, j]
+                txt = 'n/a' if (v is None or np.isnan(v)) else ('inf' if np.isinf(v) else f'{v:.2g}')
+                ax.text(j, i, txt, ha='center', va='center', fontsize=6, zorder=3)
+                if int(piv_deg.iloc[i, j]):
+                    ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1, fill=False, hatch='///', edgecolor='k', linewidth=0, zorder=3))
+        ax.set_yticks(range(len(rows)))
+        ax.set_yticklabels([f"{r} ({int(per_row.loc[r, 'n_row'])})" for r in rows], fontsize=7)
+        ax.set_xticks(range(len(feats)))
+        ax.set_xticklabels(feats, rotation=60, ha='right', fontsize=7)
+        ax.set_title(title, fontsize=9, loc='left')
+        shapes.append(rows)
+    fig.suptitle(f'Chromatin-feature enrichment of eCpGs {dataset_label}'.strip(), fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    return shapes[0], shapes[1], feats
+
+
 # --------------------------------------------------------------------- CLI
 def main(argv=None):
     ap = argparse.ArgumentParser(description='Kennedy Fig. 6 chromatin-feature enrichment of eCpGs.')
@@ -215,6 +271,10 @@ def main(argv=None):
     ap.add_argument('--sig-threshold', type=float, default=0.05)
     ap.add_argument('--expect-n-universe', type=int, default=None, help='cross-check against the mlr log row count')
     ap.add_argument('--out-dir', required=True)
+    ap.add_argument('--plot', action='store_true', help='write chromatin_enrichment_fig6.png')
+    ap.add_argument('--color-by', choices=['p', 'q_bh'], default='p', help='significance column that drives cell colour')
+    ap.add_argument('--alpha', type=float, default=0.05, help='significance level for cell colour')
+    ap.add_argument('--dataset-label', default='', help='appended to the figure title')
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
     os.makedirs(args.out_dir, exist_ok=True)
@@ -238,6 +298,10 @@ def main(argv=None):
                 tracks_manifest_sha256=cf.sha256_file(args.tracks), track_provenance=prov)
     with open(os.path.join(args.out_dir, 'chromatin_enrichment_metrics.json'), 'w') as fh:
         json.dump(metrics_json(pa, pb, meta), fh, indent=1)
+    if args.plot:
+        fig_path = os.path.join(args.out_dir, 'chromatin_enrichment_fig6.png')
+        plot_fig6(pa, pb, fig_path, args.dataset_label, args.color_by, args.alpha)
+        logger.info(f'figure written: {fig_path} (colour by {args.color_by} < {args.alpha})')
     logger.info(f'panel A: {len(pa)} cells; panel B: {len(pb)} cells; outputs in {args.out_dir}')
     return 0
 

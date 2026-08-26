@@ -1,11 +1,12 @@
-"""Tests for tools/chromatinEnrichment_parquet.py (Kennedy Fig. 6 support, chunks E2+E3).
+"""Tests for tools/chromatinEnrichment_parquet.py (Kennedy Fig. 6 support, chunks E2-E4).
 
 Every 2x2 cell of both panels is checked against a brute-force count over the
 synthetic universe / pair set. Guards (universe contract, coordinate drop
 site, build mismatch, missing significance column) are checked at the library
 level and at the CLI exit-code level. Odds ratio and CI are checked against an
 independent conditional-MLE implementation (the fisher.test estimator); BH is
-checked against statsmodels per panel; integer cells are fingerprinted.
+checked against statsmodels per panel; integer cells are fingerprinted. The
+figure is smoke-tested for shape and content markers, not pixels.
 """
 import json
 import logging
@@ -254,6 +255,63 @@ def test_T13_fingerprint(synthetic, tmp_path):
     nd = pa[pa['degenerate'] == 0]
     assert np.isfinite(nd[['odds_ratio', 'ci_low', 'ci_high', 'p', 'q_bh']].to_numpy()).all()
     assert ((pa['p'] >= 0) & (pa['p'] <= 1)).all() and ((pa['q_bh'] >= pa['p'] - 1e-12)).all()
+
+
+# -------------------------------------------------------------------- T14
+def test_T14_figure_smoke(synthetic, tmp_path):
+    out = tmp_path / 'out'
+    r = _cli(synthetic, out, ['--plot', '--dataset-label', 'FIXTURE'])
+    assert r.returncode == 0, r.stderr
+    png = out / 'chromatin_enrichment_fig6.png'
+    assert png.exists() and png.stat().st_size > 0
+    assert 'figure written' in r.stderr and 'colour by p < 0.05' in r.stderr
+    # shape: rows per panel and features come straight from the tables
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    rows_a, rows_b, feats = ce.plot_fig6(pa, pb, str(tmp_path / 'direct.png'))
+    assert rows_a == ['ALL', 'GENEBODY', 'CIS5', 'TRANS'] and rows_b == ['GENEBODY', 'CIS5', 'TRANS']
+    assert feats == list(dict.fromkeys(pa['feature'])) and len(feats) == 8
+    # a run without --plot writes no figure
+    out2 = tmp_path / 'out2'
+    r2 = _cli(synthetic, out2)
+    assert r2.returncode == 0 and not (out2 / 'chromatin_enrichment_fig6.png').exists()
+    # --color-by q_bh and --alpha are accepted and echoed
+    r3 = _cli(synthetic, tmp_path / 'out3', ['--plot', '--color-by', 'q_bh', '--alpha', '0.1'])
+    assert r3.returncode == 0 and 'colour by q_bh < 0.1' in r3.stderr
+
+
+def test_T14b_figure_content_markers(synthetic, tmp_path, monkeypatch):
+    """Cell text and shading are checked through the matplotlib objects
+    rather than pixels: n/a for undefined OR, inf for infinite OR, one
+    grey band per cis row, one hatch per degenerate cell."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    captured = {}
+    real_savefig = plt.Figure.savefig
+
+    def spy(self, *a, **k):
+        captured['fig'] = self
+        return real_savefig(self, *a, **k)
+    monkeypatch.setattr(plt.Figure, 'savefig', spy)
+    real_close = plt.close
+    monkeypatch.setattr(plt, 'close', lambda *a, **k: None)
+    try:
+        ce.plot_fig6(pa, pb, str(tmp_path / 'm.png'))
+        fig = captured['fig']
+        for ax, df in zip(fig.axes, (pa, pb)):
+            texts = [t.get_text() for t in ax.texts]
+            n_nan = int(df['odds_ratio'].isna().sum()); n_inf = int(np.isinf(df['odds_ratio']).sum())
+            assert texts.count('n/a') == n_nan and texts.count('inf') == n_inf
+            assert 'nan' not in texts
+            rects = [p for p in ax.patches if isinstance(p, Rectangle)]
+            bands = [p for p in rects if p.get_fill() and p.get_alpha() == 0.12]
+            hatched = [p for p in rects if p.get_hatch()]
+            assert len(bands) == int(df.drop_duplicates('row')['cis'].sum())
+            assert len(hatched) == int(df['degenerate'].sum())
+    finally:
+        real_close('all')
 
 
 # ------------------------------------------------------------- guards, CLI
