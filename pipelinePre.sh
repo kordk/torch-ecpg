@@ -17,6 +17,10 @@ GTPSUB_G_LOCI=5000
 GTPSUB_SEED=42
 START_STAGE="all"
 
+# Methylation array the probe blacklist is scoped to: 450k, epic, or both.
+# GTP and MESA are both HumanMethylation450.
+METH_ARRAY="450k"
+
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -189,7 +193,7 @@ else
     fi
 fi
 
-# Apply probe blacklist filter (METH_ARRAY: 450k default, or epic/both)
+# Apply probe blacklist filter (array scope: METH_ARRAY, set in Default settings)
 #
 # The guard is a stage-owned marker, not the existence of M.csv. Stage 1 writes
 # M.csv itself (tecpg data <ds> saves M.csv alongside M_orig.csv), so guarding
@@ -209,8 +213,8 @@ elif [ ! -s "$DATA_DIR/M.csv" ]; then
     log "Error: $DATA_DIR/M.csv not found; cannot apply blacklist filter."
     exit 1
 else
-    log "Generating probe blacklist (array: ${METH_ARRAY:-450k})..."
-    ./tools/generateProbeBlacklist.sh "$DATA_DIR" "${METH_ARRAY:-450k}"
+    log "Generating probe blacklist (array: $METH_ARRAY)..."
+    ./tools/generateProbeBlacklist.sh "$DATA_DIR" "$METH_ARRAY"
 
     log "Applying blacklist filter to M.csv..."
     BLACKLIST_TMP="$DATA_DIR/M.csv.blacklist.tmp"
@@ -223,7 +227,7 @@ else
 
     {
         echo "applied=$(date +'%Y-%m-%dT%H:%M:%S')"
-        echo "array=${METH_ARRAY:-450k}"
+        echo "array=$METH_ARRAY"
         echo "blacklist_rows=$(( $(wc -l < "$DATA_DIR/probes_blacklist.csv") - 1 ))"
         echo "m_rows_after=$(( $(wc -l < "$DATA_DIR/M.csv") - 1 ))"
     } > "$BLACKLIST_MARKER"
