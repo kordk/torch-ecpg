@@ -18,9 +18,11 @@ estimator); sample OR ad/bc; BH q within each panel (panels are separate
 families). Cells with a zero margin are flagged degenerate.
 
 Figure (--plot): rows = categories with (n), columns = features in manifest
-order, cell text = OR, fill = sign of log OR where the cell is significant
-(--color-by p or q_bh at --alpha), cis rows shaded, degenerate cells hatched,
-undefined OR rendered as n/a. Content, not layout, is what matches Kennedy.
+order, cell text = OR, fill = log10 OR on a blue-white-burgundy diverging
+scale clipped to --or-range (default 0.1 to 10, as in Kennedy Fig. 6) where
+the cell is significant (--color-by p or q_bh at --alpha); non-significant
+cells are white; cis rows shaded; degenerate cells hatched; undefined OR
+rendered as n/a. Content, not layout, is what matches Kennedy.
 """
 import argparse
 import json
@@ -241,18 +243,49 @@ def _pivot(df, rows, feats, value):
     return df.pivot(index='row', columns='feature', values=value).reindex(index=rows, columns=feats)
 
 
-def plot_fig6(panel_a, panel_b, out_path, dataset_label='', color_by='p', alpha=0.05):
+OR_CMAP_STOPS = ['#1f5fa8', '#f7f7f7', '#7a0c2e']   # blue - white - burgundy
+
+
+def or_colour_matrix(piv_or, piv_sig, alpha, or_range):
+    """log10 OR clipped to or_range where the cell is significant; NaN elsewhere
+    (NaN renders as the colormap's 'bad' colour, white). inf/0 clip to the
+    range ends; an undefined OR (nan) stays NaN."""
+    lo, hi = np.log10(or_range[0]), np.log10(or_range[1])
+    with np.errstate(divide='ignore', invalid='ignore'):
+        lor = np.log10(piv_or.to_numpy(dtype=float))
+    lor = np.clip(lor, lo, hi)
+    sig = piv_sig.to_numpy(dtype=float) < alpha
+    return np.where(sig, lor, np.nan)
+
+
+def or_text(v):
+    """Cell label: n/a for undefined, inf for infinite, integer for OR >= 10, else 2 s.f."""
+    if v is None or np.isnan(v):
+        return 'n/a'
+    if np.isinf(v):
+        return 'inf'
+    return f'{v:.0f}' if v >= 10 else f'{v:.2g}'
+
+
+def plot_fig6(panel_a, panel_b, out_path, dataset_label='', color_by='p', alpha=0.05, or_range=(0.1, 10.0)):
     """Two-panel heatmap in the shape of Kennedy et al. 2018 Fig. 6.
     Returns (rows_a, rows_b, features) for callers that want to check shape."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
     from matplotlib.patches import Rectangle
+    if not (0 < or_range[0] < 1 < or_range[1]):
+        raise ValueError(f'--or-range must satisfy 0 < lo < 1 < hi, got {or_range}')
+    cmap = LinearSegmentedColormap.from_list('kennedy_or', OR_CMAP_STOPS)
+    cmap.set_bad('white')
+    lo, hi = np.log10(or_range[0]), np.log10(or_range[1])
     feats = list(dict.fromkeys(panel_a['feature']))
     panels = ((panel_a, 'a) among all tested CpGs'), (panel_b, 'b) among significant eCpG-transcript pairs'))
     n_rows_total = panel_a['row'].nunique() + panel_b['row'].nunique()
     fig, axes = plt.subplots(2, 1, figsize=(max(8.0, 0.6 * len(feats) + 3.0), 0.5 * n_rows_total + 3.0),
-                             gridspec_kw=dict(height_ratios=[max(panel_a['row'].nunique(), 1), max(panel_b['row'].nunique(), 1)]))
+                             gridspec_kw=dict(height_ratios=[max(panel_a['row'].nunique(), 1), max(panel_b['row'].nunique(), 1)]),
+                             layout='constrained')
     shapes = []
     for ax, (df, title) in zip(axes, panels):
         rows = list(dict.fromkeys(df['row']))
@@ -260,18 +293,16 @@ def plot_fig6(panel_a, panel_b, out_path, dataset_label='', color_by='p', alpha=
         piv_sig = _pivot(df, rows, feats, color_by)
         piv_deg = _pivot(df, rows, feats, 'degenerate')
         per_row = df.drop_duplicates('row').set_index('row').reindex(rows)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            signed = np.sign(np.log(piv_or.to_numpy(dtype=float)))
-        colour = np.where(piv_sig.to_numpy(dtype=float) < alpha, signed, 0.0)
-        colour = np.nan_to_num(colour, nan=0.0, posinf=1.0, neginf=-1.0)
-        ax.imshow(colour, cmap='bwr', vmin=-1, vmax=1, aspect='auto')
+        colour = or_colour_matrix(piv_or, piv_sig, alpha, or_range)
+        im = ax.imshow(np.ma.masked_invalid(colour), cmap=cmap, vmin=lo, vmax=hi, aspect='auto')
         for i, r in enumerate(rows):
             if int(per_row.loc[r, 'cis']):
                 ax.add_patch(Rectangle((-0.5, i - 0.5), len(feats), 1, fill=True, alpha=0.12, color='grey', zorder=2))
             for j in range(len(feats)):
                 v = piv_or.iloc[i, j]
-                txt = 'n/a' if (v is None or np.isnan(v)) else ('inf' if np.isinf(v) else f'{v:.2g}')
-                ax.text(j, i, txt, ha='center', va='center', fontsize=6, zorder=3)
+                txt = or_text(v)
+                dark = (not np.isnan(colour[i, j])) and abs(colour[i, j]) > 0.55 * max(abs(lo), abs(hi))
+                ax.text(j, i, txt, ha='center', va='center', fontsize=6, zorder=3, color='white' if dark else 'black')
                 if int(piv_deg.iloc[i, j]):
                     ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1, fill=False, hatch='///', edgecolor='k', linewidth=0, zorder=3))
         ax.set_yticks(range(len(rows)))
@@ -280,8 +311,12 @@ def plot_fig6(panel_a, panel_b, out_path, dataset_label='', color_by='p', alpha=
         ax.set_xticklabels(feats, rotation=60, ha='right', fontsize=7)
         ax.set_title(title, fontsize=9, loc='left')
         shapes.append(rows)
+    ticks = [t for t in (0.1, 0.2, 0.5, 1, 2, 5, 10) if or_range[0] <= t <= or_range[1]]
+    cbar = fig.colorbar(im, ax=axes, orientation='vertical', fraction=0.02, pad=0.01,
+                        ticks=[np.log10(t) for t in ticks])
+    cbar.ax.set_yticklabels([f'{t:g}' for t in ticks], fontsize=7)
+    cbar.set_label(f'odds ratio (coloured where {color_by} < {alpha:g})', fontsize=7)
     fig.suptitle(f'Chromatin-feature enrichment of eCpGs {dataset_label}'.strip(), fontsize=10)
-    fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
     return shapes[0], shapes[1], feats
@@ -303,6 +338,8 @@ def main(argv=None):
     ap.add_argument('--color-by', choices=['p', 'q_bh'], default='p', help='significance column that drives cell colour')
     ap.add_argument('--alpha', type=float, default=0.05, help='significance level for cell colour')
     ap.add_argument('--dataset-label', default='', help='appended to the figure title')
+    ap.add_argument('--or-range', type=float, nargs=2, default=(0.1, 10.0), metavar=('LO', 'HI'),
+                    help='odds-ratio range of the colour scale (log10), clipped; default 0.1 10 as in Kennedy Fig. 6')
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
     os.makedirs(args.out_dir, exist_ok=True)
@@ -330,8 +367,9 @@ def main(argv=None):
         json.dump(metrics_json(pa, pb, meta), fh, indent=1)
     if args.plot:
         fig_path = os.path.join(args.out_dir, 'chromatin_enrichment_fig6.png')
-        plot_fig6(pa, pb, fig_path, args.dataset_label, args.color_by, args.alpha)
-        logger.info(f'figure written: {fig_path} (colour by {args.color_by} < {args.alpha})')
+        plot_fig6(pa, pb, fig_path, args.dataset_label, args.color_by, args.alpha, tuple(args.or_range))
+        logger.info(f'figure written: {fig_path} (colour by {args.color_by} < {args.alpha}; '
+                    f'OR scale {args.or_range[0]:g}-{args.or_range[1]:g})')
     logger.info(f'panel A: {len(pa)} cells; panel B: {len(pb)} cells; outputs in {args.out_dir}')
     return 0
 

@@ -323,7 +323,12 @@ def test_T14_figure_smoke(synthetic, tmp_path):
     assert r2.returncode == 0 and not (out2 / 'chromatin_enrichment_fig6.png').exists()
     # --color-by q_bh and --alpha are accepted and echoed
     r3 = _cli(synthetic, tmp_path / 'out3', ['--plot', '--color-by', 'q_bh', '--alpha', '0.1'])
-    assert r3.returncode == 0 and 'colour by q_bh < 0.1' in r3.stderr
+    assert r3.returncode == 0 and 'colour by q_bh < 0.1' in r3.stderr and 'OR scale 0.1-10' in r3.stderr
+    # --or-range is accepted, echoed, and validated
+    r4 = _cli(synthetic, tmp_path / 'out4', ['--plot', '--or-range', '0.2', '5'])
+    assert r4.returncode == 0 and 'OR scale 0.2-5' in r4.stderr
+    r5 = _cli(synthetic, tmp_path / 'out5', ['--plot', '--or-range', '2', '5'])
+    assert r5.returncode != 0
 
 
 def test_T14b_figure_content_markers(synthetic, tmp_path, monkeypatch):
@@ -351,14 +356,32 @@ def test_T14b_figure_content_markers(synthetic, tmp_path, monkeypatch):
             texts = [t.get_text() for t in ax.texts]
             n_nan = int(df['odds_ratio'].isna().sum()); n_inf = int(np.isinf(df['odds_ratio']).sum())
             assert texts.count('n/a') == n_nan and texts.count('inf') == n_inf
-            assert 'nan' not in texts
+            assert 'nan' not in texts and not any('e+' in t for t in texts)
             rects = [p for p in ax.patches if isinstance(p, Rectangle)]
             bands = [p for p in rects if p.get_fill() and p.get_alpha() == 0.12]
             hatched = [p for p in rects if p.get_hatch()]
             assert len(bands) == int(df.drop_duplicates('row')['cis'].sum())
             assert len(hatched) == int(df['degenerate'].sum())
+        # a colourbar axis exists beyond the two panels
+        assert len(fig.axes) == 3
     finally:
         real_close('all')
+
+
+def test_T14c_colour_scale_is_log_or_clipped_and_masked():
+    """Colour = log10(OR) clipped to the range, only where significant; NaN
+    (masked -> white) elsewhere; inf/0 clip to the ends; undefined stays NaN."""
+    piv_or = pd.DataFrame([[2.0, 0.25, 50.0, 0.0, np.nan, 3.0]])
+    piv_p = pd.DataFrame([[0.01, 0.01, 0.01, 0.01, 0.01, 0.5]])
+    c = ce.or_colour_matrix(piv_or, piv_p, 0.05, (0.1, 10.0))[0]
+    assert np.isclose(c[0], np.log10(2.0)) and np.isclose(c[1], np.log10(0.25))
+    assert np.isclose(c[2], 1.0) and np.isclose(c[3], -1.0)      # clipped to 10 and 0.1
+    assert np.isnan(c[4]) and np.isnan(c[5])                      # undefined; not significant
+    with pytest.raises(ValueError):
+        ce.plot_fig6(pd.DataFrame(), pd.DataFrame(), '/dev/null', or_range=(2.0, 5.0))
+    # cell labels: no scientific notation, n/a and inf spelled out
+    assert [ce.or_text(v) for v in (np.nan, np.inf, 0.0, 0.25, 2.0, 9.96, 10.0, 120.4, 1234.0)] == \
+        ['n/a', 'inf', '0', '0.25', '2', '10', '10', '120', '1234']
 
 
 # ------------------------------------------------------------- guards, CLI
