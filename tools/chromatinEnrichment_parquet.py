@@ -59,14 +59,22 @@ def load_universe_ids(m_matrix_path):
 
 def load_cpg_bed(bed_path):
     df = pd.read_csv(bed_path, sep='\t', header=None, comment='#', usecols=[0, 1, 3],
-                     names=['chrom', 'start', 'mt_id'], dtype={0: str, 3: str})
+                     names=['chrom', 'start', 'mt_id'], dtype={0: str, 1: str, 3: str})
+    n_in = len(df)
+    df['start'] = pd.to_numeric(df['start'], errors='coerce')
+    bad_start = df['start'].isna()
+    if bad_start.any():
+        logger.info(f'Drop site chromatin_enrichment.cpg_bed[start]: excluded {int(bad_start.sum())} of {n_in} '
+                    f'CpG rows with a non-numeric start')
+        df = df[~bad_start]
     df['chrom'] = df['chrom'].map(cf.normalize_chrom)
     bad = df['chrom'].isna()
     if bad.any():
-        logger.info(f'Drop site chromatin_enrichment.cpg_bed[chrom]: excluded {int(bad.sum())} of {len(df)} '
+        logger.info(f'Drop site chromatin_enrichment.cpg_bed[chrom]: excluded {int(bad.sum())} of {n_in} '
                     f'CpG coordinates on unrecognised chromosomes')
         df = df[~bad]
     df = df.drop_duplicates('mt_id')
+    df['start'] = df['start'].astype(np.int64)
     return df.set_index('mt_id')
 
 
@@ -114,13 +122,30 @@ def load_significant_pairs(catalog_path, sig_column, sig_threshold, chunk_size=2
     return sig
 
 
-def check_universe_contract(sig, universe):
-    missing = sorted(set(sig['mt_id']) - set(universe.index))
+def check_universe_contract(sig, universe_ids):
+    """Every significant CpG is a row of the M matrix that entered MLR. This is
+    checked against the full id list, BEFORE the coordinate drop: a tested CpG
+    without coordinates (e.g. an rs control probe) is a drop site, not a
+    contract violation."""
+    missing = sorted(set(sig['mt_id']) - set(universe_ids))
     if missing:
         raise UniverseContractError(
             f'{len(missing)} significant CpG id(s) are not in the tested-CpG universe '
             f'(first 10: {missing[:10]}). The universe is the M-matrix row set that entered MLR; '
             f'a significant CpG outside it means the catalog and the M matrix are from different runs.')
+
+
+def drop_unmappable_pairs(sig, universe):
+    """Remove significant pairs whose CpG has no coordinates (and so is not in
+    the coordinate-bearing universe). Returns (sig, n_cpgs_dropped, n_pairs_dropped).
+    Without this, a left join in build_panel_b would cast the missing overlap
+    to True for every feature."""
+    keep = sig['mt_id'].isin(universe.index)
+    n_pairs = int((~keep).sum())
+    n_cpgs = int(sig.loc[~keep, 'mt_id'].nunique())
+    logger.info(f'Drop site chromatin_enrichment.pairs[coords]: {n_cpgs} significant CpG(s) / {n_pairs} pair(s) '
+                f'lack coordinates and are excluded from both panels')
+    return sig[keep].copy(), n_cpgs, n_pairs
 
 
 # ------------------------------------------------------------------ tables
@@ -185,6 +210,9 @@ def build_panel_a(sig, universe, overlaps):
 def build_panel_b(sig, universe, overlaps):
     rows = region_rows(sig)
     pairs = sig.join(overlaps, on='mt_id', how='left')
+    if len(pairs) and pairs[list(overlaps.columns)].isna().any().any():
+        raise UniverseContractError('build_panel_b: a pair references a CpG with no overlap row; '
+                                    'drop_unmappable_pairs must run before the panels')
     out = []
     for r in rows:
         in_row = (pairs['region'] == r).to_numpy()
@@ -285,7 +313,8 @@ def main(argv=None):
         raise UniverseContractError(f'universe has {len(ids)} rows; mlr log reported {args.expect_n_universe}')
     universe, n_no_coords = build_universe(ids, load_cpg_bed(args.cpg_bed))
     sig = load_significant_pairs(args.catalog, args.sig_column, args.sig_threshold)
-    check_universe_contract(sig, universe)
+    check_universe_contract(sig, ids)
+    sig, n_sig_cpgs_no_coords, n_sig_pairs_no_coords = drop_unmappable_pairs(sig, universe)
     overlaps = annotate_overlaps(universe, tracks)
     pa = build_panel_a(sig, universe, overlaps)
     pb = build_panel_b(sig, universe, overlaps)
@@ -294,6 +323,7 @@ def main(argv=None):
     meta = dict(genome_build=args.genome_build, sig_column=args.sig_column, sig_threshold=args.sig_threshold,
                 n_universe_ids=len(ids), n_universe_no_coords=n_no_coords, n_universe=len(universe),
                 n_sig_pairs=len(sig), n_sig_cpgs=int(sig['mt_id'].nunique()),
+                n_sig_cpgs_no_coords=n_sig_cpgs_no_coords, n_sig_pairs_no_coords=n_sig_pairs_no_coords,
                 catalog=os.path.abspath(args.catalog), catalog_sha256=cf.sha256_file(args.catalog),
                 tracks_manifest_sha256=cf.sha256_file(args.tracks), track_provenance=prov)
     with open(os.path.join(args.out_dir, 'chromatin_enrichment_metrics.json'), 'w') as fh:
