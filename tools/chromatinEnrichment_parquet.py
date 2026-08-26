@@ -1,6 +1,6 @@
 """Kennedy et al. 2018 (BMC Genomics 19:476) Figure 6: chromatin-feature
-enrichment of eCpGs. Chunk E2: loaders, universe contract, and the two panels
-as integer 2x2 tables. Statistics (E3) and the heatmap (E4) build on this.
+enrichment of eCpGs. Loaders, universe contract, the two panels as 2x2
+tables with Fisher exact statistics (E2+E3); the heatmap (E4) builds on this.
 
   Panel A  universe = tested CpGs (the M-matrix row set that entered MLR),
            each CpG once. Rows = ALL + one per region label; a CpG is in row R
@@ -11,6 +11,11 @@ as integer 2x2 tables. Statistics (E3) and the heatmap (E4) build on this.
 
 Coordinates: CpG as the 1-bp half-open interval [mt_chromStart, +1); tracks as
 BED half-open. Chromosome names are normalised by chromatin_features.
+
+Statistics per cell: Fisher exact two-sided p; conditional-MLE odds ratio with
+exact 95% CI (scipy.stats.contingency.odds_ratio, the R fisher.test
+estimator); sample OR ad/bc; BH q within each panel (panels are separate
+families). Cells with a zero margin are flagged degenerate.
 """
 import argparse
 import json
@@ -21,6 +26,9 @@ import sys
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+from scipy.stats import fisher_exact
+from scipy.stats.contingency import odds_ratio
+from statsmodels.stats.multitest import multipletests
 
 import chromatin_features as cf
 
@@ -129,6 +137,28 @@ def two_by_two(in_row, in_feat):
     return a, b, c, d
 
 
+def fisher_or_ci(a, b, c, d, alpha=0.05):
+    """Fisher exact two-sided p, conditional-MLE OR with (1-alpha) CI, sample OR.
+    degenerate=1 when any cell is zero (OR is 0 or inf, one CI bound is 0/inf);
+    when no unit in the universe overlaps the feature at all (a + c == 0) the
+    OR is undefined and reported as nan."""
+    table = np.array([[a, b], [c, d]], dtype=np.int64)
+    _, p = fisher_exact(table, alternative='two-sided')
+    res = odds_ratio(table, kind='conditional')
+    ci = res.confidence_interval(1 - alpha)
+    degenerate = int(a == 0 or b == 0 or c == 0 or d == 0)
+    sample_or = (a * d) / (b * c) if (b > 0 and c > 0) else (np.inf if a * d > 0 else np.nan)
+    return dict(odds_ratio=float(res.statistic), ci_low=float(ci.low), ci_high=float(ci.high),
+                sample_or=float(sample_or), p=float(p), degenerate=degenerate)
+
+
+def add_bh_within_panel(df):
+    """BH q-values over the cells of ONE panel; call once per panel."""
+    if len(df):
+        df['q_bh'] = multipletests(df['p'].to_numpy(), method='fdr_bh')[1]
+    return df
+
+
 def build_panel_a(sig, universe, overlaps):
     rows = ['ALL'] + region_rows(sig)
     cpg_by_row = {'ALL': set(sig['mt_id'])}
@@ -142,8 +172,9 @@ def build_panel_a(sig, universe, overlaps):
         for feat in overlaps.columns:
             a, b, c, d = two_by_two(in_row, overlaps[feat].to_numpy())
             rec = dict(panel='A', row=r, cis=int(r in CIS_ROWS), feature=feat, n_row=n_row, a=a, b=b, c=c, d=d)
+            rec.update(fisher_or_ci(a, b, c, d))
             out.append(rec)
-    return pd.DataFrame(out)
+    return add_bh_within_panel(pd.DataFrame(out))
 
 
 def build_panel_b(sig, universe, overlaps):
@@ -156,8 +187,9 @@ def build_panel_b(sig, universe, overlaps):
         for feat in overlaps.columns:
             a, b, c, d = two_by_two(in_row, pairs[feat].to_numpy().astype(bool))
             rec = dict(panel='B', row=r, cis=int(r in CIS_ROWS), feature=feat, n_row=n_row, a=a, b=b, c=c, d=d)
+            rec.update(fisher_or_ci(a, b, c, d))
             out.append(rec)
-    return pd.DataFrame(out)
+    return add_bh_within_panel(pd.DataFrame(out))
 
 
 # ----------------------------------------------------------------- outputs

@@ -1,9 +1,11 @@
-"""Tests for tools/chromatinEnrichment_parquet.py (Kennedy Fig. 6 support, chunk E2).
+"""Tests for tools/chromatinEnrichment_parquet.py (Kennedy Fig. 6 support, chunks E2+E3).
 
 Every 2x2 cell of both panels is checked against a brute-force count over the
 synthetic universe / pair set. Guards (universe contract, coordinate drop
 site, build mismatch, missing significance column) are checked at the library
-level and at the CLI exit-code level.
+level and at the CLI exit-code level. Odds ratio and CI are checked against an
+independent conditional-MLE implementation (the fisher.test estimator); BH is
+checked against statsmodels per panel; integer cells are fingerprinted.
 """
 import json
 import logging
@@ -14,6 +16,9 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.optimize import brentq
+from scipy.special import gammaln
+from scipy.stats import fisher_exact
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
@@ -21,6 +26,36 @@ import chromatin_features as cf  # noqa: E402
 import chromatinEnrichment_parquet as ce  # noqa: E402
 
 TOOL = os.path.join(REPO_ROOT, 'tools', 'chromatinEnrichment_parquet.py')
+FINGERPRINT = os.path.join(REPO_ROOT, 'tests', 'fingerprint_chromatin_enrichment.json')
+STAT_COLS = {'odds_ratio', 'ci_low', 'ci_high', 'sample_or', 'p', 'degenerate', 'q_bh'}
+
+
+def cond_mle_or(a, b, c, d, alpha=0.05):
+    """Independent conditional MLE of the odds ratio (noncentral hypergeometric
+    mean inversion) with exact CI by inverting the two one-sided conditional
+    tests. Mirrors R fisher.test; used as the oracle for fisher_or_ci."""
+    n1, n2, m1 = a + b, c + d, a + c
+    lo, hi = max(0, m1 - n2), min(n1, m1)
+    ks = np.arange(lo, hi + 1)
+    logw = (gammaln(n1 + 1) - gammaln(ks + 1) - gammaln(n1 - ks + 1)
+            + gammaln(n2 + 1) - gammaln(m1 - ks + 1) - gammaln(n2 - m1 + ks + 1))
+
+    def probs(psi):
+        lp = logw + ks * np.log(psi)
+        lp -= lp.max()
+        pr = np.exp(lp)
+        return pr / pr.sum()
+
+    def mean(psi):
+        return float((ks * probs(psi)).sum())
+
+    def solve(f, target):
+        return brentq(lambda x: f(np.exp(x)) - target, np.log(1e-9), np.log(1e9), xtol=1e-12)
+
+    mle = 0.0 if a == lo else (np.inf if a == hi else np.exp(solve(mean, a)))
+    ci_low = 0.0 if a == lo else np.exp(solve(lambda psi: float(probs(psi)[ks >= a].sum()), alpha / 2))
+    ci_high = np.inf if a == hi else np.exp(solve(lambda psi: float(probs(psi)[ks <= a].sum()), alpha / 2))
+    return mle, ci_low, ci_high
 
 
 def make_bed(path, rows):
@@ -113,7 +148,7 @@ def test_T6_panel_a_oracle(synthetic):
     assert pa.loc[pa.row == 'TRANS', 'n_row'].iloc[0] == sig.loc[sig.region == 'TRANS', 'mt_id'].nunique()
     assert pa.loc[pa.row == 'ALL', 'n_row'].iloc[0] == 30
     assert list(pa['row'].unique()) == ['ALL', 'GENEBODY', 'CIS5', 'TRANS']
-    assert set(pa.columns) == {'panel', 'row', 'cis', 'feature', 'n_row', 'a', 'b', 'c', 'd'}
+    assert set(pa.columns) == {'panel', 'row', 'cis', 'feature', 'n_row', 'a', 'b', 'c', 'd'} | STAT_COLS
     assert pa.loc[pa.row.isin(['GENEBODY', 'CIS5']), 'cis'].eq(1).all() and pa.loc[pa.row == 'TRANS', 'cis'].eq(0).all()
 
 
@@ -155,6 +190,70 @@ def test_T9_coordinate_drop_site(synthetic, caplog):
     ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
     assert len(ids) == 202 and n_no == 2 and len(universe) == 200
     assert any('Drop site chromatin_enrichment.universe[coords]: 2 of 202' in m for m in caplog.messages)
+
+
+# -------------------------------------------------------------------- T10
+@pytest.mark.parametrize('table', [(1200, 33318, 16000, 371498), (12, 30, 40, 200), (5, 5, 5, 5),
+                                   (0, 20, 10, 100), (7, 0, 3, 50), (2, 1, 1, 2)])
+def test_T10_or_ci_p_oracle(table):
+    a, b, c, d = table
+    got = ce.fisher_or_ci(a, b, c, d)
+    mle, lo, hi = cond_mle_or(a, b, c, d)
+    p_ref = fisher_exact([[a, b], [c, d]])[1]
+    if np.isinf(mle):
+        assert np.isinf(got['odds_ratio'])
+    else:
+        assert np.isclose(np.log(max(got['odds_ratio'], 1e-300)), np.log(max(mle, 1e-300)), atol=1e-5, rtol=0)
+    assert np.isclose(np.log(max(got['ci_low'], 1e-300)), np.log(max(lo, 1e-300)), atol=1e-5, rtol=0)
+    if np.isinf(hi):
+        assert np.isinf(got['ci_high'])
+    else:
+        assert np.isclose(np.log(got['ci_high']), np.log(hi), atol=1e-5, rtol=0)
+    assert np.isclose(got['p'], p_ref, atol=1e-12, rtol=0)
+    assert np.isclose(got['sample_or'], (a * d) / (b * c), atol=1e-12, rtol=0) if b * c > 0 else True
+
+
+# -------------------------------------------------------------------- T11
+def test_T11_degenerate_cells():
+    z = ce.fisher_or_ci(0, 20, 10, 100)
+    assert z['odds_ratio'] == 0.0 and z['ci_low'] == 0.0 and np.isfinite(z['ci_high']) and z['degenerate'] == 1
+    z = ce.fisher_or_ci(7, 0, 3, 50)
+    assert np.isinf(z['odds_ratio']) and np.isinf(z['ci_high']) and z['degenerate'] == 1
+    assert ce.fisher_or_ci(5, 5, 5, 5)['degenerate'] == 0
+    z = ce.fisher_or_ci(0, 10, 0, 100)   # feature never overlaps the universe: undefined
+    assert np.isnan(z['odds_ratio']) and np.isnan(z['sample_or']) and z['degenerate'] == 1 and z['p'] == 1.0
+
+
+# -------------------------------------------------------------------- T12
+def test_T12_bh_family_per_panel(synthetic):
+    from statsmodels.stats.multitest import multipletests
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    assert np.allclose(pa['q_bh'], multipletests(pa['p'], method='fdr_bh')[1], atol=1e-12, rtol=0)
+    assert np.allclose(pb['q_bh'], multipletests(pb['p'], method='fdr_bh')[1], atol=1e-12, rtol=0)
+    # independence: a frame's q comes from its own p-vector, not a pooled one
+    fa = ce.add_bh_within_panel(pd.DataFrame({'p': [0.001, 0.02, 0.5]}))
+    assert np.allclose(fa['q_bh'], multipletests([0.001, 0.02, 0.5], method='fdr_bh')[1])
+    pooled = multipletests([0.001, 0.02, 0.5, 0.04, 0.9, 0.001, 0.002, 0.003], method='fdr_bh')[1]
+    assert not np.allclose(pooled[:3], fa['q_bh'])
+
+
+# -------------------------------------------------------------------- T13
+def test_T13_fingerprint(synthetic, tmp_path):
+    out = tmp_path / 'out'
+    r = _cli(synthetic, out, ['--expect-n-universe', '202'])
+    assert r.returncode == 0, r.stderr
+    m = json.load(open(out / 'chromatin_enrichment_metrics.json'))
+    got = dict(n_universe=m['n_universe'], n_universe_no_coords=m['n_universe_no_coords'],
+               n_sig_pairs=m['n_sig_pairs'], n_sig_cpgs=m['n_sig_cpgs'], panel_a=m['panel_a'], panel_b=m['panel_b'])
+    expected = json.load(open(FINGERPRINT))
+    assert got == expected
+    # float columns in the TSVs: present, finite where not degenerate
+    pa = pd.read_csv(out / 'chromatin_enrichment_panelA.tsv', sep='\t')
+    pb = pd.read_csv(out / 'chromatin_enrichment_panelB.tsv', sep='\t')
+    assert STAT_COLS <= set(pa.columns) and STAT_COLS <= set(pb.columns)
+    nd = pa[pa['degenerate'] == 0]
+    assert np.isfinite(nd[['odds_ratio', 'ci_low', 'ci_high', 'p', 'q_bh']].to_numpy()).all()
+    assert ((pa['p'] >= 0) & (pa['p'] <= 1)).all() and ((pa['q_bh'] >= pa['p'] - 1e-12)).all()
 
 
 # ------------------------------------------------------------- guards, CLI
