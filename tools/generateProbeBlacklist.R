@@ -41,6 +41,31 @@ if (!array_type %in% c("450k", "epic", "both")) {
 }
 cat("Array scope:", array_type, "\n")
 
+if (any(args == "--selftest")) {
+  # Exercise the reason-labelling and CSV-writing path with synthetic input,
+  # without touching ExperimentHub or the annotation packages. Confirms the R
+  # environment and the output contract in seconds, before the real slow run.
+  snp_probes <- c("cg01", "cg02"); crosshyb_probes <- c("cg02", "cg03")
+  xy_probes <- c("cg03", "cg04")
+  all_probes <- unique(c(snp_probes, crosshyb_probes, xy_probes))
+  in_snp <- all_probes %in% snp_probes
+  in_ch  <- all_probes %in% crosshyb_probes
+  in_xy  <- all_probes %in% xy_probes
+  reason <- paste(ifelse(in_snp, "SNP", ""), ifelse(in_ch, "CROSSREACTIVE", ""),
+                  ifelse(in_xy, "SEXCHROM", ""), sep = ";")
+  reason <- gsub("^;+|;+$", "", gsub(";{2,}", ";", reason))
+  out <- data.frame(Probe_ID = all_probes, Reason = reason, stringsAsFactors = FALSE)
+  out <- out[order(out$Probe_ID), ]
+  write.csv(out, out_file, row.names = FALSE)
+  stopifnot(nrow(out) == 4,
+            !any(out$Reason == ""),
+            names(out)[1] == "Probe_ID",
+            out$Reason[out$Probe_ID == "cg02"] == "SNP;CROSSREACTIVE",
+            out$Reason[out$Probe_ID == "cg03"] == "CROSSREACTIVE;SEXCHROM")
+  cat("SELFTEST PASS: reason logic and CSV contract OK ->", out_file, "\n")
+  quit(status = 0)
+}
+
 # ---- 1. array manifest, used only to scope the result ----------------------
 manifest_probes <- function(which_array) {
   if (which_array == "450k") {
@@ -89,12 +114,24 @@ cat(" - sex chromosome :", length(xy_probes), "\n")
 # A probe may qualify under several criteria; keep every reason, joined by ';',
 # so the list stays one row per probe while remaining decomposable.
 all_probes <- unique(c(snp_probes, crosshyb_probes, xy_probes))
-reason <- vapply(all_probes, function(p) {
-  r <- c(if (p %in% snp_probes) "SNP",
-         if (p %in% crosshyb_probes) "CROSSREACTIVE",
-         if (p %in% xy_probes) "SEXCHROM")
-  paste(r, collapse = ";")
-}, character(1), USE.NAMES = FALSE)
+
+# Vectorised membership: three hashed `%in%` calls over the whole vector.
+# Do NOT rewrite this as a per-probe loop. `p %in% vec` inside vapply is a
+# linear scan per probe: at real list sizes (~82k probes against ~94k list
+# entries) that is ~7.7 billion comparisons and the script appears to hang.
+in_snp <- all_probes %in% snp_probes
+in_ch  <- all_probes %in% crosshyb_probes
+in_xy  <- all_probes %in% xy_probes
+
+reason <- paste(ifelse(in_snp, "SNP", ""),
+                ifelse(in_ch,  "CROSSREACTIVE", ""),
+                ifelse(in_xy,  "SEXCHROM", ""),
+                sep = ";")
+reason <- gsub("^;+|;+$", "", gsub(";{2,}", ";", reason))
+
+if (any(reason == "")) {
+  stop("Internal error: probe(s) with no exclusion reason; set logic is wrong.")
+}
 
 # Probe_ID MUST remain the FIRST column: tools/exclude_blacklisted_probes.py
 # reads the blacklist by position (iloc[:, 0]).

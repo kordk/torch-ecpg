@@ -27,5 +27,12 @@ fi
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 RSCRIPT_PATH="$DIR/generateProbeBlacklist.R"
 
+# The R script writes to its working directory, so the output dir must exist.
+# Create it rather than failing with a bare `cd` error.
+mkdir -p "$OUT_DIR" || { echo "Error: cannot create output dir '$OUT_DIR'"; exit 1; }
+
 # Run in the output directory so the file is written there.
-(cd "$OUT_DIR" && Rscript "$RSCRIPT_PATH" --array="$ARRAY" --out="$OUT_FILE")
+EXTRA=""
+[ "${SELFTEST:-0}" == "1" ] && EXTRA="--selftest"
+
+(cd "$OUT_DIR" && Rscript "$RSCRIPT_PATH" --array="$ARRAY" --out="$OUT_FILE" $EXTRA)
