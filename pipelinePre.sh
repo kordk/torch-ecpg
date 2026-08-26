@@ -8,6 +8,25 @@ log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# Move a staging directory's contents into place, then remove it.
+# 'mv dir/*' skips dotfiles, and a bare 'rmdir' aborts the whole run under
+# 'set -e' -- letting a cleanup step destroy a completed download. Move
+# dotfiles too, and never let the cleanup itself be fatal.
+drain_staging_dir() {
+    local src="$1" dst="$2"
+    [ -d "$src" ] || return 0
+    shopt -s dotglob nullglob
+    local entries=("$src"/*)
+    shopt -u dotglob nullglob
+    if [ ${#entries[@]} -gt 0 ]; then
+        mv "${entries[@]}" "$dst/"
+    fi
+    if ! rmdir "$src" 2>/dev/null; then
+        log "Warning: '$src' not empty after moving its contents; leaving it in place."
+        ls -A "$src" | sed 's/^/           leftover: /'
+    fi
+}
+
 # Default settings
 DATASET="dummy"
 
@@ -81,6 +100,15 @@ DATA_DIR="data_${DATASET}"
 ANNOT_DIR="annot_${DATASET}"
 mkdir -p "$OUT_DIR" "$DATA_DIR" "$ANNOT_DIR"
 
+# Staging directories for `tecpg data <ds>`, which writes to --input-dir /
+# --annot-dir and CLEARS them first (helper.initialize_dir rmtree's the target).
+# These must be per-dataset: the tecpg default is a shared ./data, so a GTP and
+# a MESA run in the same working directory overwrite each other's staging area
+# and one run's cleanup deletes or trips over the other's files. They are
+# scratch -- never point these at DATA_DIR, which initialize_dir would wipe.
+STAGE_DIR="data_stage_${DATASET}"
+STAGE_ANNOT_DIR="annot_stage_${DATASET}"
+
 # Covariate file threaded through preprocessing. Each stage that modifies
 # covariates writes a NEW file rather than overwriting its input, and this
 # resolver picks the most advanced one present. Resolving by file existence
@@ -140,15 +168,14 @@ else
     if [ "$DATASET" == "dummy" ]; then
         # Generate small synthetic data for testing
         log "Generating synthetic dummy data..."
-        echo "10" | python3 -m tecpg data dummy -s 100 -m 20 -g 20
-        mv data/* "$DATA_DIR/"
-        mv annot/* "$ANNOT_DIR/"
-        rmdir data annot
+        echo "10" | python3 -m tecpg -i "$STAGE_DIR" -a "$STAGE_ANNOT_DIR" data dummy -s 100 -m 20 -g 20
+        drain_staging_dir "$STAGE_DIR" "$DATA_DIR"
+        drain_staging_dir "$STAGE_ANNOT_DIR" "$ANNOT_DIR"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
     elif [ "$DATASET" == "gtp" ] || [ "$DATASET" == "gtpsub" ]; then
         log "Downloading GTP data..."
-        echo "y" | python3 -m tecpg data gtp --yes
-        mv data/* "$DATA_DIR/"
+        echo "y" | python3 -m tecpg -i "$STAGE_DIR" data gtp --yes
+        drain_staging_dir "$STAGE_DIR" "$DATA_DIR"
 
         if [ "$DATASET" == "gtpsub" ]; then
             log "Subsampling gtpsub loci..."
@@ -170,11 +197,10 @@ else
         else
             cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6"
         fi
-        rmdir data
     elif [ "$DATASET" == "mesa" ]; then
         log "Downloading MESA data..."
-        echo "y" | python3 -m tecpg data mesa
-        mv data/* "$DATA_DIR/"
+        echo "y" | python3 -m tecpg -i "$STAGE_DIR" data mesa
+        drain_staging_dir "$STAGE_DIR" "$DATA_DIR"
         mv "$DATA_DIR/C.csv" "$DATA_DIR/C_orig.csv"
         # For MESA, assuming appropriate demo annots are used if available
         # Or fall back to EPIC/HT12 for now
@@ -189,7 +215,6 @@ else
         else
             cp demo/annoHT12.hg19.bed6 "$ANNOT_DIR/G.bed6" 2>/dev/null || true
         fi
-        rmdir data
     fi
 fi
 
