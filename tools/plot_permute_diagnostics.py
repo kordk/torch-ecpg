@@ -165,6 +165,10 @@ def load_run(d, label, df, require_precise):
         'u': None,
         'xi': None,
         'sweep': None,
+        'h': (frame['mt_h_max'].to_numpy(np.float64)
+              if 'mt_h_max' in frame.columns else None),
+        'mt_id': (frame['mt_id'].to_numpy()
+                  if 'mt_id' in frame.columns else None),
     }
 
     sc = os.path.join(d, SIDECAR_NAME)
@@ -394,6 +398,108 @@ def fig_ranking_recovery(runs, args, outdir):
     save(fig, outdir, 'ranking_recovery', args.formats)
 
 
+# --------------------------------------------------------------- figure 4
+def fig_leverage_enrichment(runs, args, outdir):
+    """Are the extreme statistics leverage-driven?
+
+    The permuted null is far heavier-tailed than a t-null predicts. Single-
+    sample leverage is a candidate mechanism: a high-leverage sample inflates
+    |t| regardless of how labels are assigned, which is exactly the structure
+    the t-distribution assumes away.
+
+    Note this cannot be posed as "does the p-ratio vary with leverage" --
+    perm_mt_p is a function of |t| alone through the pooled null, so at fixed
+    |t| the ratio is fixed. The well-posed question is whether the pairs that
+    reach extreme |t| are themselves enriched for high-leverage CpGs.
+    """
+    usable = [r for r in runs if r.get('h') is not None]
+    if not usable:
+        print("  leverage_enrichment: no run carries mt_h_max; skipped "
+              "(join it from the mainline catalog, or map with --compute-influence)")
+        return
+
+    ladder = [t for t in (4, 5, 6, 8, 10, 15, 20, 30, 50)]
+    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.6))
+    axL, axR = axes
+
+    for run in usable:
+        h = run['h']
+        t = run['t']
+        ok = np.isfinite(h) & np.isfinite(t)
+        ids = run.get('mt_id')
+        ids = ids[ok] if ids is not None else None
+        h, t = h[ok], t[ok]
+        if h.size == 0:
+            continue
+        cut = float(np.quantile(h, 1.0 - args.leverage_top_frac))
+        base = float((h >= cut).mean())          # == leverage_top_frac by construction
+        floor = float(h.min())
+
+        # CpG-level baseline: pairs sharing a CpG are not independent, so the
+        # pair-level rate over-weights prolific CpGs. Recompute over distinct
+        # CpGs as a robustness overlay.
+        cpg_base = None
+        if ids is not None:
+            uid, first = np.unique(ids, return_index=True)
+            cpg_base = float((h[first] >= cut).mean())
+
+        xs, enr, meds, enr_cpg = [], [], [], []
+        for thr in ladder:
+            m = t >= thr
+            n = int(m.sum())
+            if n < args.min_bin_n:
+                continue
+            xs.append(thr)
+            enr.append(float((h[m] >= cut).mean()) / base if base > 0 else np.nan)
+            meds.append(float(np.median(h[m])))
+            if cpg_base:
+                sid, sfirst = np.unique(ids[m], return_index=True)
+                hm = h[m]
+                enr_cpg.append(float((hm[sfirst] >= cut).mean()) / cpg_base)
+
+        if not xs:
+            continue
+        c = run['colour']
+        axL.plot(xs, enr, 'o-', color=c, lw=2.0, ms=6, label=run['label'])
+        if enr_cpg:
+            axL.plot(xs, enr_cpg, 'o--', color=c, lw=1.4, ms=5,
+                     mfc='white', alpha=0.85,
+                     label='{} (distinct CpGs)'.format(run['label']))
+        axR.plot(xs, meds, 'o-', color=c, lw=2.0, ms=6, label=run['label'])
+        axR.axhline(float(np.median(h)), color=c, ls=':', lw=1.2, alpha=0.7)
+        axR.axhline(floor, color=c, ls='--', lw=1.0, alpha=0.45)
+        print("    {}: leverage top-{:.0%} cutoff h={:.4f}, catalog median "
+              "h={:.4f}, floor h={:.4f}".format(
+                  run['label'], args.leverage_top_frac, cut,
+                  float(np.median(h)), floor))
+
+    axL.axhline(1.0, color='k', lw=1.0, alpha=0.6)
+    for _ax in (axL, axR):
+        _ax.set_xscale('log')
+        _ax.set_xticks(ladder)
+        _ax.set_xticklabels([str(v) for v in ladder])
+        _ax.minorticks_off()
+    axL.set_xlabel('|t| threshold')
+    axL.set_ylabel('enrichment for top-{:.0%} leverage CpGs'.format(
+        args.leverage_top_frac))
+    axL.set_title('Enrichment among extreme statistics')
+    axL.legend(loc='best')
+
+    axR.set_xlabel('|t| threshold')
+    axR.set_ylabel('median $h_{\\max}$ of pairs above threshold')
+    axR.set_title('Leverage of the pairs above each threshold')
+    axR.legend(loc='best')
+
+    fig.suptitle('Is the heavy tail leverage-driven?', fontsize=13)
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    fig.text(0.005, -0.045,
+             'Left: 1.0 means no enrichment. Right: dotted = catalog median, '
+             'dashed = observed minimum (the covariate-only leverage floor).   '
+             'Left, open markers: recomputed over distinct CpGs, since pairs '
+             'sharing a CpG are not independent.',
+             fontsize=8, color=GREY, ha='left')
+    save(fig, outdir, 'leverage_enrichment', args.formats)
+
 # --------------------------------------------------------------------- main
 def main(argv=None):
     ap = argparse.ArgumentParser(
@@ -415,6 +521,10 @@ def main(argv=None):
     ap.add_argument('--bin-step', type=float, default=0.25)
     ap.add_argument('--min-bin-n', type=int, default=30,
                     help='bins with fewer pairs are dropped (default: 30)')
+    ap.add_argument('--leverage-top-frac', type=float, default=0.10,
+                    help='fraction of the catalog defining "high leverage", '
+                         'taken from each run own mt_h_max distribution '
+                         '(default: 0.10)')
     ap.add_argument('--min-recovery-n', type=int, default=500,
                     help='minimum pairs with analytic p == 0 for the '
                          'ranking_recovery panel to be drawn (default: 500). '
@@ -425,7 +535,7 @@ def main(argv=None):
                          'the tail comparison will truncate')
     ap.add_argument('--only', default=None,
                     help='comma-separated subset of: tail_divergence,'
-                         'xi_convergence,ranking_recovery')
+                         'xi_convergence,ranking_recovery,leverage_enrichment')
     args = ap.parse_args(argv)
     args.formats = [f.strip() for f in args.formats.split(',') if f.strip()]
 
@@ -456,7 +566,8 @@ def main(argv=None):
         print("\n--bin-max not given; using {:.2f}".format(args.bin_max))
 
     want = ({s.strip() for s in args.only.split(',')} if args.only else
-            {'tail_divergence', 'xi_convergence', 'ranking_recovery'})
+            {'tail_divergence', 'xi_convergence', 'ranking_recovery',
+             'leverage_enrichment'})
 
     print("\nfigures:")
     if 'tail_divergence' in want:
@@ -465,6 +576,8 @@ def main(argv=None):
         fig_xi_convergence(runs, args, args.outdir)
     if 'ranking_recovery' in want:
         fig_ranking_recovery(runs, args, args.outdir)
+    if 'leverage_enrichment' in want:
+        fig_leverage_enrichment(runs, args, args.outdir)
     print("\nDone. PDF output is vector; prefer it for print.")
 
 
