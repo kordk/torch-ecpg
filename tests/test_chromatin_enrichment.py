@@ -118,7 +118,8 @@ def _run(synthetic):
     ids = ce.load_universe_ids(synthetic['m'])
     universe, n_no = ce.build_universe(ids, ce.load_cpg_bed(synthetic['bed']))
     sig = ce.load_significant_pairs(synthetic['cat'], 'fdr_est', 0.05)
-    ce.check_universe_contract(sig, universe)
+    ce.check_universe_contract(sig, ids)
+    sig, _, _ = ce.drop_unmappable_pairs(sig, universe)
     ov = ce.annotate_overlaps(universe, tracks)
     return ids, universe, n_no, sig, ov, ce.build_panel_a(sig, universe, ov), ce.build_panel_b(sig, universe, ov)
 
@@ -175,7 +176,7 @@ def test_T8_universe_contract(synthetic, tmp_path):
     ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
     sig2 = pd.concat([sig, pd.DataFrame([dict(mt_id='cg_alien', gt_id='ILMN_x', region='TRANS')])], ignore_index=True)
     with pytest.raises(ce.UniverseContractError) as ei:
-        ce.check_universe_contract(sig2, universe)
+        ce.check_universe_contract(sig2, ids)
     assert 'cg_alien' in str(ei.value)
     # CLI: a catalog carrying a CpG outside the universe exits 2
     cat2 = tmp_path / 'alien.parquet'
@@ -183,6 +184,52 @@ def test_T8_universe_contract(synthetic, tmp_path):
     pd.concat([df, pd.DataFrame([dict(mt_id='cg_alien', gt_id='ILMN_x', region='TRANS', fdr_est=0.001, mt_p=1e-13)])]).to_parquet(cat2, index=False)
     r = _cli(dict(synthetic, cat=cat2), tmp_path / 'o8')
     assert r.returncode == 2 and 'cg_alien' in r.stderr
+
+
+def test_T8b_tested_but_unmappable_is_a_drop_site_not_a_violation(synthetic, tmp_path, caplog):
+    """A significant CpG that is in the M matrix but has no coordinates (an rs
+    control probe on the 450K/EPIC arrays) is excluded from both panels with a
+    logged, counted drop site. It is NOT a contract violation, and it must not
+    reach build_panel_b, where a missing overlap row would cast to True."""
+    caplog.set_level(logging.INFO)
+    cat2 = tmp_path / 'with_unmappable.parquet'
+    df = pd.read_parquet(synthetic['cat'])
+    extra = pd.DataFrame([dict(mt_id='cg_nocoord_a', gt_id='ILMN_u1', region='TRANS', fdr_est=0.001, mt_p=1e-13),
+                          dict(mt_id='cg_nocoord_a', gt_id='ILMN_u2', region='CIS5', fdr_est=0.001, mt_p=1e-13)])
+    pd.concat([df, extra]).to_parquet(cat2, index=False)
+    # library level
+    tracks, _ = cf.load_tracks(synthetic['man'], 'hg19')
+    ids = ce.load_universe_ids(synthetic['m'])
+    universe, n_no = ce.build_universe(ids, ce.load_cpg_bed(synthetic['bed']))
+    sig = ce.load_significant_pairs(cat2, 'fdr_est', 0.05)
+    assert len(sig) == 35
+    ce.check_universe_contract(sig, ids)          # cg_nocoord_a IS in M.csv: no error
+    sig2, n_cpgs, n_pairs = ce.drop_unmappable_pairs(sig, universe)
+    assert (n_cpgs, n_pairs, len(sig2)) == (1, 2, 33)
+    assert any('Drop site chromatin_enrichment.pairs[coords]: 1 significant CpG(s) / 2 pair(s)' in m for m in caplog.messages)
+    ov = ce.annotate_overlaps(universe, tracks)
+    pb = ce.build_panel_b(sig2, universe, ov)
+    assert (pb['a'] + pb['b'] + pb['c'] + pb['d'] == 33).all()
+    # the un-dropped frame is refused by build_panel_b rather than miscounted
+    with pytest.raises(ce.UniverseContractError):
+        ce.build_panel_b(sig, universe, ov)
+    # CLI level: exit 0, counts in metrics, integer tables identical to the fingerprint run
+    out = tmp_path / 'o8b'
+    r = _cli(dict(synthetic, cat=cat2), out, ['--expect-n-universe', '202'])
+    assert r.returncode == 0, r.stderr
+    m = json.load(open(out / 'chromatin_enrichment_metrics.json'))
+    assert (m['n_sig_cpgs_no_coords'], m['n_sig_pairs_no_coords'], m['n_sig_pairs'], m['n_sig_cpgs']) == (1, 2, 33, 30)
+    assert m['panel_a'] == json.load(open(FINGERPRINT))['panel_a'] and m['panel_b'] == json.load(open(FINGERPRINT))['panel_b']
+
+
+def test_T9b_non_numeric_bed_start_is_a_drop_site(synthetic, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    bed2 = tmp_path / 'M_with_na.bed6'
+    bed2.write_text(synthetic['bed'].read_text() + 'chr1\tNA\tNA\tcg_nocoord_a\t0\t+\nchr7\t.\t.\tcg_nocoord_b\t0\t+\n')
+    cpg = ce.load_cpg_bed(bed2)
+    assert 'cg_nocoord_a' not in cpg.index and 'cg_nocoord_b' not in cpg.index and len(cpg) == 200
+    assert str(cpg['start'].dtype) == 'int64'
+    assert any('Drop site chromatin_enrichment.cpg_bed[start]: excluded 2 of 202' in m for m in caplog.messages)
 
 
 # -------------------------------------------------------------------- T9
