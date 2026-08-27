@@ -311,16 +311,20 @@ def test_T14_figure_smoke(synthetic, tmp_path):
     assert r.returncode == 0, r.stderr
     png = out / 'chromatin_enrichment_fig6.png'
     assert png.exists() and png.stat().st_size > 0
+    for k in ('A', 'B'):
+        single = out / f'chromatin_enrichment_fig6_panel{k}.png'
+        assert single.exists() and single.stat().st_size > 0
     assert 'figure written' in r.stderr and 'colour by p < 0.05' in r.stderr
+    assert 'chromatin_enrichment_fig6_panelA.png' in r.stderr and 'chromatin_enrichment_fig6_panelB.png' in r.stderr
     # shape: rows per panel and features come straight from the tables
     ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
     rows_a, rows_b, feats = ce.plot_fig6(pa, pb, str(tmp_path / 'direct.png'))
     assert rows_a == ['ALL', 'GENEBODY', 'CIS5', 'TRANS'] and rows_b == ['GENEBODY', 'CIS5', 'TRANS']
     assert feats == list(dict.fromkeys(pa['feature'])) and len(feats) == 8
-    # a run without --plot writes no figure
+    # a run without --plot writes no figure, combined or single
     out2 = tmp_path / 'out2'
     r2 = _cli(synthetic, out2)
-    assert r2.returncode == 0 and not (out2 / 'chromatin_enrichment_fig6.png').exists()
+    assert r2.returncode == 0 and not any(out2.glob('chromatin_enrichment_fig6*.png'))
     # --color-by q_bh and --alpha are accepted and echoed
     r3 = _cli(synthetic, tmp_path / 'out3', ['--plot', '--color-by', 'q_bh', '--alpha', '0.1'])
     assert r3.returncode == 0 and 'colour by q_bh < 0.1' in r3.stderr and 'OR scale 0.1-10' in r3.stderr
@@ -344,7 +348,7 @@ def test_T14b_figure_content_markers(synthetic, tmp_path, monkeypatch):
     real_savefig = plt.Figure.savefig
 
     def spy(self, *a, **k):
-        captured['fig'] = self
+        captured.setdefault('fig', self)          # the combined figure is saved first
         return real_savefig(self, *a, **k)
     monkeypatch.setattr(plt.Figure, 'savefig', spy)
     real_close = plt.close
@@ -382,6 +386,41 @@ def test_T14c_colour_scale_is_log_or_clipped_and_masked():
     # cell labels: no scientific notation, n/a and inf spelled out
     assert [ce.or_text(v) for v in (np.nan, np.inf, 0.0, 0.25, 2.0, 9.96, 10.0, 120.4, 1234.0)] == \
         ['n/a', 'inf', '0', '0.25', '2', '10', '10', '120', '1234']
+
+
+def test_T14d_single_panel_figures(synthetic, tmp_path, monkeypatch):
+    """Each panel on its own: same rows/features as in the combined figure,
+    one panel axis plus one colourbar axis, one text per cell, and the
+    sibling-file naming derived from the combined path."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    ids, universe, n_no, sig, ov, pa, pb = _run(synthetic)
+    captured = []
+    real_savefig = plt.Figure.savefig
+
+    def spy(self, path, *a, **k):
+        captured.append((os.path.basename(str(path)), self))
+        return real_savefig(self, path, *a, **k)
+    monkeypatch.setattr(plt.Figure, 'savefig', spy)
+    real_close = plt.close
+    monkeypatch.setattr(plt, 'close', lambda *a, **k: None)
+    try:
+        (tmp_path / 'x').mkdir()
+        rows_a, rows_b, feats = ce.plot_fig6(pa, pb, str(tmp_path / 'x' / 'fig6.png'))
+        names = [n for n, _ in captured]
+        assert names == ['fig6.png', 'fig6_panelA.png', 'fig6_panelB.png']
+        for (name, fig), df, rows in ((captured[1], pa, rows_a), (captured[2], pb, rows_b)):
+            assert len(fig.axes) == 2                                   # panel + colourbar
+            ax = fig.axes[0]
+            assert [t.get_text() for t in ax.get_yticklabels()] == [f"{r} ({int(df.drop_duplicates('row').set_index('row').loc[r, 'n_row'])})" for r in rows]
+            assert [t.get_text() for t in ax.get_xticklabels()] == feats
+            assert len(ax.texts) == len(rows) * len(feats)
+        # direct single-panel call returns the same shape
+        rows, f2 = ce.plot_panel(pb, 'B', str(tmp_path / 'b.png'))
+        assert rows == rows_b and f2 == feats
+    finally:
+        real_close('all')
 
 
 # ------------------------------------------------------------- guards, CLI
