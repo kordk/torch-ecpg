@@ -27,7 +27,6 @@ This README is split into two parts:
 
 **Part A — Core `tecpg` tool**
 
-* [Docker Image](#docker-image)
 * [Installation](#installation)
 * [CUDA](#cuda)
 * [Input data](#input-data)
@@ -50,15 +49,6 @@ This README is split into two parts:
 # Part A — Core `tecpg` tool
 
 The sections below document the `tecpg` command-line tool and library on their own, independent of any particular dataset.
-
-## Docker Image
-
-A docker image is now available for the Torch-eCpG (tecpg) tool to perform eQTM mapping analysis. The docker image provides a pre-configured environment for running tecpg.
-
-The image can be created from the instructions in the docker-related/ directory.
-
-Alternatively, a full image is available for download from docker hub:
-https://hub.docker.com/r/kordk/torch-ecpg
 
 ## Installation
 
