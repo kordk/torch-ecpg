@@ -20,6 +20,7 @@ Usage:
 """
 import argparse
 import base64
+import fnmatch
 import io
 import os
 import sys
@@ -384,7 +385,31 @@ def mod_drivers(df):
                     figure_b64=fig, figure_alt='implied spread distribution')
 
 
-def mod_share(df, ig_cols):
+def _share_series(df, ig_cols, exclude_patterns):
+    """Methylation share of attribution with an optional exclude set removed
+    from the denominator. Returns (share_series, kept_cols, excluded_cols)."""
+    excluded = []
+    if exclude_patterns:
+        excluded = sorted(
+            c for c in ig_cols
+            if c != 'mt_ig'
+            and any(fnmatch.fnmatch(c, pat) for pat in exclude_patterns))
+    kept = [c for c in ig_cols if c not in excluded]
+    w = df.dropna(subset=['mt_ig'])
+    denom = w[kept].abs().sum(axis=1)
+    share = (w['mt_ig'].abs() / denom).replace([np.inf, -np.inf], np.nan).dropna()
+    return share, kept, excluded
+
+
+def _share_stats(share):
+    q = share.quantile([0.05, 0.5, 0.95])
+    return {'n': len(share), 'median': float(q[0.5]),
+            'p05': float(q[0.05]), 'p95': float(q[0.95]),
+            'under10': float((share < 0.10).mean()),
+            'over50': float((share > 0.50).mean())}
+
+
+def mod_share(df, ig_cols, frac_exclude=None):
     purpose = (
         '<strong>Question: of everything driving a prediction, how much is '
         'attributed to methylation rather than to the covariates?</strong> '
@@ -395,54 +420,96 @@ def mod_share(df, ig_cols):
                              purpose,
                              'the catalog carries only the scalar mt_ig, with '
                              'no per-feature covariate attributions')
-    w = df.dropna(subset=['mt_ig']).copy()
-    denom = w[ig_cols].abs().sum(axis=1)
-    share = (w['mt_ig'].abs() / denom).replace([np.inf, -np.inf], np.nan)
-    share = share.dropna()
-    if share.empty:
+    raw, _, _ = _share_series(df, ig_cols, None)
+    if raw.empty:
         return not_evaluated('share', 'Methylation share of attribution',
                              purpose, 'the attribution total is zero for every '
                                       'row')
-    q = share.quantile([0.05, 0.25, 0.5, 0.75, 0.95])
-    rows = [['Pairs with a computable share', fmt_int(len(share))],
-            ['Median methylation share', fmt(q[0.5], pct=True)],
-            ['5th - 95th percentile',
-             f'{fmt(q[0.05], pct=True)} - {fmt(q[0.95], pct=True)}'],
-            ['Pairs where methylation carries under 10%',
-             fmt((share < 0.10).mean(), pct=True)],
-            ['Pairs where methylation carries over 50%',
-             fmt((share > 0.50).mean(), pct=True)]]
+    exc, kept, excluded = _share_series(df, ig_cols, frac_exclude)
+    two = bool(excluded)  # a second column only if the patterns matched something
+
+    r = _share_stats(raw)
+    header = ['Quantity', 'All *_ig in denominator']
+    def col(stats):
+        return [fmt_int(stats['n']),
+                fmt(stats['median'], pct=True),
+                f"{fmt(stats['p05'], pct=True)} - {fmt(stats['p95'], pct=True)}",
+                fmt(stats['under10'], pct=True),
+                fmt(stats['over50'], pct=True)]
+    labels = ['Pairs with a computable share', 'Median methylation share',
+              '5th - 95th percentile', 'Pairs where methylation carries under 10%',
+              'Pairs where methylation carries over 50%']
+    if two:
+        e = _share_stats(exc)
+        header.append('Expression-derived *_ig excluded')
+        cr, ce = col(r), col(e)
+        rows = [[labels[k], cr[k], ce[k]] for k in range(len(labels))]
+        align = ['left', 'right', 'right']
+    else:
+        cr = col(r)
+        rows = [[labels[k], cr[k]] for k in range(len(labels))]
+        align = ['left', 'right']
+
     fig = ''
     if HAVE_MPL:
         f, ax = plt.subplots(figsize=(6.4, 3.4), dpi=110)
-        ax.hist(share.to_numpy(), bins=60, color=COL_A)
-        ax.axvline(float(q[0.5]), color=COL_B, ls='--', lw=1,
-                   label=f'median {q[0.5] * 100:.1f}%')
+        ax.hist(raw.to_numpy(), bins=60, color=COL_A, alpha=(0.55 if two else 1.0),
+                label=('all *_ig' if two else None))
+        ax.axvline(r['median'], color=COL_A, ls='--', lw=1,
+                   label=f"median {r['median'] * 100:.1f}%")
+        if two:
+            ax.hist(exc.to_numpy(), bins=60, color=COL_B, alpha=0.55,
+                    label='Exp-derived excluded')
+            ax.axvline(e['median'], color=COL_B, ls='--', lw=1,
+                       label=f"median {e['median'] * 100:.1f}%")
         ax.set_xlabel('methylation share of total attribution')
         ax.set_ylabel('pairs')
         ax.legend(frameon=False, fontsize=9)
         ax.spines[['top', 'right']].set_visible(False)
         fig = fig_b64(f)
+
     bits = [
-        f'Across pairs the median methylation share is '
-        f'{q[0.5] * 100:.1f}%, with the middle 90% spanning '
-        f'{q[0.05] * 100:.1f}% to {q[0.95] * 100:.1f}%.']
+        f"Across pairs the median methylation share is {r['median'] * 100:.1f}%, "
+        f"with the middle 90% spanning {r['p05'] * 100:.1f}% to "
+        f"{r['p95'] * 100:.1f}% when every <code>*_ig</code> feature is in the "
+        f"denominator."]
     bits.append(
         'Read a low share as a warning about interpretation rather than about '
         'correctness: the association may be real, but the prediction for that '
         'pair is mostly carried by covariates, so describing it as a '
         'methylation-driven relationship overstates what the model is using.')
-    bits.append(
-        'One caution on the denominator. Expression principal components, if '
-        'they are among the covariates, are near-proxies for the outcome and '
-        'will absorb most of the attribution, pushing every methylation share '
-        'down. If those features are present, recompute the share with them '
-        'excluded (evaluateSaliency.py --frac-exclude) before comparing pairs.')
+    if two:
+        bits.append(
+            'Excluding ' + ', '.join(f'<code>{c}</code>' for c in excluded) +
+            f" from the denominator raises the median share to "
+            f"{e['median'] * 100:.1f}% (from {r['median'] * 100:.1f}%) and the "
+            f"over-50% fraction to {fmt(e['over50'], pct=True)} (from "
+            f"{fmt(r['over50'], pct=True)}). Expression principal components are "
+            'near-proxies for the outcome and absorb most of the attribution; '
+            'the excluded column is the share of methylation against the '
+            'remaining covariates, which is the comparison to read when asking '
+            'whether a pair is methylation- or covariate-driven. The two columns '
+            'are not directly comparable across different exclude sets, so state '
+            'which one a figure or claim uses.')
+    else:
+        bits.append(
+            'One caution on the denominator. Expression principal components, if '
+            'they are among the covariates, are near-proxies for the outcome and '
+            'will absorb most of the attribution, pushing every methylation share '
+            'down. Passing --frac-exclude (e.g. '
+            "<code>'Exp_PC*_ig'</code>) adds a second column here computed with "
+            'them removed; evaluateSaliency.py --frac-exclude produces the '
+            'matching figures.')
+        if frac_exclude:
+            bits.append(
+                'The supplied --frac-exclude patterns (' +
+                ', '.join(f'<code>{p}</code>' for p in frac_exclude) +
+                ') matched no <code>*_ig</code> columns, so only the '
+                'all-features share is shown.')
     return QCModule(anchor='share', title='Methylation share of attribution',
                     status='INFO', purpose=purpose,
                     interpretation=' '.join(bits),
-                    table_html=render_table(['Quantity', 'Value'], rows,
-                                            ['left', 'right']),
+                    table_html=render_table(header, rows, align),
                     figure_b64=fig, figure_alt='methylation share histogram')
 
 
@@ -616,6 +683,14 @@ def main():
                     help='parquet carrying mt_ig (e.g. bootstrap_merged.parquet)')
     ap.add_argument('--plots-dir', help='directory of evaluateSaliency.py PNGs')
     ap.add_argument('--top-csv', help='top50_by_mt_saliency.csv')
+    ap.add_argument('--frac-exclude', nargs='+', default=None,
+                    metavar='PATTERN',
+                    help="Glob patterns of *_ig feature columns to also "
+                         "exclude from the methylation-share denominator, "
+                         "e.g. 'Exp_PC*_ig'. When given, the share module "
+                         "reports the raw share and the excluded share side "
+                         "by side. Mirrors evaluateSaliency.py --frac-exclude; "
+                         "mt_ig is never excludable.")
     ap.add_argument('--out', required=True)
     args = ap.parse_args()
 
@@ -642,7 +717,7 @@ def main():
         mod_coverage(df, n_total, ig_cols, args.catalog),
         mod_redundancy(df),
         mod_drivers(df),
-        mod_share(df, ig_cols),
+        mod_share(df, ig_cols, args.frac_exclude),
         mod_region(df),
         mod_figures(args.plots_dir),
         mod_top(args.top_csv),
