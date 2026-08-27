@@ -2,7 +2,7 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev68**.
+The current development version on the `dev` branch is **2.0.0b2.dev77**.
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -16,6 +16,149 @@ changes. Each version section is organized into **Features**,
 **Improvements / Performance**, and **Bug Fixes** where applicable.
 
 ---
+
+## Unreleased (on 2.0.0b2.dev77)
+
+### Features
+- Add `tools/chromatin_features.py`, an interval index over the Kennedy
+  Fig. 6 chromatin tracks (PR #411).
+- Add `tools/chromatinEnrichment_parquet.py`, the Kennedy Fig. 6 enrichment
+  core (PR #412), with Fisher exact statistics (PR #413) and a `--plot`
+  two-panel heatmap (PR #414).
+- Add tools for evaluating the permutation results and for plotting the
+  permute diagnoses across GTP and MESA.
+- Add encoding for the MESA clinical data and an ancestry analysis.
+
+### Improvements / Performance
+- Colour the Fig. 6 heatmap cells by log odds ratio on a blue–white–burgundy
+  scale (PR #416).
+- Update `pipelinePre.sh` to include covariate PCs and ancestry inclusion, to
+  default to the 450k blacklist, to guard on the blacklist, and to support
+  concurrent GTP and MESA runs.
+- Refresh the probe blacklist generation and the permute diagnosis plots.
+
+### Bug Fixes
+- Fix the universe contract to check the M-matrix ids rather than the
+  coordinate-bearing universe (PR #415).
+
+## 2.0.0b2.dev77
+
+### Features
+- Add bootstrap confidence intervals and an equivalence verdict to the
+  per-region `delta_vs_trans` output (PR #410).
+- Persist the permute null accumulator as an `.npz` sidecar and read it back
+  during evaluation (PR #409).
+- Add the initial Integrated Gradients report generation script.
+- Add `tools/permute_qc_report.py` and wire it into `pipelinePermute.sh`.
+
+### Improvements / Performance
+- Bind map reuse to the probe BED and remove the retired gene-model code
+  (PR #408).
+- Regenerate the demo BEDs without fabricated probe positions (PR #407).
+- Extend the `tools/influence_qc_report.py` HTML report with more descriptive
+  information and reorder the `pipelinePost.sh` stages.
+- Expand the Kennedy benchmark with more overlap detail, an EPIC loci report
+  and report cleanup.
+- Update the probe blacklist filter and add an ancestry probe evaluation and
+  report.
+- Tune the M and G chunk sizes for the GTP run in `pipelinePermute.sh`.
+
+### Bug Fixes
+- Stop fabricating probe positions from multi-location evidence (PR #407).
+- Fail loudly on pre-gene-map annotations and update the gate text (PR #406).
+- Give the dummy dataset a synthetic probe-gene map (PR #405).
+
+## 2.0.0b2.dev76
+
+### Features
+- Add the influence-stratified Kennedy overlap: recovery-by-decile plus
+  low/high concordance (PR #398), along with supporting influence scripts and
+  figure improvements.
+- Add a region-composition crosswalk to Kennedy's four categories (PR #403).
+- Derive the probe-gene map from the GENCODE GTF (PR #400) and assign regions
+  from that map rather than from the probe footprint (PR #402).
+
+### Improvements / Performance
+- Default the MLR QR to `torch.linalg.qr` and gate the Householder
+  implementation behind `--qr-impl`, rewriting the QR wiring tests for the new
+  default (PR #404).
+
+### Bug Fixes
+- Revert region assignment to the probe BED (PR #399).
+
+### Documentation
+- Add detailed annotation documentation.
+
+## 2.0.0b2.dev75
+
+### Improvements / Performance
+- Use a batched Householder QR on CUDA while keeping the LAPACK `qr` on CPU,
+  guarded by equivalence and device-dispatch tests (PR #397).
+
+### Chores
+- Tolerate p-threshold boundary flips between fp32 geometries in the save
+  tests.
+
+## 2.0.0b2.dev74
+
+### Improvements / Performance
+- Build the `gt`/`mt` indices from the survivor index in the chunked save path
+  (PR #394), guarded against an unchunked oracle.
+
+### Chores
+- Calibrate the save-test value tolerance to fp32 GPU batch-shape divergence.
+
+## 2.0.0b2.dev73
+
+### Features
+- Add a standalone, import-safe gene-model BED deriver built on the standard
+  library (PR #389).
+- Derive the gene-model BED in `pipelinePre` and point region assignment at it
+  (PR #390).
+
+### Chores
+- Cover the `--compute-influence` region, chunked and reservoir paths and
+  isolate the deep Integrated Gradients test (PR #393).
+
+## 2.0.0b2.dev72
+
+### Features
+- Emit an ILMN-keyed gene-model BED from GENCODE via the Re-Annotator symbols
+  (PR #388).
+- Read gzipped annotation files transparently in `readAnnotationFileToDict`
+  (PR #386).
+
+### Improvements / Performance
+- Stamp the gpu/d2h/post profiling stages per chunk and hoist the D2H copy
+  ahead of the index build, with a test guarding the equivalence (PR #387).
+
+## 2.0.0b2.dev71
+
+### Features
+- Add a drop-if-ambiguous probe to gene-model resolver to `annotation_io`
+  (PR #383).
+- Add `tools/flagInfluence_parquet.py`, an influence flag and QC report over
+  `mt_h_max` (PR #384).
+
+## 2.0.0b2.dev70
+
+### Features
+- Add a drop-if-ambiguous symbol to gene-model resolver to `annotation_io`
+  (PR #381).
+
+### Chores
+- Enable `--compute-influence` on the QR mapping calls in the pipeline, adding
+  the `mt_h_max` column (PR #382).
+
+## 2.0.0b2.dev69
+
+### Features
+- Add `--compute-influence` to the MLR, emitting the per-CpG maximum leverage
+  as `mt_h_max` (PR #379).
+- Extract `readAnnotationFileToDict` into `tools/annotation_io.py` and capture
+  `gene_name` (PR #380).
+- Emit per-cell integer counts so every reported rate is reproducible from the
+  outputs (PR #377).
 
 ## 2.0.0b2.dev68
 
