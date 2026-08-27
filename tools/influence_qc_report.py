@@ -109,7 +109,25 @@ def fmt_int(v):
     return '-' if f is None else f'{int(f):,}'
 
 
-def fig_b64(fig):
+# Optional PNG/PDF sink, set by main() from --figures-dir. Figures are always
+# embedded in the HTML; when this is set they are additionally written as
+# standalone files for slides, manuscripts, or side-by-side run comparison.
+_FIG_DIR = None
+_FIG_WRITTEN = []
+
+
+def fig_b64(fig, name=None):
+    """Embed a figure as base64, and write standalone files when configured."""
+    if _FIG_DIR and name:
+        for ext in ('png', 'pdf'):
+            path = os.path.join(_FIG_DIR, f'{name}.{ext}')
+            try:
+                fig.savefig(path, dpi=200, bbox_inches='tight')
+                if ext == 'png':
+                    _FIG_WRITTEN.append(path)
+            except OSError as exc:
+                print(f'WARNING: could not write {path}: {exc}',
+                      file=sys.stderr)
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=110, bbox_inches='tight')
     plt.close(fig)
@@ -272,7 +290,7 @@ def mod_landscape(qc, note):
         ax.set_ylabel('leverage')
         ax.legend(frameon=False, fontsize=9)
         ax.spines[['top', 'right']].set_visible(False)
-        fig = fig_b64(f)
+        fig = fig_b64(f, 'influence_leverage_quantiles')
 
     status = 'INFO'
     bits = []
@@ -534,7 +552,7 @@ def mod_dose(bridge, note):
         ax.set_ylim(0, 108)
         ax.legend(frameon=False, fontsize=9, loc='upper left')
         ax.spines[['top', 'right']].set_visible(False)
-        fig = fig_b64(f)
+        fig = fig_b64(f, 'influence_dose_response')
     clean = [c for c in ci if c is not None]
     monotone = (len(clean) >= DOSE_MONOTONIC_MIN
                 and all(b >= a - 1e-9 for a, b in zip(clean, clean[1:])))
@@ -640,7 +658,7 @@ def mod_kennedy(ki, note):
             ax.set_xlabel('leverage decile (0 = lowest)')
             ax.set_ylabel('recovery of catalog-significant pairs (%)')
             ax.spines[['top', 'right']].set_visible(False)
-            fig = fig_b64(f)
+            fig = fig_b64(f, 'influence_kennedy_recovery')
     bits = []
     if dec:
         rec = [num(d.get('recovery')) for d in dec if num(d.get('recovery')) is not None]
@@ -862,6 +880,10 @@ def main():
     ap.add_argument('--flagged-parquet',
                     help='parquet carrying tecpg_influence_* metadata')
     ap.add_argument('--out', required=True)
+    ap.add_argument('--figures-dir',
+                    help='also write each computed figure as a standalone '
+                         'PNG and PDF here (default: a "figures" directory '
+                         'beside --out; pass "none" to skip)')
     args = ap.parse_args()
 
     qc, qc_note = load_json(args.influence_qc, 'influence-qc')
@@ -875,6 +897,13 @@ def main():
     if not HAVE_MPL:
         print('WARNING: matplotlib unavailable; tables only, no figures.',
               file=sys.stderr)
+
+    global _FIG_DIR
+    if HAVE_MPL and (args.figures_dir or '').lower() != 'none':
+        _FIG_DIR = args.figures_dir or os.path.join(
+            os.path.dirname(os.path.abspath(args.out)) or '.',
+            'figures')
+        os.makedirs(_FIG_DIR, exist_ok=True)
 
     modules = [
         mod_introduction(),
@@ -898,6 +927,10 @@ def main():
     with open(args.out, 'w') as fh:
         fh.write(doc)
     print(f'wrote {args.out}')
+    if _FIG_WRITTEN:
+        print(f'wrote {len(_FIG_WRITTEN)} figure(s) as png + pdf to {_FIG_DIR}')
+        for p in _FIG_WRITTEN:
+            print(f'  {p}')
 
 
 if __name__ == '__main__':
