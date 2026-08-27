@@ -2,7 +2,8 @@
 
 All notable changes to **Torch-eCpG** are documented in this file.
 
-The current development version on the `dev` branch is **2.0.0b2.dev77**.
+The current version on the `dev` branch is **2.0.0b2** — v2.0.0 Beta 2, tag
+`v2.0.0-beta.2` (2026-08-27).
 The most recent released version on `main` is **1.0.0** (`__version__ = '0.0.1'`).
 
 As of `2.0.0b2.dev0` the project version scheme migrated to the
@@ -17,7 +18,29 @@ changes. Each version section is organized into **Features**,
 
 ---
 
-## Unreleased (on 2.0.0b2.dev77)
+## 2.0.0b2 — v2.0.0 Beta 2 (2026-08-27)
+
+Second beta pre-release of Torch-eCpG v2, tagged `v2.0.0-beta.2` on `dev`
+(`2.0.0b2.dev79` → `2.0.0b2`), prepared for the 21st International Conference on Computational Intelligence Methods for Bioinformatics and Biostatistics (CIBB 2026), Sapienza Università di Roma, Rome, 2–4 September 2026. Accumulates the
+`2.0.0b2.dev0`–`dev79` sections below on top of `2.0.0b1`. The release commit
+bumps the version and aligns the README and this changelog to it.
+
+### Documentation
+- README (`dev`): document the `docker-related/` CUDA 12.4 container build;
+  name the seven strand-aware region labels (`PROMOTER`, `GENEBODY`, `CIS5`,
+  `CIS3`, `DISTAL5`, `DISTAL3`, `TRANS`; `UNKNOWN` for unannotated pairs) in
+  the annotate stage, the tools list and the Kennedy defaults; name the
+  design-fixed Freedman–Lane permutation scheme; describe the
+  `tools/ig_qc_report.py` modules and `--frac-exclude`; expand the Kennedy
+  benchmark entry (eligibility decomposition, blacklist audit, concordance,
+  recovery); record the `boot_seed` / `perm_seed` / `perm_n_perm` provenance
+  columns in *Output*; add the CIBB 2026 poster reference.
+- README (`main`): refresh the *tecpg v2* section — Integrated Gradients,
+  precise Student's-t p and global BH-FDR, influence-screen mechanics,
+  chromatin-feature enrichment, Circos / network outputs, the
+  `pip install …@dev` one-liner, and the full CIBB 2026 conference name.
+- Correct the performance sentence ("17× faster than the v2 CPU path on one
+  core").
 
 ### Features
 - Add `tools/chromatin_features.py`, an interval index over the Kennedy

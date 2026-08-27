@@ -4,7 +4,10 @@ Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) map
 
 If you use Torch-eCpG in your research, please cite the following paper: Kober, K.M., Berger, L., Roy, R. et al. Torch-eCpG: a fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. BMC Bioinformatics 25, 71 (2024). https://doi.org/10.1186/s12859-024-05670-4
 
-The current development version on the `dev` branch is **2.0.0b2.dev78**. As of
+Torch-eCpG v2 was presented as a poster: Kober, K.M., Rau, A., Olshen, A. Torch-eCpG v2: A Scalable and Interpretable Framework for eQTM Mapping and Multi-Omic Network Analysis. Poster presented at the 21st International Conference on Computational Intelligence Methods for Bioinformatics and Biostatistics (CIBB 2026), Sapienza Università di Roma, Rome, 2–4 September 2026.
+
+The current version on the `dev` branch is **2.0.0b2**, released as v2.0.0
+Beta 2 (tag `v2.0.0-beta.2`) for the 21st International Conference on Computational Intelligence Methods for Bioinformatics and Biostatistics (CIBB 2026), Sapienza Università di Roma, Rome, 2–4 September 2026. As of
 `2.0.0b2.dev0` the project version scheme migrated to the
 [PEP 440](https://peps.python.org/pep-0440/) standard, replacing the older
 `X.Y.Z-dev` suffix with pre-release / development tags such as `2.0.0b1` (beta)
