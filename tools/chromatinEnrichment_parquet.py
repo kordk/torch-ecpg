@@ -22,7 +22,9 @@ order, cell text = OR, fill = log10 OR on a blue-white-burgundy diverging
 scale clipped to --or-range (default 0.1 to 10, as in Kennedy Fig. 6) where
 the cell is significant (--color-by p or q_bh at --alpha); non-significant
 cells are white; cis rows shaded; degenerate cells hatched; undefined OR
-rendered as n/a. Content, not layout, is what matches Kennedy.
+rendered as n/a. Content, not layout, is what matches Kennedy. Three files:
+the two-panel figure (chromatin_enrichment_fig6.png) and each panel on its
+own (chromatin_enrichment_fig6_panelA.png, _panelB.png).
 """
 import argparse
 import json
@@ -267,58 +269,100 @@ def or_text(v):
     return f'{v:.0f}' if v >= 10 else f'{v:.2g}'
 
 
-def plot_fig6(panel_a, panel_b, out_path, dataset_label='', color_by='p', alpha=0.05, or_range=(0.1, 10.0)):
-    """Two-panel heatmap in the shape of Kennedy et al. 2018 Fig. 6.
-    Returns (rows_a, rows_b, features) for callers that want to check shape."""
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+PANEL_TITLES = {'A': 'a) among all tested CpGs', 'B': 'b) among significant eCpG-transcript pairs'}
+FIG6_FILES = {'combined': 'chromatin_enrichment_fig6.png',
+              'A': 'chromatin_enrichment_fig6_panelA.png',
+              'B': 'chromatin_enrichment_fig6_panelB.png'}
+
+
+def _setup_cmap(or_range):
     from matplotlib.colors import LinearSegmentedColormap
-    from matplotlib.patches import Rectangle
     if not (0 < or_range[0] < 1 < or_range[1]):
         raise ValueError(f'--or-range must satisfy 0 < lo < 1 < hi, got {or_range}')
     cmap = LinearSegmentedColormap.from_list('kennedy_or', OR_CMAP_STOPS)
     cmap.set_bad('white')
-    lo, hi = np.log10(or_range[0]), np.log10(or_range[1])
+    return cmap, np.log10(or_range[0]), np.log10(or_range[1])
+
+
+def _draw_panel(ax, df, title, feats, cmap, lo, hi, color_by, alpha, or_range):
+    """Draw one panel onto ax. Returns (rows, image) for the caller's colourbar."""
+    from matplotlib.patches import Rectangle
+    rows = list(dict.fromkeys(df['row']))
+    piv_or = _pivot(df, rows, feats, 'odds_ratio')
+    piv_sig = _pivot(df, rows, feats, color_by)
+    piv_deg = _pivot(df, rows, feats, 'degenerate')
+    per_row = df.drop_duplicates('row').set_index('row').reindex(rows)
+    colour = or_colour_matrix(piv_or, piv_sig, alpha, or_range)
+    im = ax.imshow(np.ma.masked_invalid(colour), cmap=cmap, vmin=lo, vmax=hi, aspect='auto')
+    for i, r in enumerate(rows):
+        if int(per_row.loc[r, 'cis']):
+            ax.add_patch(Rectangle((-0.5, i - 0.5), len(feats), 1, fill=True, alpha=0.12, color='grey', zorder=2))
+        for j in range(len(feats)):
+            v = piv_or.iloc[i, j]
+            txt = or_text(v)
+            dark = (not np.isnan(colour[i, j])) and abs(colour[i, j]) > 0.55 * max(abs(lo), abs(hi))
+            ax.text(j, i, txt, ha='center', va='center', fontsize=6, zorder=3, color='white' if dark else 'black')
+            if int(piv_deg.iloc[i, j]):
+                ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1, fill=False, hatch='///', edgecolor='k', linewidth=0, zorder=3))
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([f"{r} ({int(per_row.loc[r, 'n_row'])})" for r in rows], fontsize=7)
+    ax.set_xticks(range(len(feats)))
+    ax.set_xticklabels(feats, rotation=60, ha='right', fontsize=7)
+    ax.set_title(title, fontsize=9, loc='left')
+    return rows, im
+
+
+def _add_colourbar(fig, im, axes, or_range, color_by, alpha):
+    ticks = [t for t in (0.1, 0.2, 0.5, 1, 2, 5, 10) if or_range[0] <= t <= or_range[1]]
+    cbar = fig.colorbar(im, ax=axes, orientation='vertical', fraction=0.02, pad=0.01,
+                        ticks=[np.log10(t) for t in ticks])
+    cbar.ax.set_yticklabels([f'{t:g}' for t in ticks], fontsize=7)
+    cbar.set_label(f'odds ratio (coloured where {color_by} < {alpha:g})', fontsize=7)
+
+
+def plot_panel(df, key, out_path, dataset_label='', color_by='p', alpha=0.05, or_range=(0.1, 10.0)):
+    """One panel ('A' or 'B') as its own figure with its own colourbar.
+    Returns (rows, features)."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    cmap, lo, hi = _setup_cmap(or_range)
+    feats = list(dict.fromkeys(df['feature']))
+    n_rows = max(df['row'].nunique(), 1)
+    fig, ax = plt.subplots(1, 1, figsize=(max(8.0, 0.6 * len(feats) + 3.0), 0.5 * n_rows + 2.5), layout='constrained')
+    rows, im = _draw_panel(ax, df, PANEL_TITLES[key], feats, cmap, lo, hi, color_by, alpha, or_range)
+    _add_colourbar(fig, im, [ax], or_range, color_by, alpha)
+    fig.suptitle(f'Chromatin-feature enrichment of eCpGs {dataset_label}'.strip(), fontsize=10)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    return rows, feats
+
+
+def plot_fig6(panel_a, panel_b, out_path, dataset_label='', color_by='p', alpha=0.05, or_range=(0.1, 10.0)):
+    """Two-panel heatmap in the shape of Kennedy et al. 2018 Fig. 6, written to
+    out_path, plus each panel on its own in a sibling file named
+    <stem>_panelA<ext> / <stem>_panelB<ext>. Returns (rows_a, rows_b, features)."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    cmap, lo, hi = _setup_cmap(or_range)
     feats = list(dict.fromkeys(panel_a['feature']))
-    panels = ((panel_a, 'a) among all tested CpGs'), (panel_b, 'b) among significant eCpG-transcript pairs'))
+    panels = ((panel_a, PANEL_TITLES['A']), (panel_b, PANEL_TITLES['B']))
     n_rows_total = panel_a['row'].nunique() + panel_b['row'].nunique()
     fig, axes = plt.subplots(2, 1, figsize=(max(8.0, 0.6 * len(feats) + 3.0), 0.5 * n_rows_total + 3.0),
                              gridspec_kw=dict(height_ratios=[max(panel_a['row'].nunique(), 1), max(panel_b['row'].nunique(), 1)]),
                              layout='constrained')
     shapes = []
     for ax, (df, title) in zip(axes, panels):
-        rows = list(dict.fromkeys(df['row']))
-        piv_or = _pivot(df, rows, feats, 'odds_ratio')
-        piv_sig = _pivot(df, rows, feats, color_by)
-        piv_deg = _pivot(df, rows, feats, 'degenerate')
-        per_row = df.drop_duplicates('row').set_index('row').reindex(rows)
-        colour = or_colour_matrix(piv_or, piv_sig, alpha, or_range)
-        im = ax.imshow(np.ma.masked_invalid(colour), cmap=cmap, vmin=lo, vmax=hi, aspect='auto')
-        for i, r in enumerate(rows):
-            if int(per_row.loc[r, 'cis']):
-                ax.add_patch(Rectangle((-0.5, i - 0.5), len(feats), 1, fill=True, alpha=0.12, color='grey', zorder=2))
-            for j in range(len(feats)):
-                v = piv_or.iloc[i, j]
-                txt = or_text(v)
-                dark = (not np.isnan(colour[i, j])) and abs(colour[i, j]) > 0.55 * max(abs(lo), abs(hi))
-                ax.text(j, i, txt, ha='center', va='center', fontsize=6, zorder=3, color='white' if dark else 'black')
-                if int(piv_deg.iloc[i, j]):
-                    ax.add_patch(Rectangle((j - 0.5, i - 0.5), 1, 1, fill=False, hatch='///', edgecolor='k', linewidth=0, zorder=3))
-        ax.set_yticks(range(len(rows)))
-        ax.set_yticklabels([f"{r} ({int(per_row.loc[r, 'n_row'])})" for r in rows], fontsize=7)
-        ax.set_xticks(range(len(feats)))
-        ax.set_xticklabels(feats, rotation=60, ha='right', fontsize=7)
-        ax.set_title(title, fontsize=9, loc='left')
+        rows, im = _draw_panel(ax, df, title, feats, cmap, lo, hi, color_by, alpha, or_range)
         shapes.append(rows)
-    ticks = [t for t in (0.1, 0.2, 0.5, 1, 2, 5, 10) if or_range[0] <= t <= or_range[1]]
-    cbar = fig.colorbar(im, ax=axes, orientation='vertical', fraction=0.02, pad=0.01,
-                        ticks=[np.log10(t) for t in ticks])
-    cbar.ax.set_yticklabels([f'{t:g}' for t in ticks], fontsize=7)
-    cbar.set_label(f'odds ratio (coloured where {color_by} < {alpha:g})', fontsize=7)
+    _add_colourbar(fig, im, axes, or_range, color_by, alpha)
     fig.suptitle(f'Chromatin-feature enrichment of eCpGs {dataset_label}'.strip(), fontsize=10)
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
+    stem, ext = os.path.splitext(out_path)
+    plot_panel(panel_a, 'A', f'{stem}_panelA{ext}', dataset_label, color_by, alpha, or_range)
+    plot_panel(panel_b, 'B', f'{stem}_panelB{ext}', dataset_label, color_by, alpha, or_range)
     return shapes[0], shapes[1], feats
 
 
@@ -366,10 +410,11 @@ def main(argv=None):
     with open(os.path.join(args.out_dir, 'chromatin_enrichment_metrics.json'), 'w') as fh:
         json.dump(metrics_json(pa, pb, meta), fh, indent=1)
     if args.plot:
-        fig_path = os.path.join(args.out_dir, 'chromatin_enrichment_fig6.png')
+        fig_path = os.path.join(args.out_dir, FIG6_FILES['combined'])
         plot_fig6(pa, pb, fig_path, args.dataset_label, args.color_by, args.alpha, tuple(args.or_range))
         logger.info(f'figure written: {fig_path} (colour by {args.color_by} < {args.alpha}; '
-                    f'OR scale {args.or_range[0]:g}-{args.or_range[1]:g})')
+                    f'OR scale {args.or_range[0]:g}-{args.or_range[1]:g}); '
+                    f"panels: {os.path.join(args.out_dir, FIG6_FILES['A'])}, {os.path.join(args.out_dir, FIG6_FILES['B'])}")
     logger.info(f'panel A: {len(pa)} cells; panel B: {len(pb)} cells; outputs in {args.out_dir}')
     return 0
 
