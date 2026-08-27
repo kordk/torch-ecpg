@@ -14,9 +14,9 @@ this repository. Human contributors are welcome to follow it too.
   https://doi.org/10.1186/s12859-024-05670-4
 - **Entry point:** `tecpg` console script, defined in `setup.py` and rooted at
   `tecpg/cli.py`.
-- **Layout:** Source under `tecpg/`; ad-hoc test scripts at the repo root
-  (`test_*.py`) and example/integration material under `tests/`, `demo/`, and
-  `docker-related/`.
+- **Layout:** Source under `tecpg/`; helper scripts under `tools/` and
+  `pipeline*.sh` at the repo root; the `pytest` suite under `tests/`, with
+  example/integration material under `demo/` and `docker-related/`.
 
 ## Install, build, run
 
@@ -31,10 +31,12 @@ tecpg --help
 `tecpg` automatically uses CUDA when available; pass `--threads N` (N > 0) to
 force CPU. See `README.md` for full input-format and demo instructions.
 
-There is no configured linter, formatter, type checker, or CI in this
-repository. Do not introduce one as part of an unrelated change. If you add or
-modify code, run the relevant `test_*.py` script(s) at the repo root and any
-demo invocations affected by your change.
+There is no configured linter, formatter, or type checker in this repository.
+Do not introduce one as part of an unrelated change. CI is limited to
+`.github/workflows/tests.yml`, which runs `pytest tests/` on pull requests and
+on pushes to `dev` (plus CodeQL and security scans). If you add or modify code,
+run the relevant `tests/test_*.py` script(s) and any demo invocations affected
+by your change.
 
 ## Rule sets (vendored)
 
