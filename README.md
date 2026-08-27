@@ -22,42 +22,75 @@ https://hub.docker.com/r/kordk/torch-ecpg
 ## tecpg v2 — in development on the `dev` branch
 
 A substantially expanded v2 of tecpg is under active development on the
-[`dev`](https://github.com/kordk/torch-ecpg/tree/dev) branch. It is usable
-now and testing/feedback is welcome, with the caveat that flags, output
-columns, and defaults may still change before release. `main` remains the
-published v1 (Kober et al. 2024, *BMC Bioinformatics* 25:71). v2 is being
-presented as a poster at 21st International Conference on Computational 
-Intelligence methods for Bioinformatics and Biostatistics (CIBB) 2026.
+[`dev`](https://github.com/kordk/torch-ecpg/tree/dev) branch (currently
+`2.0.0b2`, PEP 440 pre-release versioning). It is usable now and
+testing/feedback is welcome, with the caveat that flags, output columns, and
+defaults may still change before release. `main` remains the published v1
+(Kober et al. 2024, *BMC Bioinformatics* 25:71). v2 is being presented as a
+poster at the 21st International Conference on Computational Intelligence
+Methods for Bioinformatics and Biostatistics (CIBB 2026, Rome, 2–4 September).
 
 **Performance.** On the same workload, v2 is roughly **10× faster on GPU**
-and **8.6× faster on CPU** than v1, and the v2 GPU path is about **17×
-faster than v2 on a single CPU thread**.
+and **8.6× faster on a single CPU core** than v1, and the v2 GPU path is
+about **17× faster than the v2 CPU path on one core**.
 
 What v2 adds:
 
 - **Mapping engine** — QR-based multiple linear regression
-  (`--mlr-method qr`), Parquet output, chunk auto-sizing with explicit
-  `--meth-loci-per-chunk` / `--gene-loci-per-chunk` overrides,
-  host-to-device prefetch, a threaded writer pool, and `--host-profile`
-  presets for server- vs laptop-class hosts. Per-chunk stage timing via
-  `TECPG_PROFILE=1`.
-- **Significance and reliability** — permutation-null calibration of the
-  analytic p-values (`p_permute` / `fdr_permute`, written alongside `mt_p`
-  rather than replacing it), bootstrap estimate stability, and an
-  influence/leverage diagnostic for pairs driven by a few samples.
-- **Annotation** — GENCODE-derived probe→gene model (following Kennedy et
-  al. 2018) and per-pair region assignment (PROMOTER, GENEBODY, CIS3, CIS5,
-  DISTAL3, DISTAL5, TRANS).
+  (`--mlr-method qr`, with `--qr-impl {torch,householder}`), Parquet
+  output, chunk auto-sizing with explicit `--meth-loci-per-chunk` /
+  `--gene-loci-per-chunk` overrides, host-to-device prefetch, a threaded
+  writer pool, and `--host-profile` presets for server- vs laptop-class
+  hosts. Per-chunk stage timing via `TECPG_PROFILE=1`. A reservoir sample
+  of unfiltered tests (`--reservoir-count`) is written for genomic-inflation
+  and QQ diagnostics.
+- **Significance** — a float64 Student's-t p-value (`precise_mt_p`) with
+  degrees of freedom derived from the covariate design, and a global
+  Benjamini–Hochberg FDR (`fdr_est`) over the logged test universe. A
+  design-fixed Freedman–Lane permutation null calibrates the analytic
+  p-values per region (`p_permute` / `fdr_permute`, written alongside the
+  analytic values rather than replacing them), with a self-contained QC
+  report that states whether a single global null is adequate.
+- **Reliability** — a seeded 1,000-resample bootstrap on the top candidates
+  (`p_boot`, bootstrap/analytic SE ratio, `boot_seed`), and a single-point
+  influence screen: `--compute-influence` emits each CpG's maximum sample
+  leverage (`mt_h_max`) at mapping time, a covariate-floor rule derives
+  `mt_influence_flag`, and per-pair anatomy figures show what deleting the
+  highest-leverage subject does to the fit.
+- **Interpretability** — Integrated Gradients per pair (`--compute-ig`):
+  a methylation attribution (`mt_ig`) and one per covariate
+  (`<covariate>_ig`), so each mapping's fitted signal splits into a
+  methylation share and a share per covariate. `evaluateSaliency.py
+  --frac-exclude` and `ig_qc_report.py` report the share with and without
+  expression-derived covariates in the denominator, a readout users can act
+  on when choosing covariates.
+- **Annotation and biology** — GENCODE-derived probe→gene model (following
+  Kennedy et al. 2018) and per-pair assignment to seven strand-aware
+  regions (PROMOTER, GENEBODY, CIS5, CIS3, DISTAL5, DISTAL3, TRANS);
+  Kennedy Fig. 6-style chromatin-feature enrichment of eCpGs
+  (`chromatinEnrichment_parquet.py`) and functional (Enrichr) enrichment per
+  region.
+- **Outputs** — Circos plots of the eQTM architecture, Cytoscape node/edge
+  export, and bipartite CpG–gene network figures (ForceAtlas2 layout, degree
+  distribution, gene–gene projection).
 - **End-to-end demo pipeline** — `pipelinePre.sh` (QC, probe blacklist,
-  normalization, covariate residualization, PCA) → `pipeline.sh` (mapping
-  and annotation) → `pipelinePermute.sh` → `pipelinePost.sh` (influence
-  QC, Circos, saliency, enrichment, network export) using  GTP and MESA,
-  plus a benchmark against the Kennedy et al. 2018 GTP/MESA eQTM catalog.
+  EpiDISH cell fractions, covariate residualization, PCA) → `pipeline.sh`
+  (mapping, annotation, precise p, FDR, influence flag, bootstrap) →
+  `pipelinePermute.sh` → `pipelinePost.sh` (influence QC, Circos, saliency,
+  enrichment, network) on the public GTP and MESA cohorts, plus
+  `pipelineBenchmarkKennedy.sh`, a benchmark against the Kennedy et al. 2018
+  GTP/MESA eQTM catalog. A CUDA 12.4 `Dockerfile` for the full pipeline is
+  under `docker-related/` on `dev`.
 
 To try it:
 
+    pip install git+https://github.com/kordk/torch-ecpg@dev
+
+or, for a development checkout:
+
     git clone -b dev https://github.com/kordk/torch-ecpg.git
     pip install -e torch-ecpg
+    
 
 ## Installation
 
