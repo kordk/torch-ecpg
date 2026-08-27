@@ -204,8 +204,26 @@ log "[6/11] Running visualizeFindings.py..."
 python3 -u tools/visualizeFindings.py --all -m "$DATA_DIR/M.csv" -g "$DATA_DIR/G.csv" -c "$DATA_DIR/C.csv" "$PARQUET_FILE" --out-dir "$PLOTS_DIR"
 
 # Stage 7: Run evaluateSaliency.py
+# The default pass keeps every *_ig feature in the mt_ig_frac denominator
+# (faithful to raw IG). For datasets whose covariate set includes
+# expression-derived principal components, those features are near-proxies for
+# the outcome and absorb most of the attribution, deflating every methylation
+# share; a second pass excludes them so the share reflects methylation vs the
+# remaining covariates. Both passes are emitted (additive; the excluded pass
+# writes to a separate directory so it never overwrites the raw one). The
+# exclude patterns are a per-dataset choice recorded here, not in the tool:
+# SALIENCY_FRAC_EXCLUDE unset -> default below; empty -> second pass disabled.
 log "[7/11] Running evaluateSaliency.py..."
 python3 -u tools/evaluateSaliency.py -i "$PARQUET_FILE" -o "$PLOTS_DIR"
+SALIENCY_FRAC_EXCLUDE="${SALIENCY_FRAC_EXCLUDE-Exp_PC*_ig}"
+if [ -n "$SALIENCY_FRAC_EXCLUDE" ]; then
+    SALIENCY_FRAC_DIR="${PLOTS_DIR}/saliency_frac_exclude"
+    log "[7/11] Re-running evaluateSaliency.py with --frac-exclude $SALIENCY_FRAC_EXCLUDE (denominator excludes expression-derived IG)..."
+    mkdir -p "$SALIENCY_FRAC_DIR"
+    python3 -u tools/evaluateSaliency.py -i "$PARQUET_FILE" -o "$SALIENCY_FRAC_DIR" --frac-exclude $SALIENCY_FRAC_EXCLUDE
+else
+    log "[7/11] Skipping frac-exclude saliency pass (SALIENCY_FRAC_EXCLUDE empty)."
+fi
 
 # Stage 8: Score bootstrap/analytic concordance. This annotates raw scores and
 # reports their observed distribution; it sets no thresholds and filters nothing.
