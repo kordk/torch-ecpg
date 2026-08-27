@@ -19,6 +19,46 @@ The image can be created from the instructions in the docker-related/ directory.
 Alternatively, a full image is available for download from docker hub:
 https://hub.docker.com/r/kordk/torch-ecpg
 
+## tecpg v2 — in development on the `dev` branch
+
+A substantially expanded v2 of tecpg is under active development on the
+[`dev`](https://github.com/kordk/torch-ecpg/tree/dev) branch. It is usable
+now and testing/feedback is welcome, with the caveat that flags, output
+columns, and defaults may still change before release. `main` remains the
+published v1 (Kober et al. 2024, *BMC Bioinformatics* 25:71). v2 is being
+presented as a poster at 21st International Conference on Computational 
+Intelligence methods for Bioinformatics and Biostatistics (CIBB) 2026.
+
+**Performance.** On the same workload, v2 is roughly **10× faster on GPU**
+and **8.6× faster on CPU** than v1, and the v2 GPU path is about **17×
+faster than v2 on a single CPU thread**.
+
+What v2 adds:
+
+- **Mapping engine** — QR-based multiple linear regression
+  (`--mlr-method qr`), Parquet output, chunk auto-sizing with explicit
+  `--meth-loci-per-chunk` / `--gene-loci-per-chunk` overrides,
+  host-to-device prefetch, a threaded writer pool, and `--host-profile`
+  presets for server- vs laptop-class hosts. Per-chunk stage timing via
+  `TECPG_PROFILE=1`.
+- **Significance and reliability** — permutation-null calibration of the
+  analytic p-values (`p_permute` / `fdr_permute`, written alongside `mt_p`
+  rather than replacing it), bootstrap estimate stability, and an
+  influence/leverage diagnostic for pairs driven by a few samples.
+- **Annotation** — GENCODE-derived probe→gene model (following Kennedy et
+  al. 2018) and per-pair region assignment (PROMOTER, GENEBODY, CIS3, CIS5,
+  DISTAL3, DISTAL5, TRANS).
+- **End-to-end demo pipeline** — `pipelinePre.sh` (QC, probe blacklist,
+  normalization, covariate residualization, PCA) → `pipeline.sh` (mapping
+  and annotation) → `pipelinePermute.sh` → `pipelinePost.sh` (influence
+  QC, Circos, saliency, enrichment, network export) using  GTP and MESA,
+  plus a benchmark against the Kennedy et al. 2018 GTP/MESA eQTM catalog.
+
+To try it:
+
+    git clone -b dev https://github.com/kordk/torch-ecpg.git
+    pip install -e torch-ecpg
+
 ## Installation
 
 Pip install from github using `git+https://`.
