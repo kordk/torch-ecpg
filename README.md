@@ -17,8 +17,8 @@ chunk-sizing, Integrated Gradients (IG), a single-point influence screen
 (`--compute-influence`), an empirical bootstrap MLR backend, support for the
 MESA dataset, comprehensive HT-12/EPIC BED6 annotations, a GENCODE-derived
 probe-gene model for region assignment, chromatin-feature and functional
-enrichment tooling, and a host-profile aware CLI. See `CHANGELOG.md` for the
-full per-version history.
+enrichment tooling, a host-profile aware CLI, and a CUDA Docker image
+(`docker-related/`). See `CHANGELOG.md` for the full per-version history.
 
 ## How this README is organized
 
@@ -79,6 +79,20 @@ pip install --editable .
 `tecpg` is an entry point in the command line than calls the root CLI function. If the installation was successful, running `tecpg --help` should provide help with the command line interface.
 
 If you have issues with using `pip` in the command line, try `python -m pip` or `python3 -m pip`.
+
+### Docker
+
+A containerized build of the full pipeline is defined in `docker-related/`
+(`Dockerfile` on the `nvidia/cuda:12.4.1` runtime base). Build it from the
+repository root so the `.dockerignore` exclusions apply:
+
+```bash
+docker build -t tecpg-pipeline -f docker-related/Dockerfile .
+```
+
+See [`docker-related/README.md`](docker-related/README.md) for running the
+image and saving/loading it. A pre-built image of the published v1 is on
+Docker Hub at https://hub.docker.com/r/kordk/torch-ecpg.
 
 ## CUDA
 
@@ -204,9 +218,11 @@ After the post-mapping stages of `pipeline.sh`, additional columns include
 the high-precision p-value (`precise_mt_p`), the assigned region
 (`region`/`Region`), the global BH-FDR q-value (`fdr_est`), the influence
 flag (`mt_influence_flag`), and (after the bootstrap stage) the empirical
-bootstrap p-value `p_boot`. `pipelinePermute.sh` can annotate the same
-catalogs with the permutation p-value `p_permute` and its BH q-value
-`fdr_permute`.
+bootstrap p-value `p_boot` with its seed recorded as `boot_seed`.
+`pipelinePermute.sh` can annotate the same catalogs with the permutation
+p-value `p_permute` and its BH q-value `fdr_permute`, together with the
+`perm_seed` and `perm_n_perm` provenance columns, so any resampled result
+can be reproduced from the catalog alone.
 
 
 ## Chunking
@@ -611,9 +627,12 @@ stages. Each stage name (in `code`) matches the value accepted by
    synthetic fixed-span map instead, whose labels carry no biological
    meaning), reusing an existing map only when both the GTF and the
    staged `G.bed6` still match its header. Then
-   `tools/assignRegionToEcpg_parquet.py` annotates each pair with
-   `CIS`/`DISTAL`/`TRANS`/`PROMOTER`/`GENEBODY` using the gene spans from
-   that map and writes `annotated.parquet`. Missing-annotation probe IDs
+   `tools/assignRegionToEcpg_parquet.py` annotates each pair with one of
+   seven strand-aware regions — `PROMOTER`, `GENEBODY`, `CIS5`, `CIS3`,
+   `DISTAL5`, `DISTAL3`, `TRANS` (5′/3′ relative to the gene's strand) —
+   using the gene spans from that map and writes `annotated.parquet`;
+   pairs whose probe or gene lacks an annotation are summarized downstream
+   as `UNKNOWN`. Missing-annotation probe IDs
    are collected into a sidecar `annotation_missing_ids.txt` (since
    `1.27.6-dev`).
 4. **`precise_p` — High-precision p-values** *(stage `[6/9]`)*.
@@ -712,8 +731,10 @@ eleven stages, in order:
 
 ### Permutation testing (`pipelinePermute.sh`)
 
-`pipelinePermute.sh` scores an existing mapping catalog against a permutation
-null using the `qr_permute` backend, and builds diagnostic and QC reports.
+`pipelinePermute.sh` scores an existing mapping catalog against a
+design-fixed Freedman–Lane permutation null (residualize on the covariates,
+permute the residuals, refit) using the `qr_permute` backend, and builds
+diagnostic and QC reports.
 `qr_permute` is a **post-mapping consumer**: it reads the observed `mt_t` and
 the `(mt_id, gt_id)` universe from a master parquet produced by an earlier
 mapping run (for example `output_<dataset>/merged.parquet` from `pipeline.sh`),
@@ -808,9 +829,11 @@ fallback and provenance tracking) and correctly handles unmapped
 probes, alternate/unplaced contigs, and pseudoautosomal labels, and were
 regenerated in `2.0.0b2.dev77` so that probes without positional evidence
 stay unmapped instead of receiving fabricated positions. The
-defaults follow Kennedy et al. *BMC Genomics* (2018) **19:476**:
-`CIS < 50 kb` upstream of TSS, `DISTAL > 50 kb` from TSS, and
-`PROMOTER ± 2.5 kb` of TSS. Override these in the script's defaults
+defaults follow Kennedy et al. *BMC Genomics* (2018) **19:476**, split by
+strand: `CIS5` / `CIS3` within 50 kb of the gene on its 5′ / 3′ side,
+`DISTAL5` / `DISTAL3` beyond 50 kb on the same chromosome, `PROMOTER`
+± 2.5 kb of the TSS, `GENEBODY` within the gene span, and `TRANS` on a
+different chromosome. Override these in the script's defaults
 block if you need different cutoffs. The script annotates every row it
 is given; it applies no p-value filter of its own.
 
@@ -873,8 +896,8 @@ Annotation:
   (`probe_gene_model.tsv`) from a GENCODE GTF, or a synthetic fixed-span map
   for `dummy`.
 * `tools/assignRegionToEcpg_parquet.py` and `tools/assignRegionToEcpg.py` —
-  Parquet- and CSV-based region assignment (CIS / DISTAL / TRANS /
-  PROMOTER / GENEBODY). The Parquet variant takes the `--gene-model` map and
+  Parquet- and CSV-based region assignment into the seven strand-aware
+  labels (PROMOTER / GENEBODY / CIS5 / CIS3 / DISTAL5 / DISTAL3 / TRANS). The Parquet variant takes the `--gene-model` map and
   writes a sidecar `annotation_missing_ids.txt` of unmatched probes
   (`1.27.6-dev`).
 
@@ -948,7 +971,11 @@ Visualization and network analysis:
 * `tools/evaluateSaliency.py` — integrated-gradients saliency diagnostics,
   with an optional `--frac-exclude` pass that removes expression-derived IG
   from the saliency denominator.
-* `tools/ig_qc_report.py` — Integrated Gradients report generation.
+* `tools/ig_qc_report.py` — self-contained HTML QC report over the IG
+  columns: coverage, whether `|mt_ig|` is an independent ranking axis
+  (against `|t|`), what drives its magnitude, the methylation share of
+  attribution — with an optional `--frac-exclude` (e.g. `'Exp_PC*_ig'`)
+  second denominator reported alongside the raw one — and per-region IG.
 * `tools/plotRegionProportions.py` — regional composition plots.
 * `tools/exportBipartiteNetwork.py` — Cytoscape-formatted node and edge
   tables (with optional `--min-effect`, `--max-boot-p`, `--max-fdr`, and
@@ -964,8 +991,10 @@ Benchmarking and profiling:
 
 * `pipelineBenchmarkKennedy.sh` / `tools/benchmark_kennedy.py` — comparison against the Kennedy et al.
   benchmark, standardizing thresholds (1e-5 and 1e-11) across cohorts, with
-  influence-stratified recovery and a region-composition crosswalk to
-  Kennedy's four categories.
+  an eligibility decomposition (testable vs blacklisted vs otherwise absent
+  Kennedy pairs), a probe-blacklist audit, effect-size / t-statistic / sign
+  concordance on the shared pairs, influence-stratified recovery, and a
+  region-composition crosswalk to Kennedy's four categories.
 * `tools/diagnose_overlap.py` / `tools/check_catalog_grid.py` — overlap and
   catalog-grid consistency diagnostics for benchmark comparisons.
 * `tools/io_microbench.py` — IO microbenchmarks for the save pool.
