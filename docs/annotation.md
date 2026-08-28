@@ -32,7 +32,7 @@ comma-joined gene identifiers.
 | `annot_<ds>/M.bed6` | CpG position (`mt_chrom`, `mt_chromStart`, `mt_strand`) | `tools/generate_annotations.py` |
 | `annot_<ds>/G.bed6` | expression **probe** position (`gt_chrom`, `gt_chromStart`, `gt_strand`) and the cis/trans mapping test space | `tools/generate_annotations.py`, multi-source: Re-Annotator + GEO + UCSC |
 | `annot_<ds>/probe_gene_model.tsv` | the **gene span** used for the region windows, plus gene id and symbol | `tools/build_probe_gene_model.py` |
-| GENCODE GTF | gene and exon features | `$TECPG_GENCODE_GTF`, default `encode_beds/gencode.v49lift37.annotation.gtf.gz` |
+| GENCODE GTF | gene and exon features | `$TECPG_GENCODE_GTF`, default `encode_beds/gencode.v49lift37.annotation.gtf.gz`; `pipeline.sh` downloads the default from `$TECPG_GENCODE_GTF_URL` (GENCODE release 49 GRCh37 mapping) when it is absent |
 
 All coordinates are **1-based inclusive**. The GFF/GTF parser in `tools/annotation_io.py` reads
 0-based starts and adds +1 on the way out.

@@ -654,10 +654,11 @@ stages. Each stage name (in `code`) matches the value accepted by
    probe-gene map (`annot_<dataset>/probe_gene_model.tsv`) with
    `tools/build_probe_gene_model.py` from the GENCODE GTF at
    `$TECPG_GENCODE_GTF` (default
-   `encode_beds/gencode.v49lift37.annotation.gtf.gz`; `dummy` gets a
-   synthetic fixed-span map instead, whose labels carry no biological
-   meaning), reusing an existing map only when both the GTF and the
-   staged `G.bed6` still match its header. Then
+   `encode_beds/gencode.v49lift37.annotation.gtf.gz`, downloaded from
+   GENCODE if absent — override the source with `$TECPG_GENCODE_GTF_URL`;
+   `dummy` gets a synthetic fixed-span map instead, whose labels carry no
+   biological meaning), reusing an existing map only when both the GTF and
+   the staged `G.bed6` still match its header. Then
    `tools/assignRegionToEcpg_parquet.py` annotates each pair with one of
    seven strand-aware regions — `PROMOTER`, `GENEBODY`, `CIS5`, `CIS3`,
    `DISTAL5`, `DISTAL3`, `TRANS` (5′/3′ relative to the gene's strand) —

@@ -303,6 +303,48 @@ fi
 BOOTSTRAP_LIST="$OUT_DIR/bootstrap_list.csv"
 
 # Stage 5: Annotate regions
+# The default GENCODE GTF is downloaded if it is absent. tools/runEnrichment.py
+# already fetches this same release into encode_beds/ during pipelinePost.sh, so
+# a complete run obtains it anyway; fetching it here removes a hard stop at
+# stage 5 -- after the expensive mapping stage has already run -- for a file the
+# pipeline knows how to get. An explicit TECPG_GENCODE_GTF is treated as
+# configuration rather than as something to fetch: if the operator named a path,
+# a missing file there is an error, not a cue to download something else.
+GENCODE_GTF_URL="${TECPG_GENCODE_GTF_URL:-https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_49/GRCh37_mapping/gencode.v49lift37.annotation.gtf.gz}"
+ensure_gencode_gtf() {
+    local gtf="$1"
+    if [ -f "$gtf" ]; then
+        return 0
+    fi
+    if [ -n "${TECPG_GENCODE_GTF:-}" ]; then
+        log "Error: GENCODE GTF not found at $gtf (from TECPG_GENCODE_GTF). Provide that file, or unset TECPG_GENCODE_GTF to download the default release."
+        return 1
+    fi
+    if ! command -v curl > /dev/null; then
+        log "Error: GENCODE GTF not found at $gtf and curl is unavailable. Download $GENCODE_GTF_URL to $gtf, or set TECPG_GENCODE_GTF."
+        return 1
+    fi
+    log "GENCODE GTF not found at $gtf. Downloading from $GENCODE_GTF_URL ..."
+    mkdir -p "$(dirname "$gtf")"
+    # Download to a temporary path and move it into place only after the archive
+    # verifies. A truncated transfer or an HTML error page saved under the final
+    # name would otherwise be reused as a valid GTF on the next run, and the
+    # header-matching reuse check above would accept it by basename.
+    local tmp="${gtf}.part.$$"
+    if ! curl -fL --retry 3 --retry-delay 5 -o "$tmp" "$GENCODE_GTF_URL"; then
+        rm -f "$tmp"
+        log "Error: download of $GENCODE_GTF_URL failed. Fetch it manually to $gtf, or set TECPG_GENCODE_GTF to a local copy."
+        return 1
+    fi
+    if ! gzip -t "$tmp" 2> /dev/null; then
+        rm -f "$tmp"
+        log "Error: the file downloaded from $GENCODE_GTF_URL is not a valid gzip archive. Fetch it manually to $gtf."
+        return 1
+    fi
+    mv "$tmp" "$gtf"
+    log "GENCODE GTF downloaded to $gtf ($(du -h "$gtf" | cut -f1))."
+}
+
 PROBE_GENE_MAP="$ANNOT_DIR/probe_gene_model.tsv"
 if [ $EXECUTE -eq 1 ]; then
 # Derive the probe->gene map here rather than in pipelinePre.sh: it is a derived
@@ -331,7 +373,7 @@ GENEMODEL_GTF="${TECPG_GENCODE_GTF:-encode_beds/gencode.v49lift37.annotation.gtf
 if [ -s "$PROBE_GENE_MAP" ] && head -20 "$PROBE_GENE_MAP" | grep -qF "$(basename "$GENEMODEL_GTF")" && head -20 "$PROBE_GENE_MAP" | grep -qF "$(sha256sum "$ANNOT_DIR/G.bed6" | cut -d' ' -f1)"; then
     log "[5/9] Reusing probe-gene map at $PROBE_GENE_MAP (matches $GENEMODEL_GTF and current G.bed6)."
 else
-    [ -f "$GENEMODEL_GTF" ] || { log "Error: GENCODE GTF not found at $GENEMODEL_GTF. Set TECPG_GENCODE_GTF."; exit 1; }
+    ensure_gencode_gtf "$GENEMODEL_GTF" || exit 1
     log "[5/9] Deriving probe-gene map from $GENEMODEL_GTF ..."
     python3 tools/build_probe_gene_model.py \
         --gtf "$GENEMODEL_GTF" \
