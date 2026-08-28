@@ -83,11 +83,29 @@ pip install --editable .
 
 If you have issues with using `pip` in the command line, try `python -m pip` or `python3 -m pip`.
 
+### R dependencies (pipeline and tools only)
+
+The core `tecpg` CLI is pure Python and needs nothing beyond the `pip` install
+above. The `pipeline*.sh` scripts in Part B and several of the helpers in
+`tools/` call R, so if you intend to use any of them, install the R packages
+once from the repository root with an R installation already on your `PATH`:
+
+```bash
+Rscript tools/install_dependencies.R
+```
+
+This installs `BiocManager` if it is absent, then `pheatmap` (CRAN) and
+`EpiDISH`, `sva`, `IlluminaHumanMethylationEPICanno.ilm10b4.hg19` and
+`ExperimentHub` (Bioconductor). Packages that are already present are skipped,
+so the script is safe to re-run.
+
 ### Docker
 
 A containerized build of the full pipeline is defined in `docker-related/`
-(`Dockerfile` on the `nvidia/cuda:12.4.1` runtime base). Build it from the
-repository root so the `.dockerignore` exclusions apply:
+(`Dockerfile` on the `nvidia/cuda:12.4.1` runtime base). The image installs R
+and runs `tools/install_dependencies.R` during the build, so the R step above
+is only needed for a native install. Build it from the repository root so the
+`.dockerignore` exclusions apply:
 
 ```bash
 docker build -t tecpg-pipeline -f docker-related/Dockerfile .
@@ -466,6 +484,11 @@ A third option, `gtpsub`, is a locus-subsampled GTP build (10,000 CpGs and
 on real data; like `dummy` it skips the ancestry and EpiDISH stages.
 
 ## Quick start (the golden path)
+
+Prerequisites: `tecpg` installed (see [Installation](#installation)) and the R
+packages installed with `Rscript tools/install_dependencies.R` (see
+[R dependencies](#r-dependencies-pipeline-and-tools-only)) — the pipeline
+scripts call R at several stages.
 
 The recommended way to reproduce an end-to-end demo run is to first prepare the
 dataset with `pipelinePre.sh` and then run `pipeline.sh`, which is the
@@ -850,7 +873,9 @@ is given; it applies no p-value filter of its own.
 
 The `tools/` directory contains the supporting scripts driven by
 `pipelinePre.sh`, `pipeline.sh`, `pipelinePost.sh`, and
-`pipelinePermute.sh`. They can also be invoked standalone.
+`pipelinePermute.sh`. They can also be invoked standalone. The R-based tools
+additionally require `Rscript tools/install_dependencies.R` — see
+[R dependencies](#r-dependencies-pipeline-and-tools-only).
 
 Data preparation and QC:
 
