@@ -57,7 +57,7 @@ assert torch.version.cuda == '12.4', 'unexpected CUDA build: ' + str(torch.versi
 print('OK torch', torch.__version__, 'cuda', torch.version.cuda)"
 
 # Verify R installations in builder
-RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
+RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(minfi); library(IlluminaHumanMethylation450kanno.ilmn12.hg19); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
 
 
 # Runtime Stage
@@ -86,7 +86,7 @@ COPY --from=builder /usr/local/lib/R /usr/local/lib/R
 COPY --from=builder /usr/lib/R /usr/lib/R
 
 # Verify R installations in runtime
-RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
+RUN Rscript -e 'library(EpiDISH); library(sva); library(pheatmap); library(ExperimentHub); library(minfi); library(IlluminaHumanMethylation450kanno.ilmn12.hg19); library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)'
 
 
 # Copy application files

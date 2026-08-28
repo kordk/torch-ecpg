@@ -95,9 +95,14 @@ Rscript tools/install_dependencies.R
 ```
 
 This installs `BiocManager` if it is absent, then `pheatmap` (CRAN) and
-`EpiDISH`, `sva`, `IlluminaHumanMethylationEPICanno.ilm10b4.hg19` and
-`ExperimentHub` (Bioconductor). Packages that are already present are skipped,
-so the script is safe to re-run.
+`EpiDISH`, `sva`, `ExperimentHub`, `minfi` and both Illumina array manifests
+(`IlluminaHumanMethylation450kanno.ilmn12.hg19` and
+`IlluminaHumanMethylationEPICanno.ilm10b4.hg19`) from Bioconductor. Packages
+that are already present are skipped, so the script is safe to re-run; it exits
+non-zero and names any package that could not be loaded afterwards.
+
+The annotation packages are large and Bioconductor builds several of these from
+source, so allow ten minutes or more on a first run.
 
 ### Docker
 
@@ -910,8 +915,9 @@ Data preparation and QC:
 * `tools/subsample_loci.py` — subsample rows (loci, never samples) of a
   matrix; used to build the `gtpsub` dataset.
 * `tools/install_dependencies.R` — install all R packages required by
-  the tools (`pheatmap`, `EpiDISH`, `sva`, `IlluminaHumanMethylationEPIC*`,
-  `ExperimentHub`) via `BiocManager`.
+  the tools (`pheatmap`, `EpiDISH`, `sva`, `ExperimentHub`, `minfi`, and the
+  `IlluminaHumanMethylation450kanno.*` / `IlluminaHumanMethylationEPICanno.*`
+  manifests) via `BiocManager`, then verify each one loads.
 
 Annotation:
 
