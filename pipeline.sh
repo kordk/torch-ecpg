@@ -41,7 +41,10 @@ BOOTSTRAP_IG_COVARIATES="all"
 # cutoff (|t| ~ 3.3, far above the ~5.96e-08 cancellation floor), but the
 # ranking within the retained set is not -- that is what Stage 6 repairs.
 # Changing this value changes the catalog and therefore every downstream count.
-MAP_P_THRESH="0.001"
+# TECPG_MAP_P_THRESH overrides it for special-purpose runs (e.g. the covgrid
+# dummy-dataset verification, which sets 1.0 so pure-noise catalogs are never
+# empty). Unset, the production default below is used unchanged.
+MAP_P_THRESH="${TECPG_MAP_P_THRESH:-0.001}"
 
 # Chunk sizes for `tecpg run mlr` are intentionally NOT set here. As of
 # tecpg 1.21.0-dev the CLI's anchored auto-sizer (`_auto_chunk_sizes` in
