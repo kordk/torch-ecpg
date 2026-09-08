@@ -23,11 +23,36 @@ def _pipeline_text():
         return fh.read()
 
 
-def _shell_var(name, text):
-    """Return the value of a top-level `NAME="value"` assignment."""
-    m = re.search(rf'^{name}="([^"]*)"\s*$', text, re.MULTILINE)
+def _shell_var(name, text, env=None):
+    """Return the value of a top-level `NAME="value"` assignment.
+
+    Evaluates the assignment as bash would, respecting parameter expansion.
+    """
+    m = re.search(rf'^{name}=.*$', text, re.MULTILINE)
     assert m, f"{name} is not assigned in pipeline.sh"
-    return m.group(1)
+    line = m.group(0)
+
+    proc = subprocess.run(
+        ["bash", "-c", f'{line}\nprintf "%s" "${{{name}}}"'],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    if proc.returncode != 0:
+        raise AssertionError(f"Failed to evaluate {name}:\n{proc.stderr}")
+
+    out = proc.stdout
+    if not out:
+        # Check if the right side of the assignment was literally empty
+        m_literal = re.search(rf'^{name}=""\s*$', line)
+        if not m_literal:
+            raise AssertionError(
+                f"Evaluation of {name} produced empty string but assignment "
+                f"was not empty: {line}\nstderr: {proc.stderr}"
+            )
+
+    return out
 
 
 def _cli_mlr_p_default():
@@ -55,7 +80,9 @@ def _cli_mlr_p_default():
 
 def test_map_p_thresh_is_defined():
     """pipeline.sh must define the threshold as a named variable."""
-    assert _shell_var("MAP_P_THRESH", _pipeline_text()) == "0.001"
+    env = os.environ.copy()
+    env.pop("TECPG_MAP_P_THRESH", None)
+    assert _shell_var("MAP_P_THRESH", _pipeline_text(), env=env) == "0.001"
 
 
 def test_map_p_thresh_matches_cli_default():
@@ -64,12 +91,27 @@ def test_map_p_thresh_matches_cli_default():
     If the CLI default and the pipeline value ever diverge, the catalog silently
     changes size. This forces the divergence to be a deliberate, reviewed edit.
     """
-    shell_value = float(_shell_var("MAP_P_THRESH", _pipeline_text()))
+    env = os.environ.copy()
+    env.pop("TECPG_MAP_P_THRESH", None)
+    shell_value = float(_shell_var("MAP_P_THRESH", _pipeline_text(), env=env))
     assert shell_value == _cli_mlr_p_default(), (
         "pipeline.sh MAP_P_THRESH and the `run mlr` -p default disagree. "
         "Making the mapper gate explicit was meant to be behaviour-preserving; "
         "changing either value changes the catalog and every downstream count."
     )
+
+
+def test_map_p_thresh_override_honoured():
+    """The override variable must be respected when resolving MAP_P_THRESH."""
+    env = os.environ.copy()
+    env["TECPG_MAP_P_THRESH"] = "1"
+    assert _shell_var("MAP_P_THRESH", _pipeline_text(), env=env) == "1"
+
+
+def test_shell_var_unknown_raises():
+    """_shell_var must raise for variables missing from pipeline.sh."""
+    with pytest.raises(AssertionError, match="NONEXISTENT_VAR is not assigned"):
+        _shell_var("NONEXISTENT_VAR", _pipeline_text())
 
 
 def test_stage3_invocation_passes_the_threshold():
