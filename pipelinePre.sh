@@ -136,8 +136,11 @@ resolve_cov_file() {
 #     noise floor.
 #   ENCODE_COLUMNS / ENCODE_MIN_CELL_SIZE: integer-coded categoricals that need
 #     indicator encoding, and the smallest level retained.
-ANCESTRY_MERGE_COLUMNS=""
-ANCESTRY_MERGE_NAMES=""
+# The two ancestry variables accept an environment override so a covariate
+# evaluation can admit components without editing this file. Unset, the
+# per-dataset defaults below are used unchanged.
+ANCESTRY_MERGE_COLUMNS="${ANCESTRY_MERGE_COLUMNS:-}"
+ANCESTRY_MERGE_NAMES="${ANCESTRY_MERGE_NAMES:-}"
 ENCODE_COLUMNS=""
 ENCODE_MIN_CELL_SIZE=3
 if [ "$DATASET" == "mesa" ]; then
