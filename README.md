@@ -1,49 +1,57 @@
 # tecpg
 
-Torch-eCpG is a GPU enabled expression quantitative trait methylation (eQTM) mapper to identify expression associated CpG (eCpG) loci with python CLI using pytorch.
+Torch-eCpG (`tecpg`) is a GPU-enabled expression quantitative trait
+methylation (eQTM) mapper. It identifies expression-associated CpG (eCpG)
+loci by regressing gene expression on methylation and covariates for every
+CpG–transcript pair, using PyTorch batched tensor operations, and is driven
+from a Python command-line interface.
 
-If you use Torch-eCpG in your research, please cite the following paper: Kober, K.M., Berger, L., Roy, R. et al. Torch-eCpG: a fast and scalable eQTM mapper for thousands of molecular phenotypes with graphical processing units. BMC Bioinformatics 25, 71 (2024). https://doi.org/10.1186/s12859-024-05670-4
+**Which part of this README do you need?**
 
-Torch-eCpG v2 was presented as a poster: Kober, K.M., Rau, A., Olshen, A. Torch-eCpG v2: A Scalable and Interpretable Framework for eQTM Mapping and Multi-Omic Network Analysis. Poster presented at the 21st International Conference on Computational Intelligence Methods for Bioinformatics and Biostatistics (CIBB 2026), Sapienza Università di Roma, Rome, 2–4 September 2026.
+* **You have your own methylation, expression, and covariate matrices** and
+  want to map eQTMs → [Part A — Core `tecpg` tool](#part-a--core-tecpg-tool).
+  Start with the [5-minute quick start](#quick-start-5-minutes-no-downloads).
+* **You want to see the complete worked pipeline** (preprocessing, mapping,
+  FDR, bootstrap, permutation, figures) on public data →
+  [Part B — Demonstration](#part-b--demonstration-the-gtpmesa-golden-path).
 
-The current version on the `dev` branch is **2.0.0b2**, released as v2.0.0
-Beta 2 (tag `v2.0.0-beta.2`) for the 21st International Conference on Computational Intelligence Methods for Bioinformatics and Biostatistics (CIBB 2026), Sapienza Università di Roma, Rome, 2–4 September 2026. As of
-`2.0.0b2.dev0` the project version scheme migrated to the
-[PEP 440](https://peps.python.org/pep-0440/) standard, replacing the older
-`X.Y.Z-dev` suffix with pre-release / development tags such as `2.0.0b1` (beta)
-and `2.0.0b2.devN`. Since the `1.0.0` release on `main`, the project has grown a
-preprocessing pipeline (`pipelinePre.sh`), an end-to-end analysis pipeline
-(`pipeline.sh`), a downstream visualization/network pipeline
-(`pipelinePost.sh`), a permutation-testing pipeline (`pipelinePermute.sh`)
-driven by the `qr_permute` MLR backend, Parquet output by default, anchored auto
-chunk-sizing, Integrated Gradients (IG), a single-point influence screen
-(`--compute-influence`), an empirical bootstrap MLR backend, support for the
-MESA dataset, comprehensive HT-12/EPIC BED6 annotations, a GENCODE-derived
-probe-gene model for region assignment, chromatin-feature and functional
-enrichment tooling, a host-profile aware CLI, and a CUDA Docker image
-(`docker-related/`). See `CHANGELOG.md` for the full per-version history.
+## Citation
 
-## How this README is organized
+If you use Torch-eCpG in your research, please cite:
 
-This README is split into two parts:
+> Kober, K.M., Berger, L., Roy, R. et al. Torch-eCpG: a fast and scalable eQTM
+> mapper for thousands of molecular phenotypes with graphical processing
+> units. *BMC Bioinformatics* 25, 71 (2024).
+> https://doi.org/10.1186/s12859-024-05670-4
 
-* **Part A — Core `tecpg` tool** documents the installable `tecpg` CLI/library itself: installation, CUDA/host profiles, input/output formats, chunking, region/p-value filtration, running `tecpg run mlr` directly, GPU selection, and performance tuning. This is all you need to use `tecpg` as a general-purpose eQTM mapper on your own data.
-* **Part B — Demonstration: the GTP/MESA golden path** is a self-contained, reproducible demonstration built on public GTP and MESA data and the `pipeline*.sh` orchestration scripts. These scripts and datasets are *not* required to use `tecpg`; they exist to show one complete worked example end to end.
+Torch-eCpG v2 was presented as a poster: Kober, K.M., Rau, A., Olshen, A.
+*Torch-eCpG v2: A Scalable and Interpretable Framework for eQTM Mapping and
+Multi-Omic Network Analysis.* 21st International Conference on Computational
+Intelligence Methods for Bioinformatics and Biostatistics (CIBB 2026), Rome,
+2–4 September 2026.
 
-### Table of contents
+## Version
+
+The current version on the `dev` branch is **2.0.0b2** (tag `v2.0.0-beta.2`).
+The `main` branch carries the published v1 (`1.0.0`). Version strings follow
+[PEP 440](https://peps.python.org/pep-0440/). See
+[`CHANGELOG.md`](CHANGELOG.md) for what has changed between releases.
+
+## Table of contents
 
 **Part A — Core `tecpg` tool**
 
 * [Installation](#installation)
-* [CUDA](#cuda)
+* [Quick start (5 minutes, no downloads)](#quick-start-5-minutes-no-downloads)
+* [CUDA and host profiles](#cuda-and-host-profiles)
 * [Input data](#input-data)
 * [Output](#output)
 * [Chunking](#chunking)
 * [Filtration](#filtration)
-* [Documentation](#documentation)
 * [Running `tecpg run mlr` directly](#running-tecpg-run-mlr-directly)
 * [Selecting a GPU when multiple are available](#selecting-a-gpu-when-multiple-are-available)
 * [Performance tuning](#performance-tuning)
+* [Documentation](#documentation)
 
 **Part B — Demonstration: the GTP/MESA golden path**
 
@@ -53,35 +61,51 @@ This README is split into two parts:
 * [Alternative annotation and assignment of regions](#alternative-annotation-and-assignment-of-regions)
 * [Tools and helper scripts](#tools-and-helper-scripts)
 * [Tests](#tests)
+* [Acknowledgements](#acknowledgements)
 
 # Part A — Core `tecpg` tool
 
-The sections below document the `tecpg` command-line tool and library on their own, independent of any particular dataset.
+The sections below document the `tecpg` command-line tool and library on
+their own, independent of any particular dataset. Part A needs only Python;
+no R, no downloads.
 
 ## Installation
 
-Pip install from github using `git+https://`.
+Requirements: **Python 3.10 or newer**. A GPU is optional — `tecpg` runs on
+CPU, but for GPU acceleration you need a CUDA-capable NVIDIA GPU and a
+CUDA-enabled PyTorch build (see the note below).
+
+Install the published version from the `main` branch:
 
 ```bash
 pip install git+https://github.com/kordk/torch-ecpg.git
 ```
-Pip install from github using `git+https://` for the dev branch.
+
+Install the current development version (v2) from the `dev` branch:
+
 ```bash
 pip install git+https://github.com/kordk/torch-ecpg.git@dev
 ```
 
-If you want to be able to edit the code for debugging and development, install in editable mode and do not remove the directory.
+For development or debugging, install in editable mode and keep the clone in
+place:
 
 ```bash
-cd [path/to/code/directory]
 git clone https://github.com/kordk/torch-ecpg.git
 cd torch-ecpg
+git checkout dev          # optional
 pip install --editable .
 ```
 
-`tecpg` is an entry point in the command line than calls the root CLI function. If the installation was successful, running `tecpg --help` should provide help with the command line interface.
+If the installation succeeded, `tecpg --help` prints the command-line help.
+If `pip` is not on your `PATH`, use `python -m pip` or `python3 -m pip`.
 
-If you have issues with using `pip` in the command line, try `python -m pip` or `python3 -m pip`.
+> **PyTorch and CUDA.** `pip` installs whatever `torch` wheel is the default
+> for your platform, which may be CPU-only. If `tecpg` reports that CUDA is
+> unavailable on a machine that has an NVIDIA GPU, install a CUDA-enabled
+> PyTorch build first using the selector at https://pytorch.org/get-started/locally/
+> (matching your driver's CUDA version), then install `tecpg`. You can check
+> with `python -c "import torch; print(torch.cuda.is_available())"`.
 
 ### R dependencies (pipeline and tools only)
 
@@ -117,32 +141,99 @@ docker build -t tecpg-pipeline -f docker-related/Dockerfile .
 ```
 
 See [`docker-related/README.md`](docker-related/README.md) for running the
-image and saving/loading it. A pre-built image of the published v1 is on
-Docker Hub at https://hub.docker.com/r/kordk/torch-ecpg.
+image and saving/loading it. A pre-built image of the **published v1** (not
+v2) is on Docker Hub at https://hub.docker.com/r/kordk/torch-ecpg.
 
-## CUDA
+## Quick start (5 minutes, no downloads)
 
-`tecpg` can calculate on the CPU or on a CUDA enabled GPU device. CUDA devices are generally faster than CPU computations for sufficiently large inputs.
+Generate a small synthetic dataset and run a cis eQTM scan. This needs no R,
+no GPU, and no external data, and is the fastest way to confirm that `tecpg`
+is installed and working.
 
-The program will automatically determine whether there is a CUDA enabled device and use it if available. To force calculation on the CPU, set the `--threads` option to a nonzero integer. This will also set the number of CPU threads used.
+```bash
+mkdir tecpg-demo && cd tecpg-demo
+
+# 1. Generate synthetic data: 100 samples, 2,000 CpGs, 500 expression probes
+tecpg data dummy --samples 100 --meth-rows 2000 --gene-rows 500 --seed 42
+
+# 2. Regress every probe on every CpG, keeping pairs with p < 0.05
+tecpg run mlr --all --p-thresh 0.05
+```
+
+Step 1 writes `data/M.csv`, `data/G.csv`, `data/C.csv` and
+`annot/M.bed6`, `annot/G.bed6` under the current directory. Step 2 fits
+1,000,000 regressions (2,000 CpGs × 500 probes) and writes the ~5% that pass
+the p-value gate to `output/` — a single `out.parquet` when the data fits in
+one chunk, or per-chunk files otherwise (see [Output](#output)).
+
+Peek at the results:
+
+```bash
+python -c "import pandas as pd; print(pd.read_parquet('output/out.parquet').head())"
+```
+
+Each row is one CpG–probe pair; `mt_est`, `mt_err`, `mt_t`, and `mt_p` are the
+methylation coefficient, its standard error, t-statistic, and p-value. The
+dummy data is random, so the associations are meaningless — this run checks
+wiring only. (Its BED6 positions are random too, which is why the example
+uses `--all` rather than `--cis`: almost no random CpG lands within the cis
+window of a random probe.)
+
+**Next steps**
+
+* Run on your own data: replace the files in `data/` and `annot/` with your
+  matrices in the formats described under [Input data](#input-data), or point
+  `tecpg` at other directories with `-i` (input), `-a` (annotation), and `-o`
+  (output). A typical cis scan on real data is:
+
+  ```bash
+  tecpg -i /path/to/data -a /path/to/annot -o /path/to/output run mlr --cis
+  ```
+
+* The default p-value gate is `--p-thresh 0.001`; tighten it (e.g. `1e-5`)
+  for genome-wide `--all` scans on real data to keep the output manageable.
+* Add per-feature attribution and an influence screen:
+  `tecpg run mlr --cis --compute-ig --compute-influence`.
+* See `tecpg run mlr --help` for the complete option list.
+* To see the full worked pipeline (preprocessing through figures), continue
+  to [Part B](#part-b--demonstration-the-gtpmesa-golden-path).
+
+## CUDA and host profiles
+
+`tecpg` can calculate on the CPU or on a CUDA-enabled GPU. GPUs are generally
+much faster than CPU for sufficiently large inputs.
+
+The program automatically detects a CUDA device and uses it if available. To
+force CPU computation, set `--threads` to a nonzero integer; this also sets the
+number of CPU threads used.
 
 The top-level CLI also accepts `--host-profile {auto,minimum,server}` (envvar
 `TECPG_HOST_PROFILE`). `auto` (default) inspects the host (physical CPU count
-and total RAM) and picks `minimum` for laptop-class hosts (`<12 cores` or
+and total RAM) and picks `minimum` for laptop-class hosts (`<12` cores or
 `<32 GB`) and `server` otherwise. The resolved profile drives defaults for the
-save pool, prefetch depth, and chunk auto-sizing. (Output format is no longer
-profile-dependent: since `2.0.0b2.dev32`, `--output-format auto` resolves to
-`parquet` on every host profile.) Explicit per-flag overrides
+save pool, prefetch depth, and chunk auto-sizing. Explicit per-flag overrides
 (`--save-threads`, `--output-format`, `--prefetch-chunks`,
 `--gene-loci-per-chunk`, `--meth-loci-per-chunk`, `--blas-threads`) always win.
 
 ## Input data
 
-Methylation values, gene expression values, and covariates are provided in CSV or TSV files in the `<working>/data` directory. For methylation and gene expression, columns are for individual samples and each row is for a loci. For the covariates, the columns are the type of covariate and the rows are the sample. Annotation files are used for region filtration and are stored in the `<working>/annot`. They use the `BED6` standard and store the positions of the methylation or gene expression loci.
+Methylation values, gene expression values, and covariates are provided as CSV
+or TSV files in the `<working>/data` directory. For methylation and gene
+expression, columns are samples and rows are loci. For covariates, columns are
+covariates and rows are samples. Sample identifiers must match across the
+three files.
 
-> **Note:** The concrete `M.csv` / `G.csv` / `C.csv` / BED6 snippets below are taken from the GTP demo dataset purely as examples of the expected formats. The GTP and MESA demo datasets themselves, and the `pipeline*.sh` scripts that produce these files, are documented in *Part B — Demonstration* below.
+Annotation files are used for region filtration and live in
+`<working>/annot`. They use the `BED6` format and store the positions of the
+methylation and gene expression loci.
 
-Methylation CSV datafiles from the GTP dataset (see Demonstration below):
+> **Note:** The `M.csv` / `G.csv` / `C.csv` / BED6 snippets below are taken
+> from the GTP demo dataset purely as examples of the expected formats. The
+> demo datasets themselves, and the `pipeline*.sh` scripts that produce these
+> files, are documented in Part B.
+
+Methylation (`data/M.csv`) — rows are CpGs, columns are samples:
+
 ```bash
 head -5 data/M.csv | cut -d, -f1-5
 ```
@@ -154,9 +245,11 @@ cg00000165,0.266529984719736,0.159711109475489,0.145981687514545,0.1000003506885
 cg00000236,0.812799925026805,0.897011511592051,0.908067942964869,0.863719773724759
 ```
 
-Gene expression CSV datafiles from the GTP dataset (see Demonstration below):
+Gene expression (`data/G.csv`) — rows are expression probes, columns are
+samples:
+
 ```bash
-head data/G.csv | cut -d, -f1-5
+head -5 data/G.csv | cut -d, -f1-5
 ```
 ```
 ,5881,5896,5915,5949
@@ -165,11 +258,12 @@ ILMN_2055271,61.09617,61.84258,47.78094,49.32763
 ILMN_1736007,51.30634,45.80393,45.43285,40.39254
 ILMN_2383229,48.15523,42.69902,35.71749,39.52501
 ```
+
+Covariates (`data/C.csv`) — rows are samples, columns are covariates:
+
 ```bash
 head -5 data/C.csv
 ```
-
-Covariate CSV datafiles from the GTP dataset (see Demonstration below):
 ```
 ,Sex,age
 5881,1,44
@@ -178,7 +272,9 @@ Covariate CSV datafiles from the GTP dataset (see Demonstration below):
 5949,1,56
 ```
 
-Annotation BED6 files for the gene expression and methylation data (i.e., Illumina HumanHT-12 and Illumina MethylationEPIC arrays):
+Annotation BED6 files for the gene expression and methylation loci (here, the
+Illumina HumanHT-12 and MethylationEPIC arrays):
+
 ```bash
 head -5 annot/*
 ```
@@ -197,17 +293,14 @@ X       24072640        24072640        cg09835024      0       -
 9       131463936       131463936       cg14361672      0       +
 17      80159506        80159506        cg01763666      0       +
 ```
-Example data for evaluation can be created or downloaded with tecpg:
-```bash
-tecpg data --help
+
+Example data can be generated or downloaded with `tecpg data`:
+
 ```
-```
+$ tecpg data --help
 Usage: tecpg data [OPTIONS] COMMAND [ARGS]...
 
   Base group for data management.
-
-Options:
-  --help  Show this message and exit.
 
 Commands:
   dummy  Generates dummy data.
@@ -215,14 +308,15 @@ Commands:
   mesa   Downloads and extracts MESA data.
 ```
 
-See the *Demo datasets (GTP and MESA)* section below for background on
-the two real-world demo datasets and where they come from.
+`tecpg data dummy` prompts for `--samples`, `--meth-rows`, and `--gene-rows`
+if they are not supplied; pass `--seed` for reproducible output and
+`--no-annotation` to skip the BED6 files. See
+[Demo datasets](#demo-datasets-gtp-and-mesa) for the two real-world datasets.
 
 ## Output
 
-By default, the output format is Parquet. Since `2.0.0b2.dev32`
-`--output-format auto` resolves to `parquet` on every host profile; use
-`--output-format {auto,csv,parquet}` to override.
+By default the output format is Parquet. `--output-format {auto,csv,parquet}`
+overrides this; `auto` resolves to `parquet` on every host profile.
 
 For `tecpg run mlr` without chunking, a single output file (`out.csv` or
 `out.parquet`) is created in the output directory. With chunking on either
@@ -230,107 +324,83 @@ axis, per-chunk files named `{methylation chunk number}-{gene expression
 chunk number}.{csv,parquet}` are written instead, and a sidecar
 `sample_reservoir.csv` of unfiltered draws is produced for diagnostics.
 `tools/mergeOutputs.py` combines the chunks into a single Parquet (or CSV)
-file (and explicitly skips `sample_reservoir.csv`, fixed in `1.25.3-dev`).
+file and skips `sample_reservoir.csv`.
 
-Row labels indicate the gene expression id and the methylation id. Column
-labels follow the convention: methylation-related columns are prefixed
-`mt_`, gene-expression-related columns are prefixed `gt_`. For each
-regression the columns are the estimate `est`, the standard error `err`,
-the Student's T statistic `t`, and the p-value `p` (e.g. `mt_est`, `mt_err`,
-`mt_t`, `mt_p`). When `--compute-ig` is enabled, integrated-gradients
-saliency values are written alongside the regression results, and
-`--compute-influence` adds the per-CpG maximum sample leverage `mt_h_max`.
-After the post-mapping stages of `pipeline.sh`, additional columns include
-the high-precision p-value (`precise_mt_p`), the assigned region
-(`region`/`Region`), the global BH-FDR q-value (`fdr_est`), the influence
-flag (`mt_influence_flag`), and (after the bootstrap stage) the empirical
-bootstrap p-value `p_boot` with its seed recorded as `boot_seed`.
-`pipelinePermute.sh` can annotate the same catalogs with the permutation
-p-value `p_permute` and its BH q-value `fdr_permute`, together with the
-`perm_seed` and `perm_n_perm` provenance columns, so any resampled result
-can be reproduced from the catalog alone.
+Row labels identify the gene expression id and the methylation id. Column
+labels follow one convention: methylation-related columns are prefixed `mt_`
+and gene-expression-related columns `gt_`. For each regression the columns are
+the estimate `est`, standard error `err`, Student's t statistic `t`, and
+p-value `p` (e.g. `mt_est`, `mt_err`, `mt_t`, `mt_p`). With `--compute-ig`,
+integrated-gradients saliency values are written alongside the regression
+results, and `--compute-influence` adds the per-CpG maximum sample leverage
+`mt_h_max`.
 
+The Part B pipeline adds further columns after mapping: the high-precision
+p-value (`precise_mt_p`), the assigned region (`region`), the global BH-FDR
+q-value (`fdr_est`), the influence flag (`mt_influence_flag`), the empirical
+bootstrap p-value `p_boot` with its `boot_seed`, and — from
+`pipelinePermute.sh` — the permutation p-value `p_permute`, its BH q-value
+`fdr_permute`, and the `perm_seed` / `perm_n_perm` provenance columns, so any
+resampled result can be reproduced from the catalog alone.
 
 ## Chunking
 
-If the input is too large, the computational device may run out of memory. Chunking can help prevent this by partitioning the data into chunks that are computed and saved separately. Chunking sacrifices parallelization, and thus speed, for lower memory. Avoid chunking wherever possible for speed.
+If the input is too large, the computational device may run out of memory.
+Chunking partitions the data into pieces that are computed and saved
+separately. It trades parallelism (and therefore speed) for lower memory, so
+avoid it where possible.
 
-For `tecpg run mlr`, there are two types of chunking: methylation chunking and gene expression chunking. Gene expression chunking is preferable to methylation chunking if possible, as it sacrifices parallelization less.
+`tecpg run mlr` supports two kinds of chunking: methylation chunking and gene
+expression chunking. Gene expression chunking is preferable where possible, as
+it sacrifices less parallelism.
 
-As of `1.21.0-dev`, the CLI's `_auto_chunk_sizes` helper picks
-`--gene-loci-per-chunk` and `--meth-loci-per-chunk` automatically from the
-live RAM/GPU budget (80% target) on server-class hosts when the user
-supplies neither flag, and supports **anchored mode**: supplying exactly
-one of the two flags pins that dimension and auto-derives the other via
-bisection against the in-memory peak-memory estimator. The auto-sizer is
-IG-aware (`1.22.2-dev`) and applies a safety clamp on tight (~24 GB) VRAM
-when `--compute-ig` is enabled to prevent the previous OOM regression on
-GTP-scale data. Minimum-class hosts never auto-set chunk sizes — supply
-the flags explicitly there.
-
-**Note:** As of `1.21.0-dev` the `tecpg run mlr` `--gene-loci-per-chunk`
-and `--meth-loci-per-chunk` options no longer accept the `-g` / `-m`
-short forms (they collided with the top-level `--gene-file` /
-`--meth-file` short flags). Use the long forms exclusively for
-`tecpg run mlr`. Migration example — replace:
+On server-class hosts, when neither `--gene-loci-per-chunk` nor
+`--meth-loci-per-chunk` is supplied, the CLI picks both automatically from the
+live RAM/GPU budget (80% target). Supplying exactly one of the two flags pins
+that axis and auto-derives the other by bisection against the in-memory
+peak-memory estimator (**anchored mode**). The auto-sizer accounts for
+`--compute-ig` and applies a safety clamp on tight (~24 GB) VRAM. Minimum-class
+hosts never auto-set chunk sizes — supply the flags explicitly there:
 
 ```bash
-# old (pre-1.21.0-dev): no longer accepted
-tecpg run mlr --cis -g 10000 -m 10000
-```
-
-with the long forms:
-
-```bash
-# new (1.21.0-dev and later)
 tecpg run mlr --cis --gene-loci-per-chunk 10000 --meth-loci-per-chunk 10000
 ```
 
-The `data dummy` and `chunks` subcommands' own `-g`/`-m` short flags are
-unchanged.
+**Note:** these two options accept only their long forms under
+`tecpg run mlr` (the `-g` / `-m` short forms belong to the top-level
+`--gene-file` / `--meth-file` options). The `data dummy` and `chunks`
+subcommands keep their own `-g` / `-m` short flags.
 
 ## Filtration
 
-You may want to include only certain regression results. There are two ways of filtering the results:
+You may want to include only certain regression results. There are two ways
+of filtering:
 
-1. P-value filtration - all p-values are computed first. Then, regression results with a p-value above a supplied threshold are excluded from the output. This decreases output size and thus increases speed as saving is an expensive operation.
-2. Region filtration - region filtration requires annotation files that dictate the positions of methylation and gene expression ids. Then, regressions are filtered by one of the following methods:
-   - Cis: the position of the methylation id is within a window containing a certain number of bases upstream and downstream from a certain number of bases (window_base) away from the transcript start site of the gene and they lie on the same chromosome.
-   - Distal: same logic as cis, but with different default values for the window_base, upstream, and downstream parameters.
-   - Trans: the gene expression id and methylation id lie on different chromosomes.
-   - All: no region filtration.
+1. **P-value filtration** — all p-values are computed first; results with a
+   p-value above the supplied threshold (`--p-thresh`) are excluded from the
+   output. This decreases output size, and therefore time, since saving is
+   expensive.
+2. **Region filtration** — requires the BED6 annotation files that give the
+   positions of methylation and gene expression loci. Regressions are filtered
+   by one of:
+   * **Cis** (`--cis`): the CpG lies within a window of a configurable number
+     of bases upstream and downstream of the gene's transcript start site, on
+     the same chromosome.
+   * **Distal** (`--distal`): the same logic as cis with different default
+     window parameters.
+   * **Trans** (`--trans`): the CpG and the gene lie on different
+     chromosomes.
+   * **All** (`--all`): no region filtration.
 
-P-value filtration filters results after calculating the regression, and it saves output time. Region filtration filters the input before the regression results are computed, and it saves both output time and computation time.
-
-## Documentation
-
-Currently, the README and the `tecpg ... --help` commands serve as documentation. Within the code, the function docstrings provide a lot of information about the function. The extensive type hints give added insight into the purpose of functions.
-
-For an end-to-end walkthrough of how eCpGs are filtered, prioritized, tested
-for enrichment, and visualized across the `pipeline.sh`/`pipelinePost.sh`
-workflow (regions, p-values, qr stats, precise p-values, FDR, bootstrap
-scores, network nodes/edges), see the living document
-[`docs/ecpg-filtering-prioritization.md`](docs/ecpg-filtering-prioritization.md).
-
-The `docs/` directory also carries topic documents that track the code:
-
-* [`docs/annotation.md`](docs/annotation.md) — annotation sources, the BED6
-  contract, and the GENCODE-derived probe-gene model used for region
-  assignment.
-* [`docs/mlr_qr_permute.md`](docs/mlr_qr_permute.md) — design, status, and
-  output columns of the `qr_permute` permutation backend.
-* [`docs/integrated_gradients.md`](docs/integrated_gradients.md) — how the IG
-  saliency columns are computed and what they mean.
-* [`docs/bootstrap_qr_unification.md`](docs/bootstrap_qr_unification.md) — the
-  shared QR path behind the `qr` and `qr_bootstrap` backends.
-* [`docs/profiling.md`](docs/profiling.md) — the `profiling.sh` bottleneck
-  harness.
+P-value filtration runs after the regression and saves output time. Region
+filtration runs before the regression and saves both output time and
+computation time.
 
 ## Running `tecpg run mlr` directly
 
-If you need to invoke `tecpg run mlr` directly — for example to
-prototype a non-default backend or to integrate `tecpg` into another
-pipeline — the equivalent of the `pipeline.sh` mapping stage is:
+If you need to invoke `tecpg run mlr` directly — for example to prototype a
+non-default backend or to integrate `tecpg` into another pipeline — the
+equivalent of the `pipeline.sh` mapping stage is:
 
 ```bash
 tecpg -i data -a annot -o output run mlr \
@@ -341,67 +411,34 @@ tecpg -i data -a annot -o output run mlr \
 bootstrap stage, `qr_permute` for permutation testing). On the `qr` backend,
 `--qr-impl {torch,householder}` selects the QR factorization; `torch`
 (`torch.linalg.qr`) is the default, and `householder` is a CUDA-only batched
-path. Chunk sizes are auto-selected by the CLI on server-class hosts. See
-*Chunking* above and *Performance tuning* below for the available
-overrides, and run `tecpg run mlr --help` for the up-to-date option
-list (it is the authoritative source — the README intentionally no
-longer reproduces it).
+path. Chunk sizes are auto-selected on server-class hosts. See
+[Chunking](#chunking) and [Performance tuning](#performance-tuning) for the
+available overrides, and run `tecpg run mlr --help` for the authoritative,
+up-to-date option list — the README intentionally does not reproduce it.
 
 ## Selecting a GPU when multiple are available
 
-We have run into this issue when using a development system or a cluster (e.g., Sun Grid Engine) where the system has numerous GPUs and selection is necessary. 
+On shared development systems and clusters the host may have several GPUs.
+Find the index of the one you want with `nvidia-smi` (the leftmost column),
+then restrict `tecpg` to it with `CUDA_VISIBLE_DEVICES`:
 
-Find the ID of the GPU you’d like to use:
-```
-nvidia-smi
-Fri Dec 15 13:33:36 2023       
-+---------------------------------------------------------------------------------------+
-| NVIDIA-SMI 530.30.02              Driver Version: 530.30.02    CUDA Version: 12.1     |
-|-----------------------------------------+----------------------+----------------------+
-| GPU  Name                  Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
-| Fan  Temp  Perf            Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
-|                                         |                      |               MIG M. |
-|=========================================+======================+======================|
-|   0  NVIDIA A2                       On | 00000000:81:00.0 Off |                    0 |
-|  0%   38C    P8                9W /  60W|      0MiB / 15356MiB |      0%      Default |
-|                                         |                      |                  N/A |
-+-----------------------------------------+----------------------+----------------------+
-|   1  NVIDIA L4                       On | 00000000:82:00.0 Off |                    0 |
-| N/A   54C    P8               18W /  75W|      0MiB / 23034MiB |      0%      Default |
-|                                         |                      |                  N/A |
-+-----------------------------------------+----------------------+----------------------+
-                                                                                         
-+---------------------------------------------------------------------------------------+
-| Processes:                                                                            |
-|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
-|        ID   ID                                                             Usage      |
-|=======================================================================================|
-|  No running processes found                                                           |
-+---------------------------------------------------------------------------------------+
-```
-
-Here, we see GPU 0 is the A2 (previous one) and GPU 1 is the L4 (new one).
-
-Selection of the GPU to use can be done through software (e.g., https://discuss.pytorch.org/t/selecting-the-gpu/20276) or using the shell. For software that we are not going to be editing directly (e.g., tecpg), we use the shell variable direction.
- 
-The environment variable CUDA_VISIBLE_DEVICES can be set when you call python.
- 
-To use the A2 GPU, the following re-mapping works:
 ```bash
-CUDA_VISIBLE_DEVICES=1,0 python tecpg run mlr --all --p-thresh 0.000001 --gene-loci-per-chunk 100 --meth-loci-per-chunk 100000
+# Use only GPU 1
+CUDA_VISIBLE_DEVICES=1 tecpg run mlr --cis
 ```
 
-To use the L4 GPU, the following re-mapping works:
-```bash
-CUDA_VISIBLE_DEVICES=0,1 python tecpg run mlr --all --p-thresh 0.000001 --gene-loci-per-chunk 100 --meth-loci-per-chunk 100000
-```
+Inside the process the selected device is renumbered as device 0, so no
+`tecpg` flag is needed. Listing more than one index
+(`CUDA_VISIBLE_DEVICES=1,0`) exposes both, with the first listed becoming
+device 0.
 
 ## Performance tuning
 
 The CLI exposes several knobs to overlap GPU compute with host I/O and BLAS
-work. Most of them auto-resolve from the active `--host-profile` (see
-*CUDA* above) and rarely need to be touched, but the following overrides
-are available when a run is GPU-, save-, or CPU-bound:
+work. Most auto-resolve from the active `--host-profile` (see
+[CUDA and host profiles](#cuda-and-host-profiles)) and rarely need to be
+touched, but the following overrides are available when a run is GPU-, save-,
+or CPU-bound:
 
 * `--prefetch-chunks` (`TECPG_PREFETCH`): number of chunks to prefetch onto
   the GPU to overlap with compute (auto-resolved to `0` when CUDA is
@@ -416,119 +453,168 @@ are available when a run is GPU-, save-, or CPU-bound:
   is honored before NumPy/PyTorch initialize their thread pools.
 * `--output-format {auto,csv,parquet}`: `auto` resolves to `parquet` on all
   host profiles.
-* `--gene-loci-per-chunk` / `--meth-loci-per-chunk`: see *Chunking* above.
-  Supplying exactly one pins that axis and lets the auto-sizer choose the
-  other.
+* `--gene-loci-per-chunk` / `--meth-loci-per-chunk`: see
+  [Chunking](#chunking). Supplying exactly one pins that axis and lets the
+  auto-sizer choose the other.
 
 Rules of thumb: if VRAM is full but GPU SM% is low, try `--prefetch-chunks 2`;
 if CPU is saturated by writers, lower `--save-threads`; if host BLAS is
 fighting the GPU feeder, set `--blas-threads 2`.
 
-For a deeper investigation, `profiling.sh` (added in `1.15.0-dev`) drives
-`nvidia-smi`, `top`, `vmstat`, and `pidstat` alongside PyTorch debug output,
-sweeps prefetching / chunk size / TF32 / BLAS thread configurations, and
-emits an environment-annotated results tarball plus a `Verdict:` line that
-classifies the bottleneck (GPU-, save-, or CPU-bound). See `docs/profiling.md`
-for details.
+For a deeper investigation, `profiling.sh` drives `nvidia-smi`, `top`,
+`vmstat`, and `pidstat` alongside PyTorch debug output, sweeps
+prefetching / chunk size / TF32 / BLAS thread configurations, and emits an
+environment-annotated results tarball plus a `Verdict:` line that classifies
+the bottleneck (GPU-, save-, or CPU-bound). See
+[`docs/profiling.md`](docs/profiling.md).
 
 The per-chunk startup banner reports the effective values
 (`save_threads_effective`, `prefetch_chunks_effective`,
-`blas_threads_effective`, logical and physical CPU counts) and per-chunk
+`blas_threads_effective`, logical and physical CPU counts), and per-chunk
 metrics (`gpu_idle_between_chunks_ms`, `save_queue_depth`, `prefetch_fill`)
 are emitted with an end-of-run statistical summary to help diagnose
 bottlenecks.
 
+## Documentation
+
+* `tecpg --help`, `tecpg run mlr --help`, and the other `--help` pages are the
+  authoritative reference for command-line options.
+* [`docs/ecpg-filtering-prioritization.md`](docs/ecpg-filtering-prioritization.md)
+  — end-to-end walkthrough of how eCpGs are filtered, prioritized, tested for
+  enrichment, and visualized across the `pipeline.sh` / `pipelinePost.sh`
+  workflow (regions, p-values, qr stats, precise p-values, FDR, bootstrap
+  scores, network nodes/edges).
+* [`docs/annotation.md`](docs/annotation.md) — annotation sources, the BED6
+  contract, and the GENCODE-derived probe-gene model used for region
+  assignment.
+* [`docs/mlr_qr_permute.md`](docs/mlr_qr_permute.md) — design, status, and
+  output columns of the `qr_permute` permutation backend.
+* [`docs/integrated_gradients.md`](docs/integrated_gradients.md) — how the IG
+  saliency columns are computed and what they mean.
+* [`docs/bootstrap_qr_unification.md`](docs/bootstrap_qr_unification.md) — the
+  shared QR path behind the `qr` and `qr_bootstrap` backends.
+* [`docs/profiling.md`](docs/profiling.md) — the `profiling.sh` bottleneck
+  harness.
+* [`docs/tools.md`](docs/tools.md) — inventory of every helper script under
+  `tools/`.
+
+Within the code, function docstrings and extensive type hints document the
+library API.
+
 # Part B — Demonstration: the GTP/MESA golden path
 
-The remainder of this README is a self-contained demonstration of `tecpg` on two public datasets (GTP and MESA), driven by the `pipeline*.sh` scripts and the helper scripts under `tools/`. None of this is required to use `tecpg` itself (Part A) — it is one complete, reproducible worked example.
+The remainder of this README is a self-contained demonstration of `tecpg` on
+two public datasets (GTP and MESA), driven by the `pipeline*.sh` scripts and
+the helper scripts under `tools/`. None of this is required to use `tecpg`
+itself (Part A) — it is one complete, reproducible worked example, and it
+requires the [R dependencies](#r-dependencies-pipeline-and-tools-only).
 
 ## Demo datasets (GTP and MESA)
 
-Two real-world public datasets are bundled as turn-key demonstrations,
-in addition to the synthetic `dummy` dataset used for smoke tests. Both
-are downloaded directly from GEO by the `tecpg data` sub-commands and
-are the same datasets used by Kennedy et al. *BMC Genomics* (2018)
-**19:476** (`10.1186/s12864-018-4842-3`), whose published eCpG–transcript
-pairs are automatically downloaded alongside the raw matrices for use as
-a benchmark reference list.
+Two real-world public datasets are bundled as turn-key demonstrations, in
+addition to the synthetic `dummy` dataset used for smoke tests. Both are
+downloaded directly from GEO by the `tecpg data` sub-commands and are the same
+datasets used by Kennedy et al. *BMC Genomics* (2018) **19:476**
+(`10.1186/s12864-018-4842-3`), whose published eCpG–transcript pairs are
+automatically downloaded alongside the raw matrices for use as a benchmark
+reference list.
 
 * **GTP — Grady Trauma Project** (`tecpg data gtp`,
   `./pipeline.sh --dataset gtp`). A study of *n ≈ 340* primarily
   African-American adults recruited from urban primary-care clinics in
-  Atlanta, GA, designed to characterize the genetic and epigenetic
-  correlates of trauma exposure and PTSD. Whole-blood DNA methylation
-  was assayed on the Illumina HumanMethylation450 BeadChip (GEO
-  accession **GSE72680**, ~349k CpG loci) and gene expression on the
-  Illumina HumanHT-12 v4 BeadChip (GEO accession **GSE58137**,
-  ~39k expression probes). The matched Kennedy 2018 eCpG list is
-  pulled from
-  `MOESM1_ESM.txt` of the supplementary materials.
+  Atlanta, GA, designed to characterize the genetic and epigenetic correlates
+  of trauma exposure and PTSD. Whole-blood DNA methylation was assayed on the
+  Illumina HumanMethylation450 BeadChip (GEO accession **GSE72680**, ~349k CpG
+  loci) and gene expression on the Illumina HumanHT-12 v4 BeadChip (GEO
+  accession **GSE58137**, ~39k expression probes). The matched Kennedy 2018
+  eCpG list is pulled from `MOESM1_ESM.txt` of the supplementary materials.
 
 * **MESA — Multi-Ethnic Study of Atherosclerosis** (`tecpg data mesa`,
-  `./pipeline.sh --dataset mesa`). A multi-site, multi-ethnic
-  longitudinal cohort focused on the subclinical-to-clinical
-  progression of cardiovascular disease. CD14+ monocyte DNA
-  methylation was assayed on the Illumina HumanMethylation450 BeadChip
-  (GEO accession **GSE56046**) and matching gene expression on the
-  Illumina HumanHT-12 v4 BeadChip (GEO accession **GSE56045**), giving
-  a several-hundred-sample paired methylation/expression cohort. The
-  matched Kennedy 2018 eCpG list is pulled from `MOESM2_ESM.txt`.
+  `./pipeline.sh --dataset mesa`). A multi-site, multi-ethnic longitudinal
+  cohort focused on the subclinical-to-clinical progression of cardiovascular
+  disease. CD14+ monocyte DNA methylation was assayed on the Illumina
+  HumanMethylation450 BeadChip (GEO accession **GSE56046**) and matching gene
+  expression on the Illumina HumanHT-12 v4 BeadChip (GEO accession
+  **GSE56045**), giving a several-hundred-sample paired
+  methylation/expression cohort. The matched Kennedy 2018 eCpG list is pulled
+  from `MOESM2_ESM.txt`.
 
-Both datasets share the same downstream array combination
-(HumanMethylation450 + HumanHT-12 v4), so the comprehensive BED6
-annotation files shipped under `demo/` apply unchanged to either, and
-`pipelinePre.sh` plus `pipeline.sh` wire up identical processing for
-`--dataset gtp` and `--dataset mesa` (data prep → probe blacklist →
-methylation-derived ancestry instruments → EpiDISH cell proportions →
-categorical encoding → residualized PCA → MLR + IG + influence → merge →
-region annotation → precise p-values → BH-FDR / diagnostics → influence flag →
-bootstrap candidate list → bootstrap evaluation).
+Both datasets share the same array combination (HumanMethylation450 +
+HumanHT-12 v4), so the comprehensive BED6 annotation files shipped under
+`demo/` apply unchanged to either, and `pipelinePre.sh` plus `pipeline.sh`
+wire up identical processing for `--dataset gtp` and `--dataset mesa`
+(data prep → probe blacklist → methylation-derived ancestry instruments →
+EpiDISH cell proportions → categorical encoding → residualized PCA → MLR + IG
++ influence → merge → region annotation → precise p-values → BH-FDR /
+diagnostics → influence flag → bootstrap candidate list → bootstrap
+evaluation).
 
-A third option, `gtpsub`, is a locus-subsampled GTP build (10,000 CpGs and
-5,000 expression probes by default, seed 42) intended for fast wiring checks
-on real data; like `dummy` it skips the ancestry and EpiDISH stages.
+Two lighter options exist for checking wiring before committing to a full run:
+
+* **`dummy`** — a small synthetic dataset generated locally. No download, no
+  biological meaning. Skips the ancestry and EpiDISH stages.
+* **`gtpsub`** — a locus-subsampled GTP build (10,000 CpGs and 5,000
+  expression probes by default, seed 42) for fast wiring checks on *real*
+  data. Requires the GTP download; like `dummy` it skips the ancestry and
+  EpiDISH stages.
 
 ## Quick start (the golden path)
 
-Prerequisites: `tecpg` installed (see [Installation](#installation)) and the R
-packages installed with `Rscript tools/install_dependencies.R` (see
-[R dependencies](#r-dependencies-pipeline-and-tools-only)) — the pipeline
-scripts call R at several stages.
+Prerequisites: `tecpg` installed ([Installation](#installation)) and the R
+packages installed with `Rscript tools/install_dependencies.R`
+([R dependencies](#r-dependencies-pipeline-and-tools-only)) — the pipeline
+scripts call R at several stages. Run every command from the repository root.
 
-The recommended way to reproduce an end-to-end demo run is to first prepare the
-dataset with `pipelinePre.sh` and then run `pipeline.sh`, which is the
-authoritative mapping entry point and uses the same
-`mlr --mlr-method qr --compute-ig` invocation, dataset defaults, and
-downstream tools described in the *Pipeline stages* subsections below.
+The pipeline is always two steps: `pipelinePre.sh` prepares a dataset, then
+`pipeline.sh` runs the mapping and downstream stages. Pick a dataset by how
+much time you have:
+
+| Dataset  | Download                     | Typical footprint                                   | Purpose                                   |
+|----------|------------------------------|-----------------------------------------------------|-------------------------------------------|
+| `dummy`  | none                         | minutes on a laptop CPU                             | smoke-test the wiring                     |
+| `gtpsub` | GTP from GEO (multi-GB)      | minutes to tens of minutes once data is downloaded  | wiring check on real data                 |
+| `gtp`    | GTP from GEO (multi-GB)      | hours; GPU and server-class RAM strongly recommended | full reproduction, cis or genome-wide     |
+| `mesa`   | MESA from GEO (multi-GB)     | hours; GPU and server-class RAM strongly recommended | full reproduction, cis or genome-wide     |
 
 ```bash
-# CIS-only run on the GTP demo dataset
-./pipelinePre.sh --dataset gtp
-./pipeline.sh --dataset gtp --mapping cis
-
-# Genome-wide run on the MESA demo dataset
-./pipelinePre.sh --dataset mesa
-./pipeline.sh --dataset mesa --mapping all
-
-# Smoke-test the full pipeline on synthetic data
+# 1. Smoke-test the full pipeline on synthetic data (start here)
 ./pipelinePre.sh --dataset dummy
-./pipeline.sh --dataset dummy --mapping all
+./pipeline.sh    --dataset dummy --mapping all
+
+# 2. Wiring check on real (subsampled) GTP data
+./pipelinePre.sh --dataset gtpsub
+./pipeline.sh    --dataset gtpsub --mapping cis
+
+# 3. Full CIS-only run on the GTP demo dataset
+./pipelinePre.sh --dataset gtp
+./pipeline.sh    --dataset gtp --mapping cis
+
+# 4. Full genome-wide run on the MESA demo dataset
+./pipelinePre.sh --dataset mesa
+./pipeline.sh    --dataset mesa --mapping all
 ```
 
 `pipelinePre.sh` downloads the dataset (GTP/MESA only), populates
 `data_<dataset>/`, copies the comprehensive BED6 annotations from `demo/` into
 `annot_<dataset>/`, and produces the `M.csv`, `G.csv`, and `C.csv` matrices.
 `pipeline.sh` then walks through the mapping and downstream stages, writing
-artifacts and diagnostic plots into `output_<dataset>/`. Any individual stage
-can be resumed with `--start-stage <name>` (see the stage lists below).
+artifacts and diagnostic plots into `output_<dataset>/`. Both scripts skip
+stages whose outputs already exist and accept `--start-stage <n>` to resume
+(see the stage lists below), so an interrupted run can be picked up where it
+stopped.
 
-After `pipeline.sh` finishes, run `./pipelinePost.sh <dataset>` to
-produce Circos / volcano / Manhattan / bipartite network
-visualizations from `output_<dataset>/bootstrap_merged.parquet`.
+After `pipeline.sh` finishes, run `./pipelinePost.sh <dataset>` to produce
+Circos / volcano / Manhattan / bipartite-network visualizations from
+`output_<dataset>/bootstrap_merged.parquet`, and optionally
+`./pipelinePermute.sh` to attach permutation p-values.
 
 ## Pipeline stages
 
-The demonstration is driven by four orchestration scripts, run in order. Each reuses the per-dataset working directories (`data_<dataset>/`, `annot_<dataset>/`, `output_<dataset>/`) and can resume from any stage via `--start-stage`.
+The demonstration is driven by four orchestration scripts, run in order:
+`pipelinePre.sh` → `pipeline.sh` → `pipelinePost.sh` → `pipelinePermute.sh`.
+Each reuses the per-dataset working directories (`data_<dataset>/`,
+`annot_<dataset>/`, `output_<dataset>/`) and can resume from any stage via
+`--start-stage`.
 
 ### Preprocessing (`pipelinePre.sh`)
 
@@ -595,13 +681,12 @@ matches the value accepted by `--start-stage`.
 When `pipelinePre.sh` finishes, `data_<dataset>/` contains `M.csv`, `G.csv`,
 and `C.csv`, and the dataset is ready for `pipeline.sh`.
 
-The annotation files used in the `prep` stage default to the comprehensive BED6
-annotations under `demo/` (`annoEPIC_comprehensive.hg19.bed6` and
-`annoHT12_comprehensive.hg19.bed6`, originally generated in `1.27.4-dev` with a
-validated multi-source HT-12 pipeline and regenerated in `2.0.0b2.dev77` so
-that probes without positional evidence are emitted as unmapped rather than
-given fabricated positions), with a graceful fallback to the original
-`annoEPIC.hg19.bed6` / `annoHT12.hg19.bed6` files.
+The annotation files used in the `prep` stage default to the comprehensive
+BED6 annotations under `demo/` (`annoEPIC_comprehensive.hg19.bed6` and
+`annoHT12_comprehensive.hg19.bed6`, built with a validated multi-source HT-12
+mapping pipeline in which probes without positional evidence are emitted as
+unmapped rather than given fabricated positions), with a graceful fallback to
+the original `annoEPIC.hg19.bed6` / `annoHT12.hg19.bed6` files.
 
 ### Full analysis (`pipeline.sh`)
 
@@ -639,13 +724,13 @@ stages. Each stage name (in `code`) matches the value accepted by
 
 1. **`map` — eQTM mapping** *(stage `[3/9]`)*. Runs `tecpg ... run
    mlr --mlr-method qr --<mapping> -p "$MAP_P_THRESH" --compute-ig
-   --compute-influence`, with chunk sizes auto-selected by the CLI's
-   `_auto_chunk_sizes` (overridable by exporting `TECPG_M_CHUNK` /
-   `TECPG_G_CHUNK`). `MAP_P_THRESH` (default `0.001`, matching the CLI's
-   own `-p` default) is the catalog's inclusion gate: pairs above it are
-   never written. It is set explicitly in `pipeline.sh` so it appears in
-   the run log. Logs are tee'd to `mlr_run_<dataset>.log` and
-   `TOTAL_TESTS` is extracted from that log for downstream FDR.
+   --compute-influence`, with chunk sizes auto-selected by the CLI
+   (overridable by exporting `TECPG_M_CHUNK` / `TECPG_G_CHUNK`).
+   `MAP_P_THRESH` (default `0.001`, matching the CLI's own `-p` default) is
+   the catalog's inclusion gate: pairs above it are never written. It is set
+   explicitly in `pipeline.sh` so it appears in the run log. Logs are tee'd
+   to `mlr_run_<dataset>.log` and `TOTAL_TESTS` is extracted from that log
+   for downstream FDR.
 2. **`merge` — Merge chunked output** *(stage `[4/9]`)*.
    `tools/mergeOutputs.py` combines per-chunk files into a single
    `output_<dataset>/merged.parquet`; intermediate chunk files are
@@ -664,9 +749,8 @@ stages. Each stage name (in `code`) matches the value accepted by
    `DISTAL5`, `DISTAL3`, `TRANS` (5′/3′ relative to the gene's strand) —
    using the gene spans from that map and writes `annotated.parquet`;
    pairs whose probe or gene lacks an annotation are summarized downstream
-   as `UNKNOWN`. Missing-annotation probe IDs
-   are collected into a sidecar `annotation_missing_ids.txt` (since
-   `1.27.6-dev`).
+   as `UNKNOWN`. Missing-annotation probe IDs are collected into a sidecar
+   `annotation_missing_ids.txt`.
 4. **`precise_p` — High-precision p-values** *(stage `[6/9]`)*.
    `tools/recalculate_pvalues_parquet.py` replaces the normal-CDF
    approximation with Student's-t p-values using the degrees of
@@ -694,18 +778,21 @@ stages. Each stage name (in `code`) matches the value accepted by
    bootstrap p-values to the top candidates and write
    `bootstrap_merged.parquet`.
 
-#### Integrated Gradients (IG) Covariates
+#### Integrated Gradients (IG) covariates
 
-The pipeline computes per-feature saliency (Integrated Gradients) to measure the relative contribution of methylation vs. covariates. Because computing this for every genome-wide eQTM pair inflates the intermediate output files, the feature is scoped by stage using two variables near the top of `pipeline.sh`:
+The pipeline computes per-feature saliency (Integrated Gradients) to measure
+the relative contribution of methylation vs. covariates. Because computing
+this for every genome-wide eQTM pair inflates the intermediate output files,
+the feature is scoped by stage using two variables near the top of
+`pipeline.sh`:
 
-*   `MLR_IG_COVARIATES`: controls Stage 3 (genome-wide mapping). `"all"`
-    (the current default) emits per-covariate IG columns; `"none"` emits only
-    the scalar `mt_ig`; a comma-separated list restricts IG to those
-    covariates.
-*   `BOOTSTRAP_IG_COVARIATES`: controls Stage 9 (bootstrap), default `"all"`.
-    Because the bootstrap runs on a small, prioritized candidate list, full
-    per-feature IG costs very little space while enabling fraction-based
-    saliency analysis downstream.
+* `MLR_IG_COVARIATES`: controls Stage 3 (genome-wide mapping). `"all"` (the
+  current default) emits per-covariate IG columns; `"none"` emits only the
+  scalar `mt_ig`; a comma-separated list restricts IG to those covariates.
+* `BOOTSTRAP_IG_COVARIATES`: controls Stage 9 (bootstrap), default `"all"`.
+  Because the bootstrap runs on a small, prioritized candidate list, full
+  per-feature IG costs very little space while enabling fraction-based
+  saliency analysis downstream.
 
 ### Post-processing (`pipelinePost.sh`)
 
@@ -749,8 +836,7 @@ eleven stages, in order:
    ENCODE ChromHMM enrichment of significant genes, written to
    `output_<dataset>/enrichment/`. Draws significant genes from the FDR
    summary (`summarized.parquet`) and the bootstrap IG ranking
-   (`bootstrap_merged.parquet`). This analysis was previously part of
-   `tools/summarizeOutput_parquet.py`. `tools/summarizeEnrichment.py` then
+   (`bootstrap_merged.parquet`). `tools/summarizeEnrichment.py` then
    renders a self-contained HTML summary.
 10. `tools/exportBipartiteNetwork.py` — Cytoscape-formatted node and edge
     tables under `output_<dataset>/network/`. The universe is the
@@ -782,21 +868,46 @@ prepare the dataset.
 
 Options (see `--help` for the full list):
 
-* `-d, --dataset {dummy,gtp,gtpsub,mesa}` — which dataset to use. Must match the dataset already prepared by `pipelinePre.sh`.
-* `--master-parquet PATH` — existing mapping output to score. Also accepts a `sample_reservoir.csv` directly.
-* `--reservoir` — score the reservoir universe from a prior `--reservoir-count` map.
-* `--cis-enrich` (default) — build a unified gene-anchored master: run a cis write-all map (`--cis-window`, default 1 Mb) and assemble its near-gene pairs with the reservoir's trans/distal pairs via `tools/build_gene_anchored_master.py`, so the per-region evaluation has the near-gene coverage a flat reservoir lacks.
-* `-m, --mapping {all}` — the only supported method is `all`. `cis` is accepted by the parser but rejected at runtime because `qr_permute`'s null is trans-global.
-* `-s, --start-stage STAGE` — resume from one of `all` (default), `permute`, `eval`.
-* `--permutations`, `--subsample-mt-count` (default 2000), `--subsample-g-count` (default 2000), `--seed` — pass-through arguments to `tecpg run mlr`.
-* `--total-tests N` — BH denominator for `fdr_permute`; required when the mainline annotation stage runs, and must be the mapping-grid `TOTAL_TESTS` used for `fdr_est`.
-* `--no-assign-regions`, `--no-qc-report`, `--no-annotate-mainline` — skip the region-annotation, QC-report, and mainline-annotation work respectively.
+* `-d, --dataset {dummy,gtp,gtpsub,mesa}` — which dataset to use. Must match
+  the dataset already prepared by `pipelinePre.sh`.
+* `--master-parquet PATH` — existing mapping output to score. Also accepts a
+  `sample_reservoir.csv` directly.
+* `--reservoir` — score the reservoir universe from a prior
+  `--reservoir-count` map.
+* `--cis-enrich` (default) — build a unified gene-anchored master: run a cis
+  write-all map (`--cis-window`, default 1 Mb) and assemble its near-gene
+  pairs with the reservoir's trans/distal pairs via
+  `tools/build_gene_anchored_master.py`, so the per-region evaluation has the
+  near-gene coverage a flat reservoir lacks.
+* `-m, --mapping {all}` — the only supported method is `all`. `cis` is
+  accepted by the parser but rejected at runtime because `qr_permute`'s null
+  is trans-global.
+* `-s, --start-stage STAGE` — resume from one of `all` (default), `permute`,
+  `eval`.
+* `--permutations`, `--subsample-mt-count` (default 2000),
+  `--subsample-g-count` (default 2000), `--seed` — pass-through arguments to
+  `tecpg run mlr`.
+* `--total-tests N` — BH denominator for `fdr_permute`; required when the
+  mainline annotation stage runs, and must be the mapping-grid `TOTAL_TESTS`
+  used for `fdr_est`.
+* `--no-assign-regions`, `--no-qc-report`, `--no-annotate-mainline` — skip the
+  region-annotation, QC-report, and mainline-annotation work respectively.
 
-> **NOTE:** `--subsample-mt-count` / `--subsample-g-count` subsample the NULL population only. The reported set is always the full M x G cross product; these flags do NOT reduce output size. To get a tractable reported set, physically subset `data_<ds>/M.csv` and `data_<ds>/G.csv` into a smaller `data_<ds>` first. Subsample LOCI, never SAMPLES -- dropping samples changes DF.
+> **NOTE:** `--subsample-mt-count` / `--subsample-g-count` subsample the NULL
+> population only. The reported set is always the full M × G cross product;
+> these flags do NOT reduce output size. To get a tractable reported set,
+> physically subset `data_<ds>/M.csv` and `data_<ds>/G.csv` into a smaller
+> `data_<ds>` first. Subsample LOCI, never SAMPLES — dropping samples changes
+> DF.
 
-> **NOTE:** The `dummy` dataset is a WIRING SMOKE TEST ONLY. Disbelieve its numbers. Dummy annotations are chrom=randrange(1,23) over random data, so cis and trans are exchangeable BY CONSTRUCTION and the stratify arm will return 'single_global_null_adequate' trivially. It says nothing about real data.
+> **NOTE:** The `dummy` dataset is a WIRING SMOKE TEST ONLY. Disbelieve its
+> numbers. Dummy annotations are chrom=randrange(1,23) over random data, so
+> cis and trans are exchangeable BY CONSTRUCTION and the stratify arm will
+> return `single_global_null_adequate` trivially. It says nothing about real
+> data.
 
-The script runs in five stages, reusing the per-dataset working directories `data_<dataset>/`, `annot_<dataset>/`, and `output_<dataset>/`:
+The script runs in five stages, reusing the per-dataset working directories
+`data_<dataset>/`, `annot_<dataset>/`, and `output_<dataset>/`:
 
 1. **Region annotation** *(stage `[1/5]`)*. Assigns the canonical `region`
    column to the master with `tools/assignRegionToEcpg_parquet.py` (skipped
@@ -817,15 +928,14 @@ The script runs in five stages, reusing the per-dataset working directories `dat
 
 ## Alternative annotation and assignment of regions
 
-There are times when we may want to define our own classifications
-for a region (e.g., CIS) and apply different annotations to our
-mapping data. The standard, supported path is the Parquet-based
-classifier driven by `pipeline.sh` (stage `annotate`,
-`[5/9]`).
+There are times when we may want to define our own classifications for a
+region (e.g., CIS) and apply different annotations to our mapping data. The
+standard, supported path is the Parquet-based classifier driven by
+`pipeline.sh` (stage `annotate`, `[5/9]`).
 
-To run it standalone against a merged Parquet produced by an
-out-of-band `tecpg run mlr --all ...` invocation, first derive the
-probe-gene map from a GENCODE GTF and then classify:
+To run it standalone against a merged Parquet produced by an out-of-band
+`tecpg run mlr --all ...` invocation, first derive the probe-gene map from a
+GENCODE GTF and then classify:
 
 ```bash
 python3 tools/build_probe_gene_model.py \
@@ -842,198 +952,48 @@ python3 tools/assignRegionToEcpg_parquet.py \
 ```
 
 The probe BED supplies the `gt_*` probe coordinates; the probe-gene map
-supplies the gene span (from the gene model, not the probe footprint)
-that the region windows are measured against. See
+supplies the gene span (from the gene model, not the probe footprint) that the
+region windows are measured against. See
 [`docs/annotation.md`](docs/annotation.md) for details.
 
-Pre-built comprehensive BED6 annotation files for the Illumina EPIC
-and HT-12 v4 arrays are shipped under `demo/`:
+Pre-built comprehensive BED6 annotation files for the Illumina EPIC and
+HT-12 v4 arrays are shipped under `demo/`:
 
 * `demo/annoEPIC_comprehensive.hg19.bed6` and
   `demo/annoEPIC_comprehensive.hg38.bed6`
 * `demo/annoHT12_comprehensive.hg19.bed6` and
   `demo/annoHT12_comprehensive.hg38.bed6`
 
-These were generated in `1.27.4-dev` with
-`tools/generate_annotations.py`, which uses a validated multi-source
-HT-12 mapping pipeline (Re-Annotator → GEO → UCSC WG-6, with NA
-fallback and provenance tracking) and correctly handles unmapped
-probes, alternate/unplaced contigs, and pseudoautosomal labels, and were
-regenerated in `2.0.0b2.dev77` so that probes without positional evidence
-stay unmapped instead of receiving fabricated positions. The
-defaults follow Kennedy et al. *BMC Genomics* (2018) **19:476**, split by
-strand: `CIS5` / `CIS3` within 50 kb of the gene on its 5′ / 3′ side,
+These were generated with `tools/generate_annotations.py`, which uses a
+validated multi-source HT-12 mapping pipeline (Re-Annotator → GEO → UCSC WG-6,
+with NA fallback and provenance tracking) and correctly handles unmapped
+probes, alternate/unplaced contigs, and pseudoautosomal labels; probes without
+positional evidence stay unmapped instead of receiving fabricated positions.
+The region defaults follow Kennedy et al. *BMC Genomics* (2018) **19:476**,
+split by strand: `CIS5` / `CIS3` within 50 kb of the gene on its 5′ / 3′ side,
 `DISTAL5` / `DISTAL3` beyond 50 kb on the same chromosome, `PROMOTER`
 ± 2.5 kb of the TSS, `GENEBODY` within the gene span, and `TRANS` on a
-different chromosome. Override these in the script's defaults
-block if you need different cutoffs. The script annotates every row it
-is given; it applies no p-value filter of its own.
+different chromosome. Override these in the script's defaults block if you
+need different cutoffs. The script annotates every row it is given; it applies
+no p-value filter of its own.
 
 > **Legacy CSV path:** the original per-chunk CSV classifier
-> `tools/assignRegionToEcpg.py` is retained for backwards
-> compatibility with pre-Parquet outputs but is no longer the
-> recommended entry point. New work should use the Parquet variant
-> above, which is what `pipeline.sh` runs.
+> `tools/assignRegionToEcpg.py` is retained for backwards compatibility with
+> pre-Parquet outputs but is no longer the recommended entry point. New work
+> should use the Parquet variant above, which is what `pipeline.sh` runs.
 
 ## Tools and helper scripts
 
 The `tools/` directory contains the supporting scripts driven by
-`pipelinePre.sh`, `pipeline.sh`, `pipelinePost.sh`, and
-`pipelinePermute.sh`. They can also be invoked standalone. The R-based tools
+`pipelinePre.sh`, `pipeline.sh`, `pipelinePost.sh`, and `pipelinePermute.sh`.
+They can also be invoked standalone; each accepts `--help`. The R-based tools
 additionally require `Rscript tools/install_dependencies.R` — see
 [R dependencies](#r-dependencies-pipeline-and-tools-only).
 
-Data preparation and QC:
-
-* `tools/generateProbeBlacklist.sh` / `generateProbeBlacklist.R` —
-  build a probe blacklist (SNP-affected, cross-reactive, sex-chromosome) from
-  the DMRcatedata ExperimentHub lists, scoped to the array in use. Defaults to
-  **450k**; pass `epic` or `both` as the second argument, or set `METH_ARRAY`
-  for `pipelinePre.sh`. The DMRcate source lists span 450K and EPICv1; the
-  array argument selects which manifest to scope the output to. Output is
-  `probes_blacklist.csv` with columns `Probe_ID,Reason` (Reason is one or more
-  of SNP / CROSSREACTIVE / SEXCHROM, `;`-joined).
-  The superseded `generateEpicProbeBlacklist.sh` / `_v2.R` derived
-  sex-chromosome probes from the EPIC manifest alone and so missed 450K probes
-  with no EPIC counterpart.
-* `tools/exclude_blacklisted_probes.py` — drop blacklisted CpGs from
-  `M_orig.csv` to produce `M.csv`.
-* `tools/exploreOmics.py` — QC metrics, plots, and a consolidated HTML
-  report for the original and processed methylation/expression matrices.
-* `tools/estimateCellProportions.R` / `estimateCellProportions.sh` — run
-  EpiDISH for immune cell-proportion estimation; M-value aware
-  (`1.23.1-dev`).
-* `tools/residualize_pca.py` / `residualize_pca.sh` — residualize against
-  covariates and emit principal-component covariates.
-* `tools/preprocessPcaCovariates.py` — PCA preprocessing for covariates
-  used by `pipelinePre.sh`.
-* `tools/ancestry_probes_report.py` — evaluate methylation-derived ancestry
-  instruments and emit scores, a probe table, and an HTML/JSON report.
-* `tools/mergeCovariateColumns.py` — merge selected sidecar columns (e.g.
-  ancestry components) into the covariate matrix.
-* `tools/encodeCategorical.py` — expand integer-coded categorical covariates
-  into indicator columns with a minimum cell-size guard.
-* `tools/subsample_loci.py` — subsample rows (loci, never samples) of a
-  matrix; used to build the `gtpsub` dataset.
-* `tools/install_dependencies.R` — install all R packages required by
-  the tools (`pheatmap`, `EpiDISH`, `sva`, `ExperimentHub`, `minfi`, and the
-  `IlluminaHumanMethylation450kanno.*` / `IlluminaHumanMethylationEPICanno.*`
-  manifests) via `BiocManager`, then verify each one loads.
-
-Annotation:
-
-* `tools/generate_annotations.py` — regenerate comprehensive HT-12 / EPIC
-  BED6 annotations from Re-Annotator, GEO, and UCSC sources, with
-  provenance tracking.
-* `tools/annotation_io.py` — shared annotation readers (transparently reads
-  gzipped files) and drop-if-ambiguous probe/symbol → gene-model resolvers.
-* `tools/build_probe_gene_model.py` — derive the ILMN probe → gene-model map
-  (`probe_gene_model.tsv`) from a GENCODE GTF, or a synthetic fixed-span map
-  for `dummy`.
-* `tools/assignRegionToEcpg_parquet.py` and `tools/assignRegionToEcpg.py` —
-  Parquet- and CSV-based region assignment into the seven strand-aware
-  labels (PROMOTER / GENEBODY / CIS5 / CIS3 / DISTAL5 / DISTAL3 / TRANS). The Parquet variant takes the `--gene-model` map and
-  writes a sidecar `annotation_missing_ids.txt` of unmatched probes
-  (`1.27.6-dev`).
-
-Mapping post-processing:
-
-* `tools/mergeOutputs.py` — merge per-chunk CSV/Parquet outputs into a
-  single file (skips `sample_reservoir.csv`).
-* `tools/recalculate_pvalues_parquet.py` / `recalculate_pvalues.py` —
-  recompute p-values from t-statistics with high precision, replacing the
-  normal-CDF approximation with Student's-t.
-* `tools/summarizeOutput_parquet.py` / `summarizeOutput.py` — global
-  BH-FDR, top-hits table, QQ / histogram / saliency plots, and regional FDR
-  summaries. (Functional/ENCODE enrichment was moved to
-  `tools/runEnrichment.py`.)
-* `tools/runEnrichment.py` — standalone functional (Enrichr/`gseapy`/`mygene`)
-  and optional ENCODE ChromHMM enrichment of significant genes. Reads the FDR
-  summary (`--fdr-input summarized.parquet`) and/or the bootstrap IG ranking
-  (`--ig-input bootstrap_merged.parquet`) selected via `--rank-by fdr ig`, and
-  is run as the final stage of `pipelinePost.sh`.
-* `tools/summaryParquetToCsv.py` — Parquet→CSV converter for summary
-  files.
-* `tools/summarizeEnrichment.py` — self-contained HTML summary of the
-  enrichment results.
-* `tools/chromatin_features.py` / `tools/chromatinEnrichment_parquet.py` —
-  interval index over chromatin-feature tracks and the Kennedy Fig. 6
-  chromatin enrichment (Fisher exact statistics, BH q-values, and a
-  `--plot` two-panel heatmap coloured by log odds ratio).
-
-Influence and permutation diagnostics:
-
-* `tools/flagInfluence_parquet.py` — derive `mt_influence_flag` from the
-  mapper's `mt_h_max` leverage column and emit an influence QC JSON.
-* `tools/calibration_bridge.py`, `tools/fig_influence_dose_response.py`,
-  `tools/influence_diagnostic_panels.py`, `tools/influence_pair_anatomy.py`,
-  `tools/diagnose_se_ratio_trend.py`, `tools/se_ratio_trend_report.py` —
-  influence calibration against bootstrap fragility, dose-response and
-  SE-ratio figures and reports.
-* `tools/influence_qc_report.py` — consolidated FastQC-style HTML report over
-  the influence artifacts.
-* `tools/eval_permute.py` — read-only audit of a `qr_permute` parquet,
-  producing `eval_permute_report.json`.
-* `tools/summarize_permute.py` / `tools/read_permute_diagnostics.py` /
-  `tools/plot_permute_diagnostics.py` — permutation summaries, the 7-way
-  region table, and diagnostic plots across cohorts.
-* `tools/permute_qc_report.py` — self-contained HTML QC report for a
-  permutation run.
-* `tools/annotate_permute_p.py` / `tools/join_precise_p_permute.py` — write
-  `p_permute` / `fdr_permute` onto the mainline catalogs.
-* `tools/build_gene_anchored_master.py` — assemble the cis near-gene pairs and
-  the reservoir trans/distal pairs into the master scored by `qr_permute`.
-* `tools/reservoir_to_parquet.py` — convert `sample_reservoir.csv` into a
-  master parquet.
-* `tools/compare_perm_vs_analytic.py` — compare permutation and analytic
-  p-values.
-
-Bootstrapping:
-
-* `tools/createBootstrapList.py` — pick the top hits (by p-value, with
-  per-region floors and caps) to feed the `qr_bootstrap` MLR backend.
-* `tools/annotate_bootstrap_concordance.py` — raw bootstrap / analytic
-  concordance scores and a distribution summary.
-
-Visualization and network analysis:
-
-* `tools/plotCircos.py` — Circos plots of the eQTM architecture. Uses the
-  hg19 UCSC `cytoBand.txt` (downloaded automatically by `pipelinePost.sh`)
-  and reports detailed reasons for excluded CpG-Gene pairs.
-* `tools/visualizeFindings.py` — volcano, Manhattan, and scatter plots;
-  emits a full set of plots for each available p-value column
-  (`p_boot`, `precise_mt_p`, `mt_p`) with prefixed filenames.
-* `tools/evaluateSaliency.py` — integrated-gradients saliency diagnostics,
-  with an optional `--frac-exclude` pass that removes expression-derived IG
-  from the saliency denominator.
-* `tools/ig_qc_report.py` — self-contained HTML QC report over the IG
-  columns: coverage, whether `|mt_ig|` is an independent ranking axis
-  (against `|t|`), what drives its magnitude, the methylation share of
-  attribution — with an optional `--frac-exclude` (e.g. `'Exp_PC*_ig'`)
-  second denominator reported alongside the raw one — and per-region IG.
-* `tools/plotRegionProportions.py` — regional composition plots.
-* `tools/exportBipartiteNetwork.py` — Cytoscape-formatted node and edge
-  tables (with optional `--min-effect`, `--max-boot-p`, `--max-fdr`, and
-  `--top-k` filtering and an explicit `--out-dir`).
-* `tools/visualizeBipartiteNetwork.py` — ForceAtlas2-based energy-minimized
-  bipartite network, UMAP of regulatory β-diversity, regulatory degree
-  distribution, clustered bipartite adjacency heatmap, a signed `mt_est`
-  heatmap, a hypergeometric gene–gene projection, `--per-region` stratified
-  figures, and arc diagrams; handles duplicate edges by keeping the
-  maximum-weight pair.
-
-Benchmarking and profiling:
-
-* `pipelineBenchmarkKennedy.sh` / `tools/benchmark_kennedy.py` — comparison against the Kennedy et al.
-  benchmark, standardizing thresholds (1e-5 and 1e-11) across cohorts, with
-  an eligibility decomposition (testable vs blacklisted vs otherwise absent
-  Kennedy pairs), a probe-blacklist audit, effect-size / t-statistic / sign
-  concordance on the shared pairs, influence-stratified recovery, and a
-  region-composition crosswalk to Kennedy's four categories.
-* `tools/diagnose_overlap.py` / `tools/check_catalog_grid.py` — overlap and
-  catalog-grid consistency diagnostics for benchmark comparisons.
-* `tools/io_microbench.py` — IO microbenchmarks for the save pool.
-* `profiling.sh` and `docs/profiling.md` — bottleneck diagnostic harness.
+The full inventory, grouped by purpose (data preparation and QC, annotation,
+mapping post-processing, influence and permutation diagnostics,
+bootstrapping, visualization and network analysis, benchmarking and
+profiling), is in [`docs/tools.md`](docs/tools.md).
 
 ## Tests
 
@@ -1053,5 +1013,5 @@ guidance on the longer permutation / bootstrap tests.
 
 ## Acknowledgements
 
-This work was partially supported by an NIH NCI MERIT award (R37, CA233774, PI: Kober) and Cancer Center Support Grant (P30, CA082103, Co-I: Olshen).
-
+This work was partially supported by an NIH NCI MERIT award (R37, CA233774,
+PI: Kober) and Cancer Center Support Grant (P30, CA082103, Co-I: Olshen).
