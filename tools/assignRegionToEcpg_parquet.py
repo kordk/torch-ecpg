@@ -95,6 +95,7 @@ def assignRegion(my_ecpgDataFile, gH, mH, gmH, geneModelHeader, pval_col, outFil
     n_no_model = 0    # same-chromosome pairs with no gene model
 
     parquet_file = pq.ParquetFile(my_ecpgDataFile)
+    n_total = parquet_file.metadata.num_rows
     writer = None
 
     input_schema = parquet_file.schema.to_arrow_schema()
@@ -129,16 +130,14 @@ def assignRegion(my_ecpgDataFile, gH, mH, gmH, geneModelHeader, pval_col, outFil
             df = df.reset_index()
         my_eqtmA = []
 
-        for index, row in df.iterrows():
+        rows = df.to_dict('records')  # one conversion per batch, not per row
+        for base_row in rows:
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[assignRegion] line: {row.to_dict()}")
+                logger.debug(f"[assignRegion] line: {base_row}")
 
-            gt_id = str(row['gt_id'])
-            mt_id = str(row['mt_id'])
-            mt_p = row[pval_col]
-
-            # Start with the original row as a dict
-            base_row = row.to_dict()
+            gt_id = str(base_row['gt_id'])
+            mt_id = str(base_row['mt_id'])
+            mt_p = base_row[pval_col]
 
             nlp += 1
 
@@ -326,6 +325,8 @@ def assignRegion(my_ecpgDataFile, gH, mH, gmH, geneModelHeader, pval_col, outFil
             if writer is None:
                 writer = pq.ParquetWriter(outFileName, schema)
             writer.write_table(table)
+
+        logger.info(f"[assignRegion] progress: {nlp:,} of {n_total:,} pairs completed ({(100.0 * nlp / n_total) if n_total else 100.0:.1f}%)")
 
     if writer is not None:
         writer.close()
